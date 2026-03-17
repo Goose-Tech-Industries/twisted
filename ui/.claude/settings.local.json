@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(pm2 list:*)",
+      "Bash(kill 36565)",
+      "Bash(pm2 restart:*)",
+      "Bash(ls -la /root/twisted/ui/components/game/*.tsx)",
+      "Bash(npx next:*)",
+      "Bash(find /root/twisted -name game_maps* -o -name *game*map* -type f)",
+      "Bash(find /root/twisted -name *.sql)",
+      "Bash(find /root/twisted/te -name *battle* -type f)",
+      "Bash(ls -la /root/twisted/te/*.js)",
+      "Bash(grep -rn \"battle_update\\\\|battle_start\\\\|grid\\\\|Grid\" /root/twisted/ui/lib/*.ts /root/twisted/ui/lib/*.tsx)",
+      "Bash(node:*)",
+      "Bash(pm2 logs:*)",
+      "Bash(git status:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

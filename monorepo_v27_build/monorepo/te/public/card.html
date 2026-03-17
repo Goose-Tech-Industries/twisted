@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:title" id="ogTitle" content="Twisted Engine — Player Card">
+<meta property="og:description" id="ogDesc" content="View this player's character card">
+<title id="pageTitle">Player Card — Twisted Engine</title>
+<style>
+:root {
+    --accent: #bb86fc;
+    --bg:     #0b0f14;
+    --card:   #0d1117;
+    --border: #21262d;
+    --fg:     #e8eef6;
+    --dim:    #8b949e;
+    --dimmer: #484f58;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: var(--bg);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 32px 16px 64px;
+    font-family: 'Courier New', monospace;
+    color: var(--fg);
+}
+
+/* ── Card shell ── */
+#card {
+    width: 380px;
+    max-width: 100%;
+    background: var(--card);
+    border-radius: 18px;
+    border: 2px solid var(--accent);
+    box-shadow:
+        0 0 0 1px rgba(0,0,0,.5),
+        0 0 40px -8px var(--accent),
+        0 16px 60px rgba(0,0,0,.7);
+    overflow: hidden;
+    position: relative;
+}
+
+/* ── Card banner / top strip ── */
+.card-banner {
+    height: 80px;
+    background: linear-gradient(135deg, var(--accent)22 0%, transparent 60%),
+                repeating-linear-gradient(45deg, transparent, transparent 10px,
+                rgba(255,255,255,.015) 10px, rgba(255,255,255,.015) 11px);
+    border-bottom: 1px solid var(--accent)44;
+    display: flex;
+    align-items: flex-end;
+    padding: 10px 16px;
+    position: relative;
+}
+.card-class-icon {
+    font-size: 52px;
+    line-height: 1;
+    filter: drop-shadow(0 2px 8px var(--accent));
+    position: absolute;
+    right: 16px;
+    bottom: -16px;
+}
+.card-guild-tag {
+    font-size: 11px;
+    color: var(--accent);
+    opacity: .7;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+/* ── Card body ── */
+.card-body { padding: 24px 16px 16px; }
+
+.card-name {
+    font-size: 22px;
+    font-weight: bold;
+    color: var(--fg);
+    line-height: 1.1;
+    margin-bottom: 3px;
+}
+.card-title {
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: .5px;
+    margin-bottom: 8px;
+    font-style: italic;
+}
+.card-level-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    background: var(--accent)18;
+    border: 1px solid var(--accent)44;
+    border-radius: 20px;
+    font-size: 11px;
+    color: var(--accent);
+    margin-bottom: 12px;
+}
+
+/* ── Divider ── */
+.card-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent)44, transparent);
+    margin: 10px 0;
+}
+
+/* ── Stats grid ── */
+.card-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-bottom: 10px;
+}
+.stat-cell {
+    background: rgba(255,255,255,.03);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 8px;
+    text-align: center;
+}
+.stat-cell .sv { font-size: 16px; font-weight: bold; color: var(--fg); }
+.stat-cell .sk { font-size: 9px; color: var(--dimmer); text-transform: uppercase; letter-spacing: .5px; margin-top: 1px; }
+
+/* ── Battle record ── */
+.card-record {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    padding: 8px 0;
+    margin-bottom: 4px;
+}
+.record-cell { text-align: center; }
+.record-cell .rv { font-size: 18px; font-weight: bold; }
+.record-cell .rk { font-size: 9px; color: var(--dimmer); text-transform: uppercase; letter-spacing: .5px; }
+.rv-w { color: #3fb950; }
+.rv-l { color: #f85149; }
+.rv-t { color: #8b949e; }
+
+/* ── Equipment strip ── */
+.card-equip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+}
+.equip-chip {
+    font-size: 10px;
+    padding: 3px 7px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.02);
+    color: var(--dim);
+    white-space: nowrap;
+}
+.rarity-legendary { border-color: #e5a000aa; color: #e5a000; }
+.rarity-epic      { border-color: #8b46ffaa; color: #b07aff; }
+.rarity-rare      { border-color: #0369a1aa; color: #38bdf8; }
+.rarity-uncommon  { border-color: #15803daa; color: #4ade80; }
+
+/* ── Top achievement ── */
+.card-achievement {
+    margin-top: 10px;
+    padding: 7px 10px;
+    background: rgba(255,170,0,.06);
+    border: 1px solid rgba(255,170,0,.2);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #ffaa00;
+}
+
+/* ── Card footer ── */
+.card-footer {
+    border-top: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--dimmer);
+}
+.card-footer a {
+    color: var(--accent);
+    text-decoration: none;
+    opacity: .7;
+}
+.card-footer a:hover { opacity: 1; }
+
+/* ── Action buttons below card ── */
+.card-actions {
+    margin-top: 20px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+.card-action-btn {
+    padding: 9px 18px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,.04);
+    color: var(--dim);
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: .12s;
+}
+.card-action-btn:hover { background: rgba(255,255,255,.08); color: var(--fg); }
+.card-action-btn.primary {
+    background: var(--accent)18;
+    border-color: var(--accent)44;
+    color: var(--accent);
+}
+.card-action-btn.primary:hover { background: var(--accent)28; }
+
+.loading { color: var(--dimmer); font-size: 12px; padding: 60px; text-align: center; }
+.error   { color: #f85149; font-size: 12px; padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div id="card"><div class="loading">Loading card…</div></div>
+<div class="card-actions" id="cardActions" style="display:none"></div>
+
+<script>
+(async () => {
+    const name = decodeURIComponent(location.pathname.split('/card/')[1] || '').trim();
+    if (!name) {
+        document.getElementById('card').innerHTML = '<div class="error">No character specified.</div>';
+        return;
+    }
+
+    let d;
+    try {
+        const r = await fetch(`/api/achievements/profile/${encodeURIComponent(name)}`);
+        d = await r.json();
+    } catch {
+        document.getElementById('card').innerHTML = '<div class="error">Network error.</div>';
+        return;
+    }
+    if (!d.success) {
+        document.getElementById('card').innerHTML = `<div class="error">Character "${esc(name)}" not found.</div>`;
+        return;
+    }
+
+    const c  = d.character;
+    const br = d.battleRecord || { W:0, L:0, T:0 };
+    const accent = c.profile_color || '#bb86fc';
+
+    // Class icon mapping
+    const CLASS_ICONS = {
+        Warrior:'⚔️', Mage:'🔮', Rogue:'🗡️', Healer:'💚',
+        Ranger:'🏹', Paladin:'🛡️', Necromancer:'💀', Bard:'🎵',
+        Druid:'🌿', Berserker:'🪓', Monk:'👊', Summoner:'🌀',
+    };
+    const classIcon = CLASS_ICONS[c.class_name] || '⚔️';
+
+    // Set page title + OG
+    document.title = `${c.name} — Player Card`;
+    document.getElementById('pageTitle').textContent = `${c.name} — Player Card`;
+    document.getElementById('ogTitle').content = `${c.name}'s Character Card`;
+    document.getElementById('ogDesc').content  =
+        `Lv.${c.level} ${c.class_name} • W:${br.W} L:${br.L} — Twisted Engine`;
+
+    // Apply accent colour to CSS variable
+    document.documentElement.style.setProperty('--accent', accent);
+
+    // Equipment — top 4 by rarity priority
+    const RARITY_ORDER = ['legendary','epic','rare','uncommon','common'];
+    const equip = (d.equipment || [])
+        .sort((a,b) => RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity))
+        .slice(0, 6);
+
+    // Top achievement
+    const topAch = (d.achievements || [])[0];
+
+    // Stats to show
+    const STATS = [
+        ['HP', c.max_hp], ['MP', c.max_mp], ['ATK', c.atk],
+        ['DEF', c.def],   ['SPD', c.speed], ['LCK', c.luck],
+    ];
+
+    const ratio = br.L > 0 ? (br.W / br.L).toFixed(2) : (br.W || 0) + '.00';
+
+    document.getElementById('card').innerHTML = `
+    <!-- Banner -->
+    <div class="card-banner" style="border-bottom-color:${esc(accent)}44">
+        <div>
+            ${c.guild_name ? `<div class="card-guild-tag">🏰 ${esc(c.guild_name)}${c.guild_tag ? ` [${esc(c.guild_tag)}]` : ''}</div>` : ''}
+        </div>
+        <div class="card-class-icon">${classIcon}</div>
+    </div>
+
+    <!-- Body -->
+    <div class="card-body">
+        <div class="card-name">${esc(c.name)}</div>
+        ${c.equipped_title ? `<div class="card-title">${esc(c.equipped_title)}</div>` : ''}
+
+        <div class="card-level-badge">
+            ${classIcon} ${esc(c.class_name || '?')}
+            &nbsp;·&nbsp;
+            🧬 ${esc(c.race_name || '?')}
+            &nbsp;·&nbsp;
+            <strong>Lv.${c.level}</strong>
+        </div>
+
+        <div class="card-divider"></div>
+
+        <!-- Stats -->
+        <div class="card-stats">
+            ${STATS.map(([k,v]) => `
+            <div class="stat-cell">
+                <div class="sv">${v ?? '—'}</div>
+                <div class="sk">${k}</div>
+            </div>`).join('')}
+        </div>
+
+        <div class="card-divider"></div>
+
+        <!-- Battle Record -->
+        <div class="card-record">
+            <div class="record-cell"><div class="rv rv-w">${br.W}</div><div class="rk">Wins</div></div>
+            <div class="record-cell"><div class="rv rv-l">${br.L}</div><div class="rk">Losses</div></div>
+            <div class="record-cell"><div class="rv rv-t">${br.T || 0}</div><div class="rk">Draws</div></div>
+            <div class="record-cell"><div class="rv" style="color:${esc(accent)}">${ratio}</div><div class="rk">W/L</div></div>
+        </div>
+
+        <!-- Equipment -->
+        ${equip.length ? `
+        <div class="card-divider"></div>
+        <div class="card-equip">
+            ${equip.map(e => `
+            <div class="equip-chip rarity-${esc(e.rarity||'common')}">
+                ${esc(e.icon||'🗡️')} ${esc(e.name)}
+            </div>`).join('')}
+        </div>` : ''}
+
+        <!-- Top Achievement -->
+        ${topAch ? `
+        <div class="card-achievement">
+            <span style="font-size:20px">${esc(topAch.icon||'🏆')}</span>
+            <div>
+                <div style="font-weight:bold">${esc(topAch.title)}</div>
+                <div style="font-size:10px;opacity:.7">${esc(topAch.description||'')}</div>
+            </div>
+        </div>` : ''}
+    </div>
+
+    <!-- Footer -->
+    <div class="card-footer">
+        <span>👁 ${(c.profile_views||0).toLocaleString()} views</span>
+        <span>Twisted Engine</span>
+        <a href="/profile/${encodeURIComponent(c.name)}">View Profile →</a>
+    </div>`;
+
+    // Action buttons
+    const actions = document.getElementById('cardActions');
+    actions.style.display = 'flex';
+    actions.innerHTML = `
+        <a href="/profile/${encodeURIComponent(c.name)}" class="card-action-btn primary">👤 Full Profile</a>
+        <button class="card-action-btn" onclick="copyCardLink()">🔗 Copy Link</button>
+        <button class="card-action-btn" onclick="window.print()">🖨️ Print / Save</button>`;
+})();
+
+function copyCardLink() {
+    navigator.clipboard.writeText(location.href).then(() => {
+        const toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px 20px;font-size:12px;color:#3fb950;z-index:99';
+        toast.textContent = '🔗 Card link copied!';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 2200);
+    }).catch(() => alert(location.href));
+}
+
+function esc(s) {
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

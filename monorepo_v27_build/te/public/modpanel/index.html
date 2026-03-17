@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mod Panel — Twisted Engine</title>
+<style>
+/* ── Reset & Base ─────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+    --bg:    #0b0f14;
+    --bg2:   #111820;
+    --bg3:   #161d28;
+    --bo:    #1e2a3a;
+    --bo2:   #243347;
+    --text:  #c9d8e8;
+    --dim:   #4a6380;
+    --acc:   #2e86c1;   /* blue — distinct from AdminSauce purple */
+    --green: #3fb950;
+    --red:   #f85149;
+    --gold:  #e3b341;
+    --warn:  #d29922;
+}
+body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', Arial, sans-serif; font-size: 14px;
+    min-height: 100vh;
+}
+
+/* ── Layout ───────────────────────────────────────────────────── */
+#shell { display: flex; height: 100vh; overflow: hidden; }
+
+#sidebar {
+    width: 220px; flex-shrink: 0;
+    background: var(--bg2); border-right: 1px solid var(--bo);
+    display: flex; flex-direction: column;
+    padding: 0;
+}
+#sideHeader {
+    padding: 20px 16px 14px;
+    border-bottom: 1px solid var(--bo);
+}
+#sideHeader h1 { font-size: 15px; color: var(--acc); font-weight: 700; letter-spacing: .4px; }
+#sideHeader p  { font-size: 11px; color: var(--dim); margin-top: 3px; }
+
+#sideNav { flex: 1; padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; }
+.nav-btn {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; border-radius: 7px; cursor: pointer;
+    font-size: 13px; color: var(--dim); font-weight: 500;
+    transition: background .12s, color .12s; border: none; background: none; width: 100%; text-align: left;
+}
+.nav-btn:hover { background: var(--bg3); color: var(--text); }
+.nav-btn.active { background: rgba(46,134,193,.15); color: var(--acc); }
+.nav-icon { font-size: 16px; width: 20px; text-align: center; flex-shrink: 0; }
+
+#sideFooter {
+    padding: 12px 16px;
+    border-top: 1px solid var(--bo);
+    font-size: 11px; color: var(--dim);
+}
+#sideFooter strong { color: var(--acc); }
+#logoutBtn {
+    margin-top: 8px; width: 100%; padding: 7px;
+    background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.25);
+    color: var(--red); border-radius: 6px; cursor: pointer; font-size: 12px;
+    transition: background .12s;
+}
+#logoutBtn:hover { background: rgba(248,81,73,.22); }
+
+#main {
+    flex: 1; overflow-y: auto; padding: 28px 32px;
+    display: flex; flex-direction: column; gap: 22px;
+}
+
+/* ── Cards ────────────────────────────────────────────────────── */
+.card {
+    background: var(--bg2); border: 1px solid var(--bo);
+    border-radius: 10px; padding: 20px;
+}
+.card-title {
+    font-size: 13px; font-weight: 700; color: var(--dim);
+    text-transform: uppercase; letter-spacing: .8px; margin-bottom: 16px;
+}
+
+/* ── Stats Row ────────────────────────────────────────────────── */
+#statsRow { display: flex; gap: 14px; flex-wrap: wrap; }
+.stat-pill {
+    flex: 1; min-width: 120px;
+    background: var(--bg3); border: 1px solid var(--bo);
+    border-radius: 8px; padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 4px;
+}
+.stat-pill .val { font-size: 22px; font-weight: 800; color: var(--acc); }
+.stat-pill .lbl { font-size: 11px; color: var(--dim); }
+
+/* ── Search bar ───────────────────────────────────────────────── */
+.search-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.search-row input {
+    flex: 1; padding: 8px 12px;
+    background: var(--bg3); border: 1px solid var(--bo2);
+    color: var(--text); border-radius: 6px; font-size: 13px;
+    outline: none;
+}
+.search-row input:focus { border-color: var(--acc); }
+
+/* ── Table ────────────────────────────────────────────────────── */
+.tbl { width: 100%; border-collapse: collapse; }
+.tbl th {
+    text-align: left; font-size: 11px; font-weight: 700;
+    color: var(--dim); text-transform: uppercase; letter-spacing: .6px;
+    padding: 0 10px 10px; border-bottom: 1px solid var(--bo);
+}
+.tbl td {
+    padding: 10px; border-bottom: 1px solid rgba(255,255,255,.04);
+    font-size: 13px; vertical-align: middle;
+}
+.tbl tr:last-child td { border-bottom: none; }
+.tbl tr:hover td { background: rgba(255,255,255,.025); }
+.tbl tr { cursor: pointer; }
+
+/* ── Badges ───────────────────────────────────────────────────── */
+.badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 700;
+}
+.badge-green  { background: rgba(63,185,80,.15);  color: var(--green); }
+.badge-red    { background: rgba(248,81,73,.15);  color: var(--red);   }
+.badge-blue   { background: rgba(46,134,193,.15); color: var(--acc);   }
+.badge-gold   { background: rgba(227,179,65,.15); color: var(--gold);  }
+.badge-dim    { background: rgba(255,255,255,.07); color: var(--dim);  }
+.online-dot   { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-right: 5px; }
+
+/* ── Player Detail ────────────────────────────────────────────── */
+#detailPanel {
+    position: fixed; right: 0; top: 0; bottom: 0; width: 380px;
+    background: var(--bg2); border-left: 1px solid var(--bo);
+    overflow-y: auto; padding: 24px 20px;
+    transform: translateX(100%); transition: transform .22s ease;
+    z-index: 100;
+}
+#detailPanel.open { transform: translateX(0); }
+#detailClose {
+    position: absolute; top: 16px; right: 16px;
+    background: none; border: none; color: var(--dim);
+    font-size: 20px; cursor: pointer; line-height: 1;
+}
+#detailClose:hover { color: var(--text); }
+
+.det-username { font-size: 20px; font-weight: 800; color: var(--text); margin-bottom: 4px; }
+.det-meta     { font-size: 12px; color: var(--dim); margin-bottom: 16px; }
+.det-section  { margin-bottom: 18px; }
+.det-label    { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; font-weight: 700; }
+.det-row      { display: flex; justify-content: space-between; font-size: 13px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04); }
+.det-row:last-child { border-bottom: none; }
+.det-row .k { color: var(--dim); }
+.det-row .v { color: var(--text); font-weight: 600; }
+
+.char-card {
+    background: var(--bg3); border: 1px solid var(--bo);
+    border-radius: 7px; padding: 10px 12px; margin-bottom: 8px;
+}
+.char-card .cn { font-weight: 700; color: var(--text); margin-bottom: 2px; }
+.char-card .cm { font-size: 11px; color: var(--dim); }
+
+/* ── Action Buttons ───────────────────────────────────────────── */
+.action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+.btn {
+    padding: 8px 16px; border-radius: 7px; cursor: pointer; font-size: 13px;
+    font-weight: 600; border: none; transition: opacity .12s;
+}
+.btn:hover { opacity: .82; }
+.btn-kick   { background: rgba(227,179,65,.15); color: var(--gold); border: 1px solid rgba(227,179,65,.3); }
+.btn-ban    { background: rgba(248,81,73,.15);  color: var(--red);  border: 1px solid rgba(248,81,73,.3); }
+.btn-unban  { background: rgba(63,185,80,.15);  color: var(--green);border: 1px solid rgba(63,185,80,.3); }
+.btn-dm     { background: rgba(46,134,193,.15); color: var(--acc);  border: 1px solid rgba(46,134,193,.3); }
+.btn-primary{ background: var(--acc); color: #fff; }
+.btn-ghost  { background: none; color: var(--dim); border: 1px solid var(--bo2); }
+
+/* ── Broadcast Panel ──────────────────────────────────────────── */
+#bcMsg {
+    width: 100%; padding: 10px 12px; resize: vertical; min-height: 80px;
+    background: var(--bg3); border: 1px solid var(--bo2); color: var(--text);
+    border-radius: 7px; font-size: 13px; font-family: inherit; outline: none;
+}
+#bcMsg:focus { border-color: var(--acc); }
+#bcStatus { margin-top: 8px; font-size: 12px; min-height: 18px; }
+
+/* ── Modal ────────────────────────────────────────────────────── */
+.modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.7);
+    z-index: 200; display: flex; align-items: center; justify-content: center;
+}
+.modal-box {
+    background: var(--bg2); border: 1px solid var(--bo2);
+    border-radius: 12px; padding: 24px; min-width: 360px; max-width: 90vw;
+}
+.modal-box h3 { margin-bottom: 6px; font-size: 16px; }
+.modal-box p  { font-size: 12px; color: var(--dim); margin-bottom: 14px; }
+.modal-box label { font-size: 12px; color: var(--dim); display: block; margin-bottom: 4px; }
+.modal-box input, .modal-box textarea {
+    width: 100%; padding: 8px 12px;
+    background: var(--bg3); border: 1px solid var(--bo2); color: var(--text);
+    border-radius: 6px; font-size: 13px; font-family: inherit; outline: none;
+    margin-bottom: 14px;
+}
+.modal-box input:focus, .modal-box textarea:focus { border-color: var(--acc); }
+.modal-footer { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ── Views ────────────────────────────────────────────────────── */
+.view { display: none; }
+.view.active { display: block; }
+
+/* ── Scrollbar ────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bo2); border-radius: 3px; }
+
+/* ── Loading / Empty ─────────────────────────────────────────── */
+.empty { color: var(--dim); font-size: 13px; padding: 16px 0; }
+</style>
+</head>
+<body>
+
+<div id="shell">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────── -->
+  <div id="sidebar">
+    <div id="sideHeader">
+      <h1>🛡️ Mod Panel</h1>
+      <p>Twisted Engine</p>
+    </div>
+    <div id="sideNav">
+      <button class="nav-btn active" onclick="MP.nav('online')" id="nb-online">
+        <span class="nav-icon">🟢</span> Online Now
+      </button>
+      <button class="nav-btn" onclick="MP.nav('players')" id="nb-players">
+        <span class="nav-icon">👥</span> Players
+      </button>
+      <button class="nav-btn" onclick="MP.nav('broadcast')" id="nb-broadcast">
+        <span class="nav-icon">📢</span> Broadcast
+      </button>
+    </div>
+    <div id="sideFooter">
+      Logged in as <strong id="sessionName">—</strong><br>
+      Role: <strong id="sessionRole">—</strong>
+      <button id="logoutBtn" onclick="MP.logout()">Sign Out</button>
+    </div>
+  </div>
+
+  <!-- ── Main Area ────────────────────────────────────────────── -->
+  <div id="main">
+
+    <!-- Online View -->
+    <div id="view-online" class="view active">
+      <div id="statsRow">
+        <div class="stat-pill">
+          <div class="val" id="stat-online">—</div>
+          <div class="lbl">Online Now</div>
+        </div>
+        <div class="stat-pill">
+          <div class="val" id="stat-banned">—</div>
+          <div class="lbl">Banned Accounts</div>
+        </div>
+        <div class="stat-pill">
+          <div class="val" id="stat-maps">—</div>
+          <div class="lbl">Active Maps</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Currently Online</div>
+        <div id="onlineList"><p class="empty">Loading…</p></div>
+      </div>
+    </div>
+
+    <!-- Players View -->
+    <div id="view-players" class="view">
+      <div class="card">
+        <div class="card-title">Player Search</div>
+        <div class="search-row">
+          <input id="playerSearch" placeholder="Search by username…" oninput="MP.searchDebounce()">
+          <button class="btn btn-ghost" onclick="MP.loadPlayers()">Search</button>
+        </div>
+        <div id="playerList"><p class="empty">Loading…</p></div>
+      </div>
+    </div>
+
+    <!-- Broadcast View -->
+    <div id="view-broadcast" class="view">
+      <div class="card">
+        <div class="card-title">Broadcast to All Players</div>
+        <p style="font-size:12px;color:var(--dim);margin-bottom:12px">
+          Sends a message into every player's chat as an announcement. Use sparingly.
+        </p>
+        <label for="bcMsg" style="font-size:12px;color:var(--dim);margin-bottom:6px;display:block">Message</label>
+        <textarea id="bcMsg" placeholder="Server will restart in 10 minutes for maintenance…"></textarea>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-primary" onclick="MP.broadcast()">📢 Send Broadcast</button>
+          <button class="btn btn-ghost" onclick="document.getElementById('bcMsg').value=''">Clear</button>
+        </div>
+        <div id="bcStatus"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Recent Broadcasts</div>
+        <div id="bcLog"><p class="empty">No broadcasts this session.</p></div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+
+</div><!-- /shell -->
+
+<!-- ── Player Detail Panel ────────────────────────────────────── -->
+<div id="detailPanel">
+  <button id="detailClose" onclick="MP.closeDetail()">✕</button>
+  <div id="detailContent"><p class="empty">Loading…</p></div>
+</div>
+
+<!-- ── Modal ─────────────────────────────────────────────────── -->
+<div id="modalOverlay" class="modal-overlay" style="display:none">
+  <div class="modal-box" id="modalBox"></div>
+</div>
+
+<script>
+// =============================================================
+// MOD PANEL CLIENT  v1.0
+// =============================================================
+
+const MP = {
+
+    // ── State ─────────────────────────────────────────────
+    _currentView:   'online',
+    _currentPlayer: null,
+    _searchTimer:   null,
+    _bcLog:         [],
+    _me:            { username: '—', role: '—' },
+
+    // ── Init ──────────────────────────────────────────────
+    async init() {
+        // 1. Verify session
+        const r = await fetch('/mod-panel/auth');
+        const d = await r.json();
+        if (!d.success) { alert('Access denied. Please log in.'); window.location.href = '/'; return; }
+
+        MP._me = d;
+        document.getElementById('sessionName').textContent = d.username || '?';
+        document.getElementById('sessionRole').textContent = d.role    || '?';
+
+        // 2. Load first view
+        MP.loadOnline();
+    },
+
+    // ── Navigation ────────────────────────────────────────
+    nav(view) {
+        // Hide all views
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById('view-' + view).classList.add('active');
+        document.getElementById('nb-' + view).classList.add('active');
+        MP._currentView = view;
+
+        if (view === 'online')     MP.loadOnline();
+        if (view === 'players')    MP.loadPlayers();
+        if (view === 'broadcast')  MP.renderBcLog();
+    },
+
+    // ── Online View ───────────────────────────────────────
+    async loadOnline() {
+        const r = await fetch('/mod-panel/online');
+        const d = await r.json();
+        const players = d.data || [];
+
+        document.getElementById('stat-online').textContent = players.length;
+
+        // Banned count
+        fetch('/mod-panel/players?limit=1&q=__BANCOUNT__').catch(() => {});
+        try {
+            const br = await fetch('/mod-panel/players?limit=1000');
+            const bd = await br.json();
+            const banned = (bd.data || []).filter(p => p.is_banned).length;
+            document.getElementById('stat-banned').textContent = banned;
+            const maps = new Set((d.data || []).map(p => p.mapId)).size;
+            document.getElementById('stat-maps').textContent = maps;
+        } catch {}
+
+        const el = document.getElementById('onlineList');
+        if (!players.length) {
+            el.innerHTML = '<p class="empty">No players online right now.</p>';
+            return;
+        }
+
+        el.innerHTML = `
+        <table class="tbl">
+          <thead><tr>
+            <th>Player</th><th>Character</th><th>Level</th><th>Location</th><th></th>
+          </tr></thead>
+          <tbody>
+          ${players.map(p => `
+            <tr onclick="MP.viewPlayer(${p.userId})">
+              <td>${MP._roleBadge(p.role)} ${MP._esc(p.name || '—')}</td>
+              <td style="color:var(--dim);font-size:12px">#${p.charId}</td>
+              <td>${p.level || '?'}</td>
+              <td style="font-size:12px;color:var(--dim)">${MP._esc(p.mapName||'—')}</td>
+              <td><button class="btn btn-kick" style="padding:4px 10px;font-size:12px"
+                  onclick="event.stopPropagation();MP.kickModal(${p.userId},'${MP._esc(p.name)}')">Kick</button></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>`;
+    },
+
+    // ── Players View ──────────────────────────────────────
+    searchDebounce() {
+        clearTimeout(MP._searchTimer);
+        MP._searchTimer = setTimeout(() => MP.loadPlayers(), 380);
+    },
+
+    async loadPlayers() {
+        const q = (document.getElementById('playerSearch')?.value || '').trim();
+        const url = '/mod-panel/players?limit=100' + (q ? '&q=' + encodeURIComponent(q) : '');
+        const r = await fetch(url);
+        const d = await r.json();
+        const players = d.data || [];
+
+        const el = document.getElementById('playerList');
+        if (!players.length) {
+            el.innerHTML = '<p class="empty">No players found.</p>'; return;
+        }
+
+        el.innerHTML = `
+        <table class="tbl">
+          <thead><tr>
+            <th>Username</th><th>Role</th><th>Status</th><th>Characters</th><th>Last Seen</th>
+          </tr></thead>
+          <tbody>
+          ${players.map(p => `
+            <tr onclick="MP.viewPlayer(${p.id})">
+              <td>
+                ${p.online ? '<span class="online-dot"></span>' : ''}
+                ${MP._esc(p.username)}
+              </td>
+              <td>${MP._roleBadge(p.role)}</td>
+              <td>${p.is_banned
+                    ? '<span class="badge badge-red">🚫 Banned</span>'
+                    : '<span class="badge badge-green">Active</span>'}</td>
+              <td style="color:var(--dim)">${p.char_count}</td>
+              <td style="font-size:12px;color:var(--dim)">${MP._relTime(p.last_login)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>`;
+    },
+
+    // ── Player Detail ─────────────────────────────────────
+    async viewPlayer(userId) {
+        MP._currentPlayer = userId;
+        document.getElementById('detailPanel').classList.add('open');
+
+        const r = await fetch('/mod-panel/player/' + userId);
+        const d = await r.json();
+        if (!d.success) { document.getElementById('detailContent').innerHTML = `<p class="empty">${d.message}</p>`; return; }
+
+        const { user, chars, online } = d.data;
+        const isBanned = !!user.is_banned;
+
+        document.getElementById('detailContent').innerHTML = `
+          <div class="det-username">
+            ${online ? '<span class="online-dot"></span>' : ''}
+            ${MP._esc(user.username)}
+          </div>
+          <div class="det-meta">#${user.id} · ${MP._roleBadge(user.role)}</div>
+
+          <div class="det-section">
+            <div class="det-label">Account</div>
+            <div class="det-row"><span class="k">Status</span>
+              <span class="v">${isBanned
+                ? '<span class="badge badge-red">🚫 Banned</span>'
+                : '<span class="badge badge-green">Active</span>'}</span></div>
+            <div class="det-row"><span class="k">Registered</span>
+              <span class="v">${MP._date(user.created_at)}</span></div>
+            <div class="det-row"><span class="k">Last Login</span>
+              <span class="v">${MP._relTime(user.last_login)}</span></div>
+            <div class="det-row"><span class="k">Gold</span>
+              <span class="v">${(user.currency||0).toLocaleString()} g</span></div>
+          </div>
+
+          <div class="det-section">
+            <div class="det-label">Characters (${chars.length})</div>
+            ${chars.length ? chars.map(c => `
+              <div class="char-card">
+                <div class="cn">${MP._esc(c.name)}</div>
+                <div class="cm">Lv.${c.level} ${c.race_name||''} ${c.class_name||''} &nbsp;·&nbsp;
+                  HP ${c.current_hp}/${c.max_hp}</div>
+              </div>`).join('') : '<p class="empty">No characters.</p>'}
+          </div>
+
+          <div class="action-row">
+            ${online
+              ? `<button class="btn btn-kick" onclick="MP.kickModal(${user.id},'${MP._esc(user.username)}')">⚡ Kick</button>`
+              : ''}
+            ${isBanned
+              ? `<button class="btn btn-unban" onclick="MP.unban(${user.id},'${MP._esc(user.username)}')">✅ Unban</button>`
+              : `<button class="btn btn-ban" onclick="MP.banModal(${user.id},'${MP._esc(user.username)}')">🚫 Ban</button>`}
+            ${online
+              ? `<button class="btn btn-dm" onclick="MP.dmModal(${user.id},'${MP._esc(user.username)}')">📨 DM</button>`
+              : ''}
+          </div>`;
+    },
+
+    closeDetail() {
+        document.getElementById('detailPanel').classList.remove('open');
+        MP._currentPlayer = null;
+    },
+
+    // ── Kick ──────────────────────────────────────────────
+    kickModal(userId, name) {
+        MP._modal(`<h3 style="color:var(--gold)">⚡ Kick ${name}</h3>
+          <p>Disconnects the player immediately. They can log back in.</p>
+          <label>Reason (shown to player)</label>
+          <input id="mod-reason" value="Kicked by moderator.">
+          <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="MP._closeModal()">Cancel</button>
+            <button class="btn btn-kick" onclick="MP._doKick(${userId})">⚡ Kick</button>
+          </div>`);
+        setTimeout(() => document.getElementById('mod-reason')?.select(), 50);
+    },
+
+    async _doKick(userId) {
+        const reason = document.getElementById('mod-reason')?.value || 'Kicked by moderator.';
+        MP._closeModal();
+        const r = await fetch('/mod-panel/kick', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ userId, reason })
+        });
+        const d = await r.json();
+        MP._toast(d.success ? '⚡ Player kicked.' : '❌ ' + d.message, d.success ? 'green' : 'red');
+        if (d.success) { MP.loadOnline(); if (MP._currentPlayer === userId) MP.viewPlayer(userId); }
+    },
+
+    // ── Ban ───────────────────────────────────────────────
+    banModal(userId, name) {
+        MP._modal(`<h3 style="color:var(--red)">🚫 Ban ${name}</h3>
+          <p>Locks the account immediately. The reason is shown to the player on login.</p>
+          <label>Ban Reason</label>
+          <input id="mod-reason" placeholder="e.g. Harassment, exploiting…">
+          <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="MP._closeModal()">Cancel</button>
+            <button class="btn btn-ban" onclick="MP._doBan(${userId})">🚫 Ban Account</button>
+          </div>`);
+        setTimeout(() => document.getElementById('mod-reason')?.focus(), 50);
+    },
+
+    async _doBan(userId) {
+        const reason = document.getElementById('mod-reason')?.value || '';
+        MP._closeModal();
+        const r = await fetch('/mod-panel/ban', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ userId, reason })
+        });
+        const d = await r.json();
+        MP._toast(d.success ? '🚫 Player banned.' : '❌ ' + d.message, d.success ? 'red' : 'red');
+        if (d.success && MP._currentPlayer === userId) MP.viewPlayer(userId);
+    },
+
+    // ── Unban ─────────────────────────────────────────────
+    async unban(userId, name) {
+        if (!confirm(`Unban ${name}?`)) return;
+        const r = await fetch('/mod-panel/unban', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ userId })
+        });
+        const d = await r.json();
+        MP._toast(d.success ? '✅ Player unbanned.' : '❌ ' + d.message, d.success ? 'green' : 'red');
+        if (d.success && MP._currentPlayer === userId) MP.viewPlayer(userId);
+    },
+
+    // ── DM ────────────────────────────────────────────────
+    dmModal(userId, name) {
+        MP._modal(`<h3 style="color:var(--acc)">📨 Message to ${name}</h3>
+          <p>Sends a private notification to this player (they must be online).</p>
+          <label>Message</label>
+          <input id="mod-reason" placeholder="e.g. Please stop spamming chat.">
+          <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="MP._closeModal()">Cancel</button>
+            <button class="btn btn-dm" onclick="MP._doDm(${userId})">📨 Send</button>
+          </div>`);
+        setTimeout(() => document.getElementById('mod-reason')?.focus(), 50);
+    },
+
+    async _doDm(userId) {
+        const message = document.getElementById('mod-reason')?.value?.trim();
+        MP._closeModal();
+        if (!message) return;
+        const r = await fetch('/mod-panel/dm', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ userId, message })
+        });
+        const d = await r.json();
+        MP._toast(d.success ? '📨 Message sent.' : '❌ ' + d.message, d.success ? 'green' : 'red');
+    },
+
+    // ── Broadcast ─────────────────────────────────────────
+    async broadcast() {
+        const message = document.getElementById('bcMsg')?.value?.trim();
+        if (!message) { MP._bcStatus('❌ Enter a message first.', 'red'); return; }
+        const r = await fetch('/mod-panel/broadcast', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ message })
+        });
+        const d = await r.json();
+        if (d.success) {
+            MP._bcStatus('✅ Sent to all players.', 'green');
+            document.getElementById('bcMsg').value = '';
+            MP._bcLog.unshift({ msg: message, time: new Date() });
+            MP.renderBcLog();
+        } else {
+            MP._bcStatus('❌ ' + d.message, 'red');
+        }
+    },
+
+    _bcStatus(text, color) {
+        const el = document.getElementById('bcStatus');
+        el.textContent = text;
+        el.style.color = color === 'green' ? 'var(--green)' : 'var(--red)';
+        setTimeout(() => { el.textContent = ''; }, 4000);
+    },
+
+    renderBcLog() {
+        const el = document.getElementById('bcLog');
+        if (!MP._bcLog.length) { el.innerHTML = '<p class="empty">No broadcasts this session.</p>'; return; }
+        el.innerHTML = MP._bcLog.map(b => `
+          <div style="padding:8px 0;border-bottom:1px solid var(--bo);font-size:13px">
+            <span style="color:var(--dim);font-size:11px">${MP._time(b.time)}</span><br>
+            ${MP._esc(b.msg)}
+          </div>`).join('');
+    },
+
+    // ── Logout ────────────────────────────────────────────
+    async logout() {
+        await fetch('/logout', { method: 'POST' });
+        window.location.href = '/';
+    },
+
+    // ── Modal helpers ─────────────────────────────────────
+    _modal(html) {
+        document.getElementById('modalBox').innerHTML = html;
+        document.getElementById('modalOverlay').style.display = 'flex';
+    },
+    _closeModal() {
+        document.getElementById('modalOverlay').style.display = 'none';
+    },
+
+    // ── Toast ─────────────────────────────────────────────
+    _toast(text, color) {
+        const t = document.createElement('div');
+        t.textContent = text;
+        t.style.cssText = `position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+            padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:999;
+            background:var(--bg2);border:1px solid ${color==='green'?'var(--green)':'var(--red)'};
+            color:${color==='green'?'var(--green)':'var(--red)'};
+            animation:fadeIn .2s ease`;
+        document.body.appendChild(t);
+        setTimeout(() => t.remove(), 3000);
+    },
+
+    // ── Formatting helpers ────────────────────────────────
+    _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); },
+
+    _roleBadge(role) {
+        const map = {
+            ADMIN: ['badge-red',  'ADMIN'],
+            OWNER: ['badge-red',  'OWNER'],
+            GM:    ['badge-gold', 'GM'],
+            MOD:   ['badge-blue', 'MOD'],
+            STAFF: ['badge-blue', 'STAFF'],
+        };
+        const [cls, lbl] = map[role] || ['badge-dim', role || 'PLAYER'];
+        return `<span class="badge ${cls}">${lbl}</span>`;
+    },
+
+    _relTime(iso) {
+        if (!iso) return '—';
+        const diff = Date.now() - new Date(iso).getTime();
+        const m = Math.floor(diff / 60000);
+        if (m < 2)   return 'Just now';
+        if (m < 60)  return `${m}m ago`;
+        const h = Math.floor(m / 60);
+        if (h < 24)  return `${h}h ago`;
+        return `${Math.floor(h/24)}d ago`;
+    },
+
+    _date(iso) {
+        if (!iso) return '—';
+        return new Date(iso).toLocaleDateString();
+    },
+
+    _time(d) {
+        return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    },
+};
+
+// Close modal on overlay click
+document.getElementById('modalOverlay').addEventListener('click', e => {
+    if (e.target === e.currentTarget) MP._closeModal();
+});
+
+// Close detail on Escape
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        MP._closeModal();
+        MP.closeDetail();
+    }
+});
+
+// Boot
+MP.init();
+</script>
+</body>
+</html>

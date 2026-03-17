@@ -1,0 +1,7 @@
+node_modules/
+te/node_modules/
+ui/node_modules/
+ui/.next/
+te/.env
+.env
+*.log

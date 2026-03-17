@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twisted Engine — Command Center</title>
+    <style>
+        :root{--bg:#0d1117;--bg2:#161b22;--bg3:#0d1117;--a:#bb86fc;--a2:#03dac6;--t:#c9d1d9;--td:#484f58;--b:#30363d;--r:#f85149;--g:#3fb950;--y:#d29922}
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{background:var(--bg);color:var(--t);font-family:'Segoe UI',system-ui,sans-serif;display:flex;height:100vh;overflow:hidden}
+        #sidebar{width:250px;min-width:250px;background:#010409;border-right:1px solid var(--b);display:flex;flex-direction:column;padding:20px 12px;overflow-y:auto}
+        .brand{font-size:16px;font-weight:bold;color:var(--a);margin-bottom:24px;padding:0 8px;letter-spacing:1px}
+        .nav-header{font-size:10px;color:var(--td);text-transform:uppercase;letter-spacing:1px;margin:16px 8px 6px}
+        .nav-item{padding:9px 12px;margin-bottom:2px;cursor:pointer;border-radius:6px;font-size:13px;color:#8b949e;transition:.15s}
+        .nav-item:hover{background:var(--bg2);color:var(--t)}.nav-item.active{background:rgba(187,134,252,.12);color:var(--a)}
+        #content{flex:1;padding:28px;overflow-y:auto}
+        h1{margin:0 0 20px;font-size:22px;border-bottom:1px solid var(--b);padding-bottom:12px}
+        table{width:100%;border-collapse:collapse;margin-top:16px}
+        th{text-align:left;color:var(--td);font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--b);padding:10px 12px}
+        td{padding:10px 12px;border-bottom:1px solid #21262d;font-size:13px}tr:hover td{background:rgba(255,255,255,.02)}
+        .action-btn{background:var(--a);color:#000;border:none;padding:8px 16px;font-weight:600;cursor:pointer;border-radius:6px;font-size:13px;transition:.15s}
+        .action-btn:hover{opacity:.9}.save-btn{background:var(--g)}
+        .edit-btn{background:var(--bg2);color:var(--t);border:1px solid var(--b);padding:5px 12px;cursor:pointer;font-size:12px;border-radius:4px}
+        .edit-btn:hover{border-color:var(--a);color:var(--a)}
+        .del-btn{background:transparent;color:var(--r);border:1px solid rgba(248,81,73,.3);padding:5px 12px;cursor:pointer;font-size:12px;border-radius:4px}
+        .del-btn:hover{background:rgba(248,81,73,.1)}
+        input,select,textarea{background:var(--bg3);border:1px solid var(--b);color:var(--t);padding:10px 12px;width:100%;margin-bottom:10px;font-family:Consolas,monospace;font-size:13px;border-radius:6px;outline:none;transition:border .15s}
+        input:focus,select:focus,textarea:focus{border-color:var(--a)}
+        label{font-size:11px;color:var(--td);display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+        .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+        .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+        .grid-4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px}
+        .btn-row{display:flex;gap:10px;margin-top:14px}
+        .tag{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+        .tag-green{background:rgba(63,185,80,.15);color:var(--g)}.tag-red{background:rgba(248,81,73,.15);color:var(--r)}
+        .tag-purple{background:rgba(187,134,252,.15);color:var(--a)}.tag-yellow{background:rgba(210,153,34,.15);color:var(--y)}
+        code{background:var(--bg2);padding:2px 6px;border-radius:4px;font-size:12px}
+    </style>
+</head>
+<body>
+<script>
+// IFRAME MODE — when embedded in the React admin shell, hide our own sidebar
+// and expose a postMessage API so the parent can load sections.
+(function() {
+    const params = new URLSearchParams(window.location.search);
+    const isEmbed = params.get('embed') === '1' || window.self !== window.top;
+    if (isEmbed) {
+        // Inject override CSS to hide the sidebar
+        const style = document.createElement('style');
+        style.textContent = '#sidebar { display: none !important; } #content { padding: 16px !important; }';
+        document.head.appendChild(style);
+    }
+    // Listen for section-load messages from the React parent
+    window.addEventListener('message', function(e) {
+        if (e.data && e.data.type === 'LOAD_SECTION' && e.data.section) {
+            // Wait for managers to be ready, then load
+            const tryLoad = (attempts) => {
+                if (typeof loadManager === 'function') {
+                    loadManager(e.data.section);
+                } else if (attempts > 0) {
+                    setTimeout(() => tryLoad(attempts - 1), 100);
+                }
+            };
+            tryLoad(20);
+        }
+    });
+    // Expose global so inline onclick handlers can also notify parent
+    window._notifyParent = function(section) {
+        if (window.self !== window.top) {
+            window.parent.postMessage({ type: 'SECTION_CHANGED', section }, '*');
+        }
+    };
+    // Auto-load section from URL param after managers initialize
+    const autoSection = params.get('section');
+    if (autoSection) {
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(() => {
+                if (typeof loadManager === 'function') loadManager(autoSection);
+            }, 400);
+        });
+    }
+})();
+</script>
+    <div id="sidebar">
+        <div class="brand">⚡ TWISTED ENGINE</div>
+
+        <div class="nav-item" onclick="loadManager('dashboard')" style="background:rgba(187,134,252,.12);border-left:2px solid #bb86fc;color:#bb86fc;font-weight:700">📊 Dashboard</div>
+        <div class="nav-header">World</div>
+        <div class="nav-item" onclick="loadManager('world_forge')" style="background:linear-gradient(135deg,rgba(106,27,154,.15),rgba(74,20,140,.1));border-left:2px solid #9C27B0;color:#CE93D8;font-weight:600">🌍 World Forge ✨</div>
+        <div class="nav-item" onclick="loadManager('world')" style="background:rgba(187,134,252,0.1);border-left:2px solid var(--a)">🌍 World State</div>
+        <div class="nav-item" onclick="loadManager('ogham')" style="background:rgba(183,28,28,0.1);border-left:2px solid #c0392b">🩸 Blood Ogham</div>
+        <div class="nav-item" onclick="loadManager('ogham_family')" style="background:rgba(183,28,28,0.07);border-left:2px solid #8e3020">🔗 Ogham Families</div>
+        <div class="nav-item" onclick="loadManager('map')">🗺️ Maps</div>
+        <div class="nav-item" onclick="loadManager('npc')">👤 NPCs</div>
+        <div class="nav-item" onclick="loadManager('shop_supply')">🏪 Shops</div>
+        <div class="nav-item" onclick="loadManager('spawn')">👹 Spawns</div>
+        <div class="nav-item" onclick="loadManager('scheduler')">🕐 Scheduler</div>
+        <div class="nav-item" onclick="loadManager('region')" style="background:rgba(0,200,255,.07);border-left:2px solid #006080">🗺️ Regions</div>
+        <div class="nav-item" onclick="loadManager('questboard')">📋 Quest Board</div>
+        <div class="nav-item" onclick="loadManager('arena')">🏟️ Arenas</div>
+
+        <div class="nav-header">Database</div>
+        <div class="nav-item" onclick="loadManager('item')">📦 Items</div>
+        <div class="nav-item" onclick="loadManager('craft')">🔨 Crafting</div>
+        <div class="nav-item" onclick="loadManager('auction')" style="background:rgba(255,215,0,.07);border-left:2px solid #b8860b">🏛️ Auction House</div>
+        <div class="nav-item" onclick="loadManager('skill')">✨ Skills</div>
+        <div class="nav-item" onclick="loadManager('element')">🔥 Elements</div>
+        <div class="nav-item" onclick="loadManager('status')">⚡ Statuses</div>
+        <div class="nav-item" onclick="loadManager('quest')">📜 Quests</div>
+
+        <div class="nav-header">Combat</div>
+        <div class="nav-item" onclick="loadManager('battle_cmd')">⚔️ Battle Cmds</div>
+        <div class="nav-item" onclick="loadManager('limit')">💥 Limit Breaks</div>
+        <div class="nav-item" onclick="loadManager('class_skill')">📋 Skill Assign</div>
+
+        <div class="nav-header">Character</div>
+        <div class="nav-item" onclick="loadManager('class')">⚔️ Classes</div>
+        <div class="nav-item" onclick="loadManager('race')">🧬 Races</div>
+        <div class="nav-item" onclick="loadManager('bg')">📖 Backgrounds</div>
+        <div class="nav-item" onclick="loadManager('feat')">🎯 Feats</div>
+        <div class="nav-item" onclick="loadManager('equip_slot')">🎽 Equip Slots</div>
+        <div class="nav-item" onclick="loadManager('stat')">📊 Stat Engine</div>
+        <div class="nav-item" onclick="loadManager('level')">📈 Level Table</div>
+
+        <div class="nav-header">Staff</div>
+        <div class="nav-item" onclick="loadManager('player_manager')">👥 Player Manager</div>
+        <div class="nav-item" onclick="loadManager('gm_tools')" style="color:#f85149">📢 GM Tools</div>
+        <div class="nav-item" onclick="loadManager('gm_notes')" style="color:#bb86fc">📝 GM Notepad</div>
+        <div class="nav-item" onclick="loadManager('live_social')" style="color:#42A5F5">👥 Live Social</div>
+        <div class="nav-item" onclick="loadManager('reports_manager')" style="color:#f85149">🚩 Reports</div>
+        <div class="nav-item" onclick="loadManager('referral_manager')" style="color:#bb86fc">🔗 Referrals</div>
+        <div class="nav-header">Economy</div>
+        <div class="nav-item" onclick="loadManager('economy')" style="color:#d29922">💰 Economy Dashboard</div>
+        <div class="nav-item" onclick="loadManager('loot_manager')">🎁 Loot Tables</div>
+        <div class="nav-header">World Tools</div>
+        <div class="nav-item" onclick="loadManager('map_connections')" style="color:#42A5F5">🗺️ Map Connections</div>
+        <div class="nav-item" onclick="loadManager('character_creator')" style="color:#3fb950">🧍 Character Creator</div>
+        <div class="nav-item" onclick="loadManager('event_log')" style="color:#bb86fc">🔔 Event Log</div>
+        <div class="nav-item" onclick="loadManager('achievement')" style="color:#ffaa00">🎖️ Achievements</div>
+        <div class="nav-item" onclick="loadManager('codex')" style="background:rgba(88,166,255,.07);border-left:2px solid #58a6ff">📖 Codex</div>
+        <div class="nav-header">Config</div>
+        <div class="nav-item" onclick="loadManager('setting')">⚙️ Settings</div>
+        <div class="nav-item" onclick="loadManager('module')">🧩 Modules</div>
+
+        <div class="nav-header">Legends</div>
+        <div class="nav-item" onclick="loadManager('artifact')">🗡️ Artifacts</div>
+        <div class="nav-item" onclick="loadManager('artifact_power')">⚡ Art. Powers</div>
+
+        <div style="margin-top:auto;padding-top:20px;border-top:1px solid var(--b)">
+            <div class="nav-item" onclick="window.location.href='/'">⬅️ Back to Portal</div>
+        </div>
+    </div>
+
+    <div id="content">
+        <h1 id="pageTitle">Welcome, Admin</h1>
+        <div id="dynamicArea">
+            <p style="color:var(--td);margin-bottom:20px" id="dash_loading">Loading dashboard...</p>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+                <div style="background:var(--bg2);border:1px solid var(--b);border-radius:8px;padding:20px"><h3 style="color:var(--a);font-size:14px">🎮 Game Data</h3><p style="font-size:12px;color:var(--td);margin-top:8px">Classes, Races, Items, Skills, Elements, Status Effects — all editable.</p></div>
+                <div style="background:var(--bg2);border:1px solid var(--b);border-radius:8px;padding:20px"><h3 style="color:var(--a2);font-size:14px">⚔️ Combat</h3><p style="font-size:12px;color:var(--td);margin-top:8px">Battle Commands, Limit Breaks, Skill assignments, Spawns, Arenas.</p></div>
+                <div style="background:var(--bg2);border:1px solid var(--b);border-radius:8px;padding:20px"><h3 style="color:var(--y);font-size:14px">🌍 World</h3><p style="font-size:12px;color:var(--td);margin-top:8px">Maps, NPCs, Shops, Random Encounters, PvP Arenas. Everything data-driven.</p></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CORE -->
+    <script src="js/api.js"></script>
+    <script src="js/managers/builders.js"></script>
+    <script src="js/managers/generic_manager.js"></script>
+
+    <!-- SPECIALIZED MANAGERS -->
+    <script src="js/managers/map_manager.js"></script>
+    <script src="js/managers/class_manager.js"></script>
+    <script src="js/managers/race_manager.js"></script>
+    <script src="js/managers/bg_manager.js"></script>
+    <script src="js/managers/feat_manager.js"></script>
+    <script src="js/managers/stat_manager.js"></script>
+    <script src="js/managers/item_manager.js"></script>
+    <script src="js/managers/craft_manager.js"></script>
+    <script src="js/managers/auction_manager.js"></script>
+    <script src="js/managers/scheduler_manager.js"></script>
+    <script src="js/managers/region_manager.js"></script>
+    <script src="js/managers/questboard_manager.js"></script>
+    <script src="js/managers/npc_manager.js"></script>
+    <script src="js/managers/script_editor.js"></script>
+    <script src="js/managers/node_graph_editor.js"></script>
+
+    <!-- NEW SPECIALIZED MANAGERS -->
+    <script src="js/managers/battle_cmd_manager.js"></script>
+    <script src="js/managers/spawn_manager.js"></script>
+    <script src="js/managers/arena_manager.js"></script>
+    <script src="js/managers/shop_manager.js"></script>
+    <script src="js/managers/settings_manager.js"></script>
+    <script src="js/managers/quest_manager.js"></script>
+    <script src="js/managers/artifact_manager.js"></script>
+    <script src="js/managers/world_manager.js"></script>
+    <script src="js/managers/skill_manager.js"></script>
+    <script src="js/managers/status_manager.js"></script>
+    <script src="js/managers/limit_manager.js"></script>
+    <script src="js/managers/ogham_manager.js"></script>
+    <script src="js/managers/ogham_family_manager.js"></script>
+    <script src="js/managers/world_forge.js"></script>
+    <script src="js/managers/dashboard.js"></script>
+    <script src="js/managers/player_manager.js"></script>
+    <script src="js/managers/gm_tools.js"></script>
+    <script src="js/managers/loot_manager.js"></script>
+    <script src="js/managers/economy_dashboard.js"></script>
+    <script src="js/managers/event_log.js"></script>
+    <script src="js/managers/map_connections.js"></script>
+    <script src="js/managers/gm_notes.js"></script>
+    <script src="js/managers/live_social.js"></script>
+    <script src="js/managers/character_creator.js"></script>
+    <script src="js/managers/achievement_manager.js"></script>
+    <script src="js/managers/reports_manager.js"></script>
+    <script src="js/managers/referral_manager.js"></script>
+    <script src="js/managers/codex_manager.js"></script>
+
+    <script>
+        // Auth check: verify session is active via /me endpoint
+        // No localStorage — session cookie handles identity automatically
+        (async () => {
+            const r = await fetch('/me');
+            const d = await r.json();
+            if (!d.success) { alert('Login required.'); window.location.href = '/'; return; }
+            if (!['ADMIN','GM','MOD','STAFF','OWNER'].includes(d.role)) {
+                alert('Staff access only.'); window.location.href = '/'; return;
+            }
+        })();
+
+        // SPECIALIZED MANAGERS — have custom UIs with dropdowns, builders, etc.
+        const Managers = {
+            map:          typeof MapManager !== 'undefined' ? MapManager : null,
+            class:        typeof ClassManager !== 'undefined' ? ClassManager : null,
+            race:         typeof RaceManager !== 'undefined' ? RaceManager : null,
+            bg:           typeof BgManager !== 'undefined' ? BgManager : null,
+            feat:         typeof FeatManager !== 'undefined' ? FeatManager : null,
+            stat:         typeof StatManager !== 'undefined' ? StatManager : null,
+            item:         typeof ItemManager !== 'undefined' ? ItemManager : null,
+            npc:          typeof NpcManager !== 'undefined' ? NpcManager : null,
+            battle_cmd:   typeof BattleCmdManager !== 'undefined' ? BattleCmdManager : null,
+            spawn:        typeof SpawnManager !== 'undefined' ? SpawnManager : null,
+            arena:        typeof ArenaManager !== 'undefined' ? ArenaManager : null,
+            shop_supply:  typeof ShopSupplyManager !== 'undefined' ? ShopSupplyManager : null,
+            setting:      typeof SettingsManager !== 'undefined' ? SettingsManager : null,
+            quest:        typeof QuestManager !== 'undefined' ? QuestManager : null,
+            artifact:     typeof ArtifactManager !== 'undefined' ? ArtifactManager : null,
+            world:        typeof WorldManager !== 'undefined' ? WorldManager : null,
+            skill:        typeof SkillManager !== 'undefined' ? SkillManager : null,
+            craft:        typeof CraftManager !== 'undefined' ? CraftManager : null,
+            auction:      typeof AuctionManager !== 'undefined' ? AuctionManager : null,
+            scheduler:    typeof SchedulerManager  !== 'undefined' ? SchedulerManager  : null,
+            region:       typeof RegionManager     !== 'undefined' ? RegionManager     : null,
+            questboard:   typeof QuestBoardManager !== 'undefined' ? QuestBoardManager : null,
+            status:       typeof StatusManager !== 'undefined' ? StatusManager : null,
+            limit:        typeof LimitManager !== 'undefined' ? LimitManager : null,
+            ogham:        typeof OghamManager !== 'undefined' ? OghamManager : null,
+            ogham_family: typeof OghamFamilyManager !== 'undefined' ? OghamFamilyManager : null,
+            world_forge:  typeof WorldForge !== 'undefined' ? WorldForge : null,
+            dashboard:    typeof Dashboard !== 'undefined' ? Dashboard : null,
+            player_manager: typeof PlayerManager !== 'undefined' ? PlayerManager : null,
+            gm_tools:       typeof GmTools !== 'undefined' ? GmTools : null,
+            loot_manager:   typeof LootManager !== 'undefined' ? LootManager : null,
+            economy:        typeof EconomyDashboard !== 'undefined' ? EconomyDashboard : null,
+            event_log:      typeof EventLog !== 'undefined' ? EventLog : null,
+            map_connections:   typeof MapConnections !== 'undefined' ? MapConnections : null,
+            gm_notes:          typeof GmNotes !== 'undefined' ? GmNotes : null,
+            live_social:       typeof LiveSocial !== 'undefined' ? LiveSocial : null,
+            reports_manager:   typeof ReportsManager !== 'undefined' ? ReportsManager : null,
+            referral_manager:  typeof ReferralManager !== 'undefined' ? ReferralManager : null,
+            character_creator: typeof CharacterCreator !== 'undefined' ? CharacterCreator : null,
+            achievement:       typeof AchievementManager !== 'undefined' ? AchievementManager : null,
+            codex:             typeof CodexManager !== 'undefined' ? CodexManager : null,
+        };
+
+        // GENERIC MANAGER CONFIGS — simple CRUD tables that don't need custom UIs
+        const GC = {
+element: {
+                title: 'ELEMENT EDITOR', type: 'element',
+                cols: ['name','icon','color','opposite_id','bonus_damage_pct'],
+                fields: ['name','description','icon','color','opposite_id','bonus_damage_pct']
+            },
+limit: {
+                title: 'LIMIT BREAKS', type: 'limit',
+                cols: ['class_id','name','icon','break_level','char_level_req','target_type'],
+                fields: ['class_id','name','description','icon','break_level','char_level_req','target_type','effects']
+            },
+            level: {
+                title: 'LEVEL TABLE', type: 'level',
+                cols: ['level','xp_required','ap_awarded','xp_for_win','gold_for_win','hp_growth','mp_growth'],
+                fields: ['level','xp_required','ap_awarded','xp_for_win','gold_for_win','hp_growth','mp_growth']
+            },
+            equip_slot: {
+                title: 'EQUIP SLOTS', type: 'equip_slot',
+                cols: ['slot_key','name','display_order'],
+                fields: ['slot_key','name','display_order','add_hp','add_mp','add_atk','add_def','add_mo','add_md','add_speed','add_luck']
+            },
+            quest: {
+                title: 'QUEST EDITOR', type: 'quest',
+                cols: ['quest_id', 'title', 'required_level', 'quest_type', 'is_repeatable'],
+                fields: ['quest_id', 'title', 'description', 'quest_type', 'category',
+                         'required_level', 'is_repeatable', 'repeat_cooldown_hours',
+                         'max_completions', 'objectives_json', 'rewards_json', 'is_active']
+            },
+            class_skill: {
+                title: 'SKILL ASSIGNMENTS', type: 'class_skill',
+                cols: ['class_id','skill_id','mp_cost','learn_level','alt_name'],
+                fields: ['class_id','skill_id','mp_cost','learn_level','alt_name']
+            },
+            module: {
+                title: 'MODULES', type: 'module',
+                cols: ['module_key','module_name','is_installed'],
+                fields: ['module_key','module_name','is_installed']
+            },
+            artifact_power: {
+                title: 'ARTIFACT POWERS', type: 'artifact_power',
+                cols: ['power_id','artifact_id','name','power_type','unlock_kills','rank_max'],
+                fields: ['power_id','artifact_id','name','description','power_type','unlock_kills','rank_max','effect_json']
+            }
+        };
+
+        // Auto-load dashboard on page ready
+        setTimeout(() => { if (typeof Dashboard !== 'undefined') Dashboard.init(); }, 300);
+
+        function loadManager(key) {
+            // Highlight sidebar
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            if (event && event.target) event.target.classList.add('active');
+
+            // Try specialized manager first, then generic, then error
+            if (Managers[key] && Managers[key].init) {
+                Managers[key].init();
+            } else if (GC[key]) {
+                GenericManager.init(GC[key]);
+            } else {
+                document.getElementById('pageTitle').innerText = key.toUpperCase();
+                document.getElementById('dynamicArea').innerHTML = '<p style="color:var(--r)">Manager not found: ' + key + '</p>';
+            }
+        }
+    </script>
+</body>
+</html>
