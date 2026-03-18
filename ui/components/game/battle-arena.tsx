@@ -1,9 +1,10 @@
 "use client"
 import React from 'react'
 
-import { useState, useCallback, useMemo } from "react"
+import { useState, useCallback, useMemo, useEffect } from "react"
 import { useGame, useNotification } from "@/lib/game-context"
 import type { BattleCommand, Skill, BattleToken, BattleCombatant, WoundLevel, LimbZoneInfo, KOInteraction, PvpKOChoice, SignatureTech, SigTechDiscovery } from "@/lib/game-types"
+import { ParticleOverlay, getParticleForAction } from "./particle-overlay"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -59,6 +60,38 @@ export function BattleArena() {
   const [targetLimb, setTargetLimb] = useState<string | null>(null)
   const [showLimbSelector, setShowLimbSelector] = useState(false)
   const [flavorText, setFlavorText] = useState('')
+
+  // Particle effects
+  const [particleEffects, setParticleEffects] = useState<Array<{ preset: string; x: number; y: number; id: string }>>([])
+  const addParticleEffect = (preset: string, gridX: number, gridY: number) => {
+    const x = gridX * CELL_SIZE + CELL_SIZE / 2
+    const y = gridY * CELL_SIZE + CELL_SIZE / 2
+    const id = `${preset}_${Date.now()}_${Math.random()}`
+    setParticleEffects(prev => [...prev, { preset, x, y, id }])
+    // Auto-remove after 3 seconds
+    setTimeout(() => setParticleEffects(prev => prev.filter(e => e.id !== id)), 3000)
+  }
+
+  // Listen for battle actions to trigger particles
+  useEffect(() => {
+    if (!socket) return
+    const handler = (data: { state: unknown; action: { actions?: Array<{ type: string; target?: string; elements?: string[] }> } | null }) => {
+      if (!data.action?.actions) return
+      for (const a of data.action.actions) {
+        const elements = (a as Record<string, unknown>).elements as string[] | undefined
+        const preset = getParticleForAction(a.type, elements?.[0])
+        if (!preset) continue
+        // Find target on grid
+        const targetName = a.target
+        if (targetName && battle?.grid?.tokens) {
+          const token = battle.grid.tokens.find(t => t.name === targetName)
+          if (token) addParticleEffect(preset, token.gridX, token.gridY)
+        }
+      }
+    }
+    socket.on('battle_update', handler)
+    return () => { socket.off('battle_update', handler) }
+  }, [socket, battle])
 
   // Combo input state (Legaia-style)
   const [comboInputs, setComboInputs] = useState<string[]>([])
@@ -506,6 +539,13 @@ export function BattleArena() {
                 )
               })
             )}
+
+            {/* Particle effects overlay */}
+            <ParticleOverlay
+              effects={particleEffects}
+              width={grid.width * CELL_SIZE}
+              height={grid.height * CELL_SIZE}
+            />
 
             {/* Emote overlay */}
             {state.battleEmote && (
