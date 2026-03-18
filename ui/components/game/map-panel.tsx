@@ -51,6 +51,8 @@ interface SelectedEntity {
   y: number
   charId?: number
   level?: number
+  spriteUrl?: string | null
+  icon?: string
 }
 
 export function MapPanel() {
@@ -186,11 +188,14 @@ export function MapPanel() {
       const evtType = String(evt.type).toUpperCase()
       const data = evt.data as Record<string, unknown> | undefined
       if (evtType === 'NPC') {
-        entities.push({ type: 'npc', name: (data?.name as string) || 'NPC', x: evt.x, y: evt.y })
+        entities.push({ type: 'npc', name: (data?.name as string) || 'NPC', x: evt.x, y: evt.y,
+          spriteUrl: (data?.spriteUrl as string) || undefined, icon: (data?.icon as string) || undefined })
       } else if (evtType === 'ENEMY' || evtType === 'BATTLE') {
-        entities.push({ type: 'enemy', name: (data?.name as string) || 'Enemy', x: evt.x, y: evt.y })
+        entities.push({ type: 'enemy', name: (data?.name as string) || 'Enemy', x: evt.x, y: evt.y,
+          spriteUrl: (data?.spriteUrl as string) || undefined, icon: (data?.icon as string) || undefined })
       } else if (evtType === 'SHOP') {
-        entities.push({ type: 'shop', name: (data?.name as string) || 'Shop', x: evt.x, y: evt.y })
+        entities.push({ type: 'shop', name: (data?.name as string) || 'Shop', x: evt.x, y: evt.y,
+          icon: (data?.icon as string) || undefined })
       }
     }
   }
@@ -341,7 +346,12 @@ export function MapPanel() {
                       charId: p.charId, level: p.level
                     })}
                   >
-                    {p.isOffline ? <span className="text-[10px]">💤</span> : <User className="w-4 h-4" />}
+                    {p.isOffline ? <span className="text-[10px]">💤</span> :
+                      (p as unknown as Record<string,unknown>).spriteUrl ? (
+                        <img src={`${process.env.NEXT_PUBLIC_API_URL || ''}${(p as unknown as Record<string,unknown>).spriteUrl}`}
+                          alt={p.name} className="w-full h-full object-contain" style={{ imageRendering: 'pixelated' }} />
+                      ) : <User className="w-4 h-4" />
+                    }
                   </button>
                 ))}
 
@@ -367,12 +377,14 @@ export function MapPanel() {
                 {/* Map Entities (NPCs, enemies, shops) */}
                 {entities.map((entity, i) => {
                   const Icon = getEntityIcon(entity.type)
+                  const apiUrl = process.env.NEXT_PUBLIC_API_URL || ''
                   return (
                     <button
                       key={`entity-${i}`}
                       className={cn(
-                        "absolute flex items-center justify-center rounded-full",
-                        getEntityColor(entity.type)
+                        "absolute flex items-center justify-center overflow-hidden",
+                        entity.spriteUrl ? "rounded-sm" : "rounded-full",
+                        !entity.spriteUrl && getEntityColor(entity.type)
                       )}
                       style={{
                         width: TILE_SIZE - 4,
@@ -383,7 +395,14 @@ export function MapPanel() {
                       onClick={() => handleInteract(entity)}
                       title={entity.name}
                     >
-                      <Icon className="w-4 h-4" />
+                      {entity.spriteUrl ? (
+                        <img src={`${apiUrl}${entity.spriteUrl}`} alt={entity.name}
+                          className="w-full h-full object-contain" style={{ imageRendering: 'pixelated' }} />
+                      ) : entity.icon ? (
+                        <span className="text-sm">{entity.icon}</span>
+                      ) : (
+                        <Icon className="w-4 h-4" />
+                      )}
                     </button>
                   )
                 })}

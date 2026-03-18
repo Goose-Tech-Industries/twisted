@@ -485,6 +485,9 @@ export function BattleArena() {
                       >
                         {token.knockedOut && !token.dead ? (
                           <span className="text-lg" title={`${token.name} (KO)`}>💫</span>
+                        ) : (token as unknown as Record<string,unknown>).spriteUrl ? (
+                          <img src={`${process.env.NEXT_PUBLIC_API_URL || ''}${(token as unknown as Record<string,unknown>).spriteUrl}`}
+                            alt={token.name} className="w-10 h-10 object-contain" style={{ imageRendering: 'pixelated' }} />
                         ) : (
                           <span className="text-[10px] font-bold truncate max-w-[48px]">
                             {token.name.split(' ')[0]}

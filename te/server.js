@@ -4304,13 +4304,15 @@ async function startServer() {
 
         async function loadMapNpcs(mapId) {
             const [rows] = await db.query(
-                `SELECT id, name, icon, map_id, x, y, persona, is_enemy,
-                        move_type, wander_radius, char_id,
-                        quest_offers_json, schedule_json, shop_id,
-                        mood, is_dead, predecessor_name,
-                        is_recruitable, recruit_rep_req, recruit_quest_req
-                 FROM game_npcs
-                 WHERE map_id = ? AND is_enemy = 0 AND is_dead = 0`,
+                `SELECT n.id, n.name, n.icon, n.map_id, n.x, n.y, n.persona, n.is_enemy,
+                        n.move_type, n.wander_radius, n.char_id,
+                        n.quest_offers_json, n.schedule_json, n.shop_id,
+                        n.mood, n.is_dead, n.predecessor_name,
+                        n.is_recruitable, n.recruit_rep_req, n.recruit_quest_req,
+                        n.sprite_asset_id, a.file_url AS sprite_url
+                 FROM game_npcs n
+                 LEFT JOIN game_assets a ON a.id = n.sprite_asset_id
+                 WHERE n.map_id = ? AND n.is_enemy = 0 AND n.is_dead = 0`,
                 [mapId]
             );
             for (const row of rows) {
@@ -4326,6 +4328,7 @@ async function startServer() {
                         id:           row.id,
                         name:         row.name,
                         icon:         row.icon || '👤',
+                        spriteUrl:    row.sprite_url || null,
                         mapId:        row.map_id,
                         x:            row.x,
                         y:            row.y,
