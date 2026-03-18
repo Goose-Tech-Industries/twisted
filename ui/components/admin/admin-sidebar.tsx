@@ -12,7 +12,7 @@ import {
 } from "lucide-react"
 
 export type AdminSection =
-  | 'dashboard' | 'templates' | 'quest_builder' | 'dialogue_builder' | 'players' | 'economy' | 'gm_tools'
+  | 'dashboard' | 'templates' | 'assets' | 'quest_builder' | 'dialogue_builder' | 'players' | 'economy' | 'gm_tools'
   | 'world_forge' | 'world' | 'maps' | 'regions' | 'spawns' | 'map_connections' | 'scheduler'
   | 'items' | 'npcs' | 'quests' | 'questboard' | 'shop_supply' | 'loot_tables' | 'crafting' | 'auction'
   | 'classes' | 'races' | 'feats' | 'stat' | 'class_skill' | 'character_creator'
@@ -28,6 +28,7 @@ const NAV_GROUPS: NavGroup[] = [
   { title: 'Overview', items: [
     { id: 'dashboard',        label: 'Dashboard',         icon: LayoutDashboard },
     { id: 'templates',         label: 'Game Templates',    icon: Layers },
+    { id: 'assets',             label: 'Asset Manager',     icon: Target },
     { id: 'players',          label: 'Players',           icon: Users },
     { id: 'economy',          label: 'Economy',           icon: BarChart3 },
   ]},

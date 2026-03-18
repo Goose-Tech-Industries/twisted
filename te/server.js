@@ -606,6 +606,11 @@ async function startServer() {
         adminPanelRoutes.init(db, io);
         app.use('/admin-panel', adminPanelRoutes);
 
+        // Asset Manager
+        const assetRoutes = require('./routes/assetRoutes');
+        assetRoutes.init(db);
+        app.use('/assets-api', assetRoutes);
+
         const modPanelRoutes = require('./routes/modPanel');
         modPanelRoutes.init(db, io);
         app.use('/mod-panel', modPanelRoutes);

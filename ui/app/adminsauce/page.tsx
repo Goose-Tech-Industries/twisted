@@ -51,6 +51,7 @@ import { LimitBreakPanel }       from "@/components/admin/limit-battle-panels"
 import { BattleCmdPanel }        from "@/components/admin/limit-battle-panels"
 import { BattleConfigPanel }     from "@/components/admin/battle-config-panel"
 import { TemplatePickerPanel }   from "@/components/admin/template-picker-panel"
+import { AssetManagerPanel }     from "@/components/admin/asset-manager-panel"
 import { QuestBuilderPanel }     from "@/components/admin/quest-builder-panel"
 import { DialogueBuilderPanel }  from "@/components/admin/dialogue-builder-panel"
 
@@ -122,8 +123,9 @@ function SectionContent({ section }: { section: AdminSection }) {
     case 'class_skill':       return <ClassSkillPanel />
     case 'character_creator': return <CharacterCreatorPanel />
 
-    // Templates
+    // Templates + Assets
     case 'templates':         return <TemplatePickerPanel />
+    case 'assets':            return <AssetManagerPanel />
 
     // Combat
     case 'battle_config':     return <BattleConfigPanel />
