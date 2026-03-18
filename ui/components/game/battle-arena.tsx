@@ -1452,6 +1452,38 @@ function CombatantCard({ combatant, isActive, color, isTargeted, onSelect }: {
         </div>
       )}
 
+      {/* Break/Shield (Octopath) */}
+      {combatant.shieldPoints != null && combatant.maxShieldPoints != null && combatant.maxShieldPoints > 0 && (
+        <div className="flex items-center gap-1 mt-0.5 text-[10px]">
+          <span>🛡️</span>
+          <div className="flex gap-0.5">
+            {Array.from({ length: combatant.maxShieldPoints }, (_, i) => (
+              <span key={i} className={cn("w-2 h-2 rounded-full",
+                combatant.isBroken ? "bg-destructive animate-pulse" :
+                i < (combatant.shieldPoints || 0) ? "bg-[oklch(0.55_0.18_260)]" : "bg-muted"
+              )} />
+            ))}
+          </div>
+          {combatant.isBroken && <span className="text-destructive font-bold">BREAK!</span>}
+          {combatant.shieldWeaknesses && combatant.shieldWeaknesses.length > 0 && (
+            <span className="text-[9px] text-muted-foreground ml-1">
+              Weak: {combatant.shieldWeaknesses.join(', ')}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Passive abilities */}
+      {combatant.passives && combatant.passives.length > 0 && (
+        <div className="flex gap-0.5 mt-0.5 flex-wrap">
+          {combatant.passives.map((p, i) => (
+            <span key={i} className="text-[9px] px-1 py-0 bg-[oklch(0.55_0.15_210)]/20 text-[oklch(0.55_0.15_210)] rounded" title={p.name}>
+              {p.icon}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Combo AP bar */}
       {combatant.currentAp != null && combatant.maxAp != null && combatant.maxAp > 0 && (
         <div className="flex items-center gap-1 text-[10px] mt-0.5">

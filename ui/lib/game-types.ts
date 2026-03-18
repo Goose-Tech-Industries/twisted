@@ -211,6 +211,15 @@ export interface BattleSettings {
   enableSpectatorMode?: boolean
   // Session 23
   // Session 24
+  // Final 8
+  enableBreakShield?: boolean
+  enableOneMore?: boolean
+  enableTurnManipulation?: boolean
+  enablePartySwap?: boolean
+  enableWeaponTriangle?: boolean
+  enableAdvantageSystem?: boolean
+  enablePassiveAbilities?: boolean
+  enableRollingHp?: boolean
   enableComboInput?: boolean
   enableActionCommands?: boolean
   enableAlignmentSystem?: boolean
@@ -324,6 +333,15 @@ export interface BattleCombatant {
 
   // Session 15: Summon
   // Session 24
+  // Final 8
+  shieldPoints?: number | null
+  maxShieldPoints?: number | null
+  isBroken?: boolean
+  shieldWeaknesses?: string[]
+  passives?: { name: string; icon: string }[]
+  weaponType?: string | null
+  rollingDamage?: number
+
   // Combo/Action
   currentAp?: number | null
   maxAp?: number | null

@@ -121,6 +121,18 @@ async function loadBattleSettings(db) {
         enable_afterlife: true,
         // Session 24
         // Combo + Action Commands
+        // Final 8
+        enable_break_shield: true,
+        break_stun_turns: 1,
+        break_damage_bonus: 0.50,
+        enable_one_more: true,
+        enable_turn_manipulation: true,
+        enable_party_swap: true,
+        enable_weapon_triangle: true,
+        enable_advantage_system: true,
+        enable_passive_abilities: true,
+        max_passive_slots: 3,
+        enable_rolling_hp: false,
         enable_combo_input: true,
         combo_ap_regen_per_turn: 3,
         combo_individual_hit_damage: 0.5,
@@ -776,6 +788,186 @@ async function checkTechDiscovery(db, charId, settings) {
         dominantKeywords: dominant.map(([kw, count]) => ({ keyword: kw, count })),
         originKeywords: dominant.map(([kw]) => kw)
     };
+}
+
+// =================================================================
+// FINAL 8 RPG MECHANICS
+// =================================================================
+
+// 1. BREAK/SHIELD (Octopath) — reduce shield on weakness hit, break = stun + bonus dmg
+function checkBreakShield(battle, target, elements, result) {
+    if (!battle._settings?.enable_break_shield) return;
+    if (!target._shieldPoints || target._shieldPoints <= 0) return;
+    if (target._isBroken) return;
+
+    const weaknesses = target._shieldWeaknesses || [];
+    const hitWeakness = elements.some(e => weaknesses.includes(e));
+    if (!hitWeakness) return;
+
+    target._shieldPoints--;
+    result.log.push(`🛡️ Shield crack! ${target._shieldPoints} shields remaining.`);
+    result.actions.push({ type: 'shield_hit', target: target.name, remaining: target._shieldPoints });
+
+    if (target._shieldPoints <= 0) {
+        target._isBroken = true;
+        target._brokenTurns = parseInt(battle._settings.break_stun_turns) || 1;
+        result.log.push(`💥 BREAK! ${target.name}'s defenses shatter!`);
+        result.actions.push({ type: 'break', target: target.name });
+    }
+}
+
+// Tick break recovery
+function tickBreakState(combatant) {
+    if (!combatant._isBroken) return;
+    combatant._brokenTurns--;
+    if (combatant._brokenTurns <= 0) {
+        combatant._isBroken = false;
+        combatant._shieldPoints = combatant._maxShieldPoints || 3;
+    }
+}
+
+// Break damage bonus multiplier
+function getBreakDamageBonus(target, settings) {
+    if (!target._isBroken) return 1.0;
+    return 1.0 + (parseFloat(settings?.break_damage_bonus) || 0.50);
+}
+
+// 2. ONE MORE + BATON PASS (Persona)
+function checkOneMore(battle, actor, target, wasWeakness, wasCrit, result) {
+    if (!battle._settings?.enable_one_more) return false;
+    const onCrit = battle._settings.one_more_on_crit === 'true';
+    if (wasWeakness || (onCrit && wasCrit)) {
+        result.log.push(`🎯 ONE MORE! ${actor.name} gets an extra action!`);
+        result.actions.push({ type: 'one_more', actor: actor.name });
+        battle._oneMoreActive = actor.charId;
+        return true;
+    }
+    return false;
+}
+
+// 3. TURN MANIPULATION (Grandia) — delay enemy turn or cancel charge
+function applyTurnDelay(battle, target, delayAmount, result) {
+    if (!battle._settings?.enable_turn_manipulation || delayAmount <= 0) return;
+    // Move target back in the turn queue
+    const idx = battle.turnQueue.indexOf(target.charId);
+    if (idx >= 0) {
+        battle.turnQueue.splice(idx, 1);
+        const newIdx = Math.min(battle.turnQueue.length, idx + delayAmount);
+        battle.turnQueue.splice(newIdx, 0, target.charId);
+        result.log.push(`⏳ ${target.name}'s turn is delayed!`);
+        result.actions.push({ type: 'turn_delay', target: target.name, delay: delayAmount });
+    }
+    // Cancel charge if charging
+    if (target._charging) {
+        target._charging = null;
+        result.log.push(`❌ ${target.name}'s charge is cancelled!`);
+        result.actions.push({ type: 'charge_cancel', target: target.name });
+    }
+}
+
+// 4. MID-BATTLE PARTY SWAP (Pokemon)
+function resolvePartySwap(battle, actor, swapInCharId, result) {
+    if (!battle._settings?.enable_party_swap) {
+        result.log.push('Party swap is not enabled.'); return result;
+    }
+    const swapIn = battle._reserves?.[swapInCharId];
+    if (!swapIn) { result.log.push('No reserve found.'); return result; }
+
+    // Move active out to reserves
+    const teamId = battle.getTeamId(actor.charId);
+    battle._reserves[actor.charId] = { ...actor };
+    delete battle.combatants[actor.charId];
+    battle.teams[teamId] = battle.teams[teamId].filter(id => id !== actor.charId);
+
+    // Move reserve in
+    battle.combatants[swapInCharId] = swapIn;
+    battle.teams[teamId].push(swapInCharId);
+    delete battle._reserves[swapInCharId];
+
+    battle._rebuildTurnQueue();
+    result.log.push(`🔄 ${actor.name} swaps out! ${swapIn.name} enters the battle!`);
+    result.actions.push({ type: 'party_swap', out: actor.name, in: swapIn.name });
+    return result;
+}
+
+// 5. WEAPON TRIANGLE (Fire Emblem)
+async function getWeaponTriangleBonus(db, attackerWeaponType, defenderWeaponType, settings) {
+    if (!settings?.enable_weapon_triangle || !attackerWeaponType || !defenderWeaponType) return { damage: 0, accuracy: 0 };
+    try {
+        const [rows] = await db.query(
+            'SELECT bonus_damage, bonus_accuracy FROM game_weapon_triangle WHERE weapon_type_a=? AND beats=?',
+            [attackerWeaponType, defenderWeaponType]);
+        if (rows.length) return { damage: parseFloat(rows[0].bonus_damage) || 0, accuracy: parseFloat(rows[0].bonus_accuracy) || 0 };
+        // Check reverse (disadvantage)
+        const [rev] = await db.query(
+            'SELECT bonus_damage, bonus_accuracy FROM game_weapon_triangle WHERE weapon_type_a=? AND beats=?',
+            [defenderWeaponType, attackerWeaponType]);
+        if (rev.length) return { damage: -(parseFloat(rev[0].bonus_damage) || 0), accuracy: -(parseFloat(rev[0].bonus_accuracy) || 0) };
+    } catch {}
+    return { damage: 0, accuracy: 0 };
+}
+
+// 6. ADVANTAGE / DISADVANTAGE (D&D)
+function rollWithAdvantage(baseChance, hasAdvantage, hasDisadvantage) {
+    if (hasAdvantage && !hasDisadvantage) {
+        // Roll twice, take best
+        return Math.max(Math.random(), Math.random()) < baseChance;
+    }
+    if (hasDisadvantage && !hasAdvantage) {
+        // Roll twice, take worst
+        return Math.min(Math.random(), Math.random()) < baseChance;
+    }
+    return Math.random() < baseChance;
+}
+
+function hasAdvantage(combatant) {
+    return combatant.statuses?.some(s => {
+        try { const fx = typeof s.effects === 'string' ? JSON.parse(s.effects) : s.effects; return fx?.advantage; } catch { return false; }
+    }) || false;
+}
+function hasDisadvantage(combatant) {
+    return combatant.statuses?.some(s => {
+        try { const fx = typeof s.effects === 'string' ? JSON.parse(s.effects) : s.effects; return fx?.disadvantage; } catch { return false; }
+    }) || false;
+}
+
+// 7. PASSIVE ABILITIES — apply at battle start
+async function loadPassiveAbilities(db, charId) {
+    try {
+        const [rows] = await db.query(
+            `SELECT gpa.* FROM character_passive_abilities cpa
+             JOIN game_passive_abilities gpa ON gpa.id = cpa.ability_id
+             WHERE cpa.character_id=? AND gpa.active=1`, [charId]);
+        return rows.map(r => ({ id: r.id, name: r.name, label: r.label, icon: r.icon, effects: typeof r.effects === 'string' ? JSON.parse(r.effects) : r.effects }));
+    } catch { return []; }
+}
+
+function applyPassiveAbilities(combatant, settings) {
+    if (!settings?.enable_passive_abilities || !combatant._passives) return;
+    for (const p of combatant._passives) {
+        const fx = p.effects;
+        if (fx.atk_bonus) combatant.atk = Math.round(combatant.atk * (1 + fx.atk_bonus));
+        if (fx.def_penalty) combatant.def = Math.max(1, Math.round(combatant.def * (1 + fx.def_penalty)));
+        if (fx.dodge_bonus) combatant._passiveDodgeBonus = (combatant._passiveDodgeBonus || 0) + fx.dodge_bonus;
+        if (fx.crit_bonus) combatant._passiveCritBonus = (combatant._passiveCritBonus || 0) + fx.crit_bonus;
+        if (fx.counter_bonus) combatant._passiveCounterBonus = (combatant._passiveCounterBonus || 0) + fx.counter_bonus;
+        if (fx.damage_reduction) combatant._passiveDamageReduction = (combatant._passiveDamageReduction || 0) + fx.damage_reduction;
+        if (fx.guaranteed_block) combatant._guaranteedBlock = fx.guaranteed_block;
+    }
+}
+
+// 8. ROLLING HP (Earthbound) — damage queued, ticks down over time
+// This is primarily a CLIENT-SIDE visual effect, but the server tracks pending damage
+function queueRollingDamage(combatant, damage, settings) {
+    if (!settings?.enable_rolling_hp) {
+        combatant.currentHp = Math.max(0, combatant.currentHp - damage);
+        return;
+    }
+    if (!combatant._rollingDamage) combatant._rollingDamage = 0;
+    combatant._rollingDamage += damage;
+    // Server still applies damage immediately for game logic (death checks etc)
+    // but sends the rolling amount so client can animate the odometer
+    combatant.currentHp = Math.max(0, combatant.currentHp - damage);
 }
 
 // =================================================================
@@ -3428,6 +3620,47 @@ class BattleState {
         }
     }
 
+    // Final 8 mechanics init
+    async initFinal8(db) {
+        for (const c of Object.values(this.combatants)) {
+            // Break/Shield
+            if (this._settings?.enable_break_shield && c.isAI) {
+                try {
+                    const [npc] = await db.query('SELECT shield_points, shield_weaknesses FROM game_npcs WHERE char_id=?', [c.charId]);
+                    if (npc.length && npc[0].shield_points > 0) {
+                        c._shieldPoints = npc[0].shield_points;
+                        c._maxShieldPoints = npc[0].shield_points;
+                        c._shieldWeaknesses = jp(npc[0].shield_weaknesses, []);
+                    }
+                } catch {}
+            }
+            // Passive abilities
+            if (this._settings?.enable_passive_abilities && !c.isAI) {
+                c._passives = await loadPassiveAbilities(db, c.charId);
+                applyPassiveAbilities(c, this._settings);
+            }
+            // Weapon type from equipped weapon
+            try {
+                const [wpn] = await db.query(
+                    `SELECT gi.weapon_type FROM character_equipment ce JOIN game_items gi ON gi.id=ce.item_id
+                     WHERE ce.character_id=? AND ce.slot_key='MAIN_HAND' LIMIT 1`, [c.charId]);
+                if (wpn.length) c._weaponType = wpn[0].weapon_type;
+            } catch {}
+            c._rollingDamage = 0;
+        }
+        // Weapon triangle
+        if (this._settings?.enable_weapon_triangle) {
+            try {
+                const [tri] = await db.query('SELECT * FROM game_weapon_triangle');
+                this._weaponTriangle = tri;
+            } catch { this._weaponTriangle = []; }
+        }
+        // Party reserves
+        if (this._settings?.enable_party_swap) {
+            this._reserves = {};
+        }
+    }
+
     // Combo Input + Action Commands init
     async initComboSystem(db) {
         if (this._settings?.enable_combo_input) {
@@ -4259,6 +4492,14 @@ class BattleState {
             intimidated: c._intimidated ? { turnsLeft: c._intimidated.turnsLeft } : null,
             rallied: c._rallied ? { turnsLeft: c._rallied.turnsLeft, atkBonus: c._rallied.atkBonus } : null,
             tauntBonus: c._tauntBonus ? { turnsLeft: c._tauntBonus.turnsLeft } : null,
+            // Final 8
+            shieldPoints: c._shieldPoints ?? null,
+            maxShieldPoints: c._maxShieldPoints ?? null,
+            isBroken: c._isBroken || false,
+            shieldWeaknesses: c._shieldWeaknesses || [],
+            passives: (c._passives || []).map(p => ({ name: p.label, icon: p.icon })),
+            weaponType: c._weaponType || null,
+            rollingDamage: c._rollingDamage || 0,
             // Combo/Action
             currentAp: c._currentAp ?? null,
             maxAp: c._maxAp ?? null,
@@ -4394,6 +4635,15 @@ class BattleState {
                 enableFightingStyles:    this._settings.enable_fighting_styles,
                 // Session 23
                 // Session 24
+                // Final 8
+                enableBreakShield:       this._settings.enable_break_shield,
+                enableOneMore:           this._settings.enable_one_more,
+                enableTurnManipulation:  this._settings.enable_turn_manipulation,
+                enablePartySwap:         this._settings.enable_party_swap,
+                enableWeaponTriangle:    this._settings.enable_weapon_triangle,
+                enableAdvantageSystem:   this._settings.enable_advantage_system,
+                enablePassiveAbilities:  this._settings.enable_passive_abilities,
+                enableRollingHp:         this._settings.enable_rolling_hp,
                 enableComboInput:        this._settings.enable_combo_input,
                 enableActionCommands:    this._settings.enable_action_commands,
                 enableAlignmentSystem:   this._settings.enable_alignment_system,
@@ -4561,6 +4811,7 @@ const BattleManager = {
         await battle.initSession23(db);
         await battle.initSession24(db);
         await battle.initComboSystem(db);
+        await battle.initFinal8(db);
 
         // Register battle location on the map for mid-battle join visibility
         try {
@@ -4697,6 +4948,7 @@ const BattleManager = {
         await battle.initSession23(db);
         await battle.initSession24(db);
         await battle.initComboSystem(db);
+        await battle.initFinal8(db);
 
         // Register battle location + load terrain & objects
         try {
@@ -4797,6 +5049,7 @@ const BattleManager = {
         await battle.initSession23(db);
         await battle.initSession24(db);
         await battle.initComboSystem(db);
+        await battle.initFinal8(db);
 
         // Register location + load terrain & objects
         try {
@@ -5021,6 +5274,15 @@ const BattleManager = {
                 c._charging.turnsLeft--;
             }
         }
+
+        // One More (Persona) — if active, don't advance turn
+        if (battle._oneMoreActive === battle.turnCharId) {
+            battle._oneMoreActive = null;
+            // Same player goes again — just broadcast updated state
+            await broadcastBattleUpdate(io, battle, null, db);
+            return;
+        }
+        battle._oneMoreActive = null;
 
         battle.nextTurn();
         await broadcastBattleUpdate(io, battle, null, db);
@@ -6190,6 +6452,28 @@ async function resolveDamage(db, battle, actor, target, effects, actionName, res
 
     battle.addLog({ actor: actor.name, action: actionName, damage, crit, target: target.name });
 
+    // Break/Shield check (Octopath)
+    if (battle._settings?.enable_break_shield && elements.length) {
+        checkBreakShield(battle, target, elements, result);
+    }
+    // Break damage bonus
+    damage = Math.floor(damage * getBreakDamageBonus(target, battle._settings));
+
+    // Weapon Triangle (Fire Emblem)
+    if (battle._settings?.enable_weapon_triangle && actor._weaponType && target._weaponType) {
+        const triBonus = await getWeaponTriangleBonus(db, actor._weaponType, target._weaponType, battle._settings);
+        if (triBonus.damage !== 0) {
+            damage = Math.floor(damage * (1 + triBonus.damage));
+            if (triBonus.damage > 0) result.log.push(`⚔️ Weapon advantage! (+${Math.round(triBonus.damage * 100)}%)`);
+            else result.log.push(`⚔️ Weapon disadvantage! (${Math.round(triBonus.damage * 100)}%)`);
+        }
+    }
+
+    // Passive damage reduction
+    if (target._passiveDamageReduction) {
+        damage = Math.floor(damage * (1 - target._passiveDamageReduction));
+    }
+
     // Session 23: Elemental reaction check
     if (elements.length && target.currentHp > 0) {
         for (const elem of elements) {
@@ -6292,6 +6576,19 @@ async function resolveDamage(db, battle, actor, target, effects, actionName, res
     if (target.currentHp <= 0) {
         checkDeathOrKnockout(battle, actor, target, result);
     }
+
+    // One More check (Persona) — weakness hit or crit = extra turn
+    const wasWeakness = elements.length > 0 && target.elemDefenses?.some(d =>
+        d.role === 'weak' && elements.includes(d.elem));
+    checkOneMore(battle, actor, target, wasWeakness, crit, result);
+
+    // Turn delay from skills
+    if (effects.turn_delay && target.currentHp > 0) {
+        applyTurnDelay(battle, target, effects.turn_delay, result);
+    }
+
+    // Break tick
+    tickBreakState(target);
 
     // Session 16: Track DPS for win condition
     if (battle._winCondition?.conditionType === 'dps_check') {
