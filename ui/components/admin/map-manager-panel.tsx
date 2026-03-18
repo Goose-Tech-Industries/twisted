@@ -93,14 +93,17 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 // ── MAP EDITOR ────────────────────────────────────────────────────
-type TileTool = 'PAINT' | 'FILL' | 'RECT' | 'ERASER'
+type TileTool = 'PAINT' | 'FILL' | 'RECT' | 'ERASER' | 'EYEDROP' | 'PASSABILITY'
 
 interface EditorState {
   tiles: number[]
+  tilesOverlay: number[]  // Layer 2 (overlay/fringe tiles)
+  passability: number[]   // 0=walkable, 1=blocked, 2=event-trigger
   events: MapEvent[]
   objects: MapObject[]
   anims: MapAnim[]
   layer: Layer
+  tileLayer: 'ground' | 'overlay'  // Which tile sub-layer to paint
   brush: number
   tool: EventTool
   tileTool: TileTool
@@ -115,7 +118,12 @@ interface EditorState {
   painting: boolean
   dirty: boolean
   showGrid: boolean
+  showPassability: boolean
   rectStart: { x: number; y: number } | null
+  clipboard: { tiles: number[]; width: number; height: number; sx: number; sy: number } | null
+  selecting: boolean
+  selStart: { x: number; y: number } | null
+  selEnd: { x: number; y: number } | null
 }
 
 type ModalType = 'npc' | 'teleport' | 'shop' | 'enemy' | 'loot' | 'terrain' | 'object-flags' | 'custom-sprite' | null
@@ -132,13 +140,27 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     try { objects = JSON.parse(map.objects_json    || '[]') } catch {}
     try { anims   = JSON.parse(map.anims_json      || '[]') } catch {}
     if (!tiles.length) tiles = new Array(map.width * map.height).fill(0)
+    // Parse overlay layer (stored in tiles_json as second array if present)
+    let tilesOverlay: number[] = new Array(map.width * map.height).fill(-1)
+    let passability: number[] = new Array(map.width * map.height).fill(0)
+    try {
+      const parsed = JSON.parse(map.tiles_json || '[]')
+      if (Array.isArray(parsed) && parsed.length > 0 && Array.isArray(parsed[0])) {
+        // Multi-layer format: [[ground], [overlay], [passability]]
+        tiles = parsed[0] || tiles
+        tilesOverlay = parsed[1] || tilesOverlay
+        passability = parsed[2] || passability
+      }
+    } catch {}
+
     return {
-      tiles, events, objects, anims,
-      layer: 'TILES', brush: 0, tool: 'NPC', tileTool: 'PAINT' as TileTool, brushSize: 1,
-      objectPreset: 'LANTERN',
+      tiles, tilesOverlay, passability, events, objects, anims,
+      layer: 'TILES', tileLayer: 'ground' as const, brush: 0, tool: 'NPC',
+      tileTool: 'PAINT' as TileTool, brushSize: 1, objectPreset: 'LANTERN',
       zoom: 1, ambientDark: map.ambient_dark || 0, tilesetUrl: map.tileset_url || '',
       tilesetLoaded: false, tilesetCols: 0, tilesetSrc: '', painting: false, dirty: false,
-      showGrid: true, rectStart: null
+      showGrid: true, showPassability: false, rectStart: null,
+      clipboard: null, selecting: false, selStart: null, selEnd: null
     }
   })
 
@@ -292,37 +314,52 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
   // Cell click
   const handleCellClick = (i: number, x: number, y: number) => {
     if (state.layer === 'TILES') {
-      pushUndo(state.tiles)
+      // Eyedropper — pick tile under cursor
+      if (state.tileTool === 'EYEDROP') {
+        const activeTiles = state.tileLayer === 'overlay' ? state.tilesOverlay : state.tiles
+        set({ brush: activeTiles[i], tileTool: 'PAINT' })
+        return
+      }
+      // Passability painting
+      if (state.tileTool === 'PASSABILITY') {
+        const pass = [...state.passability]
+        pass[i] = (pass[i] + 1) % 3 // cycle: 0→1→2→0 (walk/block/trigger)
+        set({ passability: pass })
+        return
+      }
+      const activeTiles = state.tileLayer === 'overlay' ? state.tilesOverlay : state.tiles
+      pushUndo(activeTiles)
+      const layerKey = state.tileLayer === 'overlay' ? 'tilesOverlay' : 'tiles'
+      const eraseVal = state.tileLayer === 'overlay' ? -1 : 0
       if (state.tileTool === 'FILL') {
-        const filled = floodFill(i, state.tiles[i], state.brush)
-        set({ tiles: filled })
+        const filled = floodFill(i, activeTiles[i], state.brush)
+        set({ [layerKey]: filled } as Partial<EditorState>)
       } else if (state.tileTool === 'RECT') {
         if (!state.rectStart) {
           set({ rectStart: { x, y } })
         } else {
-          // Fill rectangle
           const sx = Math.min(state.rectStart.x, x), ex = Math.max(state.rectStart.x, x)
           const sy = Math.min(state.rectStart.y, y), ey = Math.max(state.rectStart.y, y)
-          const tiles = [...state.tiles]
+          const tiles = [...activeTiles]
           for (let ry = sy; ry <= ey; ry++) {
             for (let rx = sx; rx <= ex; rx++) {
               tiles[ry * map.width + rx] = state.brush
             }
           }
-          set({ tiles, rectStart: null })
+          set({ [layerKey]: tiles, rectStart: null } as Partial<EditorState>)
         }
       } else if (state.tileTool === 'ERASER') {
-        const tiles = paintBrush(x, y, state.tiles)
-        for (let dy = -Math.floor(state.brushSize/2); dy < state.brushSize - Math.floor(state.brushSize/2); dy++) {
-          for (let dx = -Math.floor(state.brushSize/2); dx < state.brushSize - Math.floor(state.brushSize/2); dx++) {
+        const tiles = [...activeTiles]
+        const half = Math.floor(state.brushSize / 2)
+        for (let dy = -half; dy < state.brushSize - half; dy++) {
+          for (let dx = -half; dx < state.brushSize - half; dx++) {
             const nx = x + dx, ny = y + dy
-            if (nx >= 0 && nx < map.width && ny >= 0 && ny < map.height) tiles[ny * map.width + nx] = 0
+            if (nx >= 0 && nx < map.width && ny >= 0 && ny < map.height) tiles[ny * map.width + nx] = eraseVal
           }
         }
-        set({ tiles })
+        set({ [layerKey]: tiles } as Partial<EditorState>)
       } else {
-        // PAINT tool with brush size
-        set({ tiles: paintBrush(x, y, state.tiles) })
+        set({ [layerKey]: paintBrush(x, y, activeTiles) } as Partial<EditorState>)
       }
       return
     }
@@ -376,7 +413,7 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
   const save = async () => {
     setSaving(true); setSaveMsg('')
     const payload = {
-      tiles_json:      JSON.stringify(state.tiles),
+      tiles_json:      JSON.stringify([state.tiles, state.tilesOverlay, state.passability]),
       collisions_json: JSON.stringify(state.events),
       objects_json:    JSON.stringify(state.objects),
       anims_json:      JSON.stringify(state.anims),
@@ -469,40 +506,74 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
 
       {/* Toolbar for TILES layer */}
       {state.layer === 'TILES' && (
-        <div className="flex items-center gap-1.5 px-4 py-1.5 bg-[#111] border-b border-border shrink-0 flex-wrap">
-          <span className="text-muted-foreground text-xs shrink-0">TOOL:</span>
-          {(['PAINT','FILL','RECT','ERASER'] as TileTool[]).map(t => (
+        <div className="flex items-center gap-1 px-4 py-1.5 bg-[#111] border-b border-border shrink-0 flex-wrap">
+          {/* Layer selector (ground/overlay) */}
+          <span className="text-muted-foreground text-[10px] shrink-0">LAYER:</span>
+          <button onClick={() => set({ tileLayer: 'ground' })}
+            className={cn("px-1.5 py-0.5 rounded text-[10px] border",
+              state.tileLayer==='ground' ? 'bg-green-900/60 border-green-500 text-green-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
+            Ground
+          </button>
+          <button onClick={() => set({ tileLayer: 'overlay' })}
+            className={cn("px-1.5 py-0.5 rounded text-[10px] border",
+              state.tileLayer==='overlay' ? 'bg-cyan-900/60 border-cyan-500 text-cyan-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
+            Overlay
+          </button>
+
+          <span className="text-[#333] mx-1">|</span>
+
+          {/* Tools */}
+          <span className="text-muted-foreground text-[10px] shrink-0">TOOL:</span>
+          {([
+            ['PAINT','🖌️'],['FILL','🪣'],['RECT','⬜'],['EYEDROP','💉'],['PASSABILITY','🚧'],['ERASER','✕']
+          ] as [TileTool,string][]).map(([t,ic]) => (
             <button key={t} onClick={() => set({ tileTool: t, rectStart: null })}
-              className={cn("px-2 py-1 rounded text-xs transition-colors border",
+              className={cn("px-1.5 py-0.5 rounded text-[10px] transition-colors border",
                 state.tileTool===t ? 'bg-blue-900/60 border-blue-500 text-blue-300' : 'bg-[#222] border-[#444] text-muted-foreground hover:text-foreground')}>
-              {t === 'PAINT' ? '🖌️' : t === 'FILL' ? '🪣' : t === 'RECT' ? '⬜' : '✕'} {t}
+              {ic}
             </button>
           ))}
-          <span className="text-muted-foreground text-xs ml-2 shrink-0">SIZE:</span>
-          {[1,2,3].map(s => (
+
+          <span className="text-[#333] mx-1">|</span>
+
+          {/* Brush size */}
+          {[1,2,3,5].map(s => (
             <button key={s} onClick={() => set({ brushSize: s })}
-              className={cn("px-2 py-1 rounded text-xs border",
+              className={cn("px-1.5 py-0.5 rounded text-[10px] border",
                 state.brushSize===s ? 'bg-blue-900/60 border-blue-500 text-blue-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
-              {s}x{s}
+              {s}
             </button>
           ))}
-          <span className="text-muted-foreground text-xs ml-2 shrink-0">|</span>
+
+          <span className="text-[#333] mx-1">|</span>
+
+          {/* Undo/Redo */}
           <button onClick={undo} disabled={!undoStack.length}
-            className="px-2 py-1 rounded text-xs bg-[#222] border border-[#444] text-muted-foreground hover:text-foreground disabled:opacity-30" title="Undo (Ctrl+Z)">
-            ↩ Undo
+            className="px-1.5 py-0.5 rounded text-[10px] bg-[#222] border border-[#444] text-muted-foreground hover:text-foreground disabled:opacity-30" title="Ctrl+Z">
+            ↩
           </button>
           <button onClick={redo} disabled={!redoStack.length}
-            className="px-2 py-1 rounded text-xs bg-[#222] border border-[#444] text-muted-foreground hover:text-foreground disabled:opacity-30" title="Redo (Ctrl+Shift+Z)">
-            ↪ Redo
+            className="px-1.5 py-0.5 rounded text-[10px] bg-[#222] border border-[#444] text-muted-foreground hover:text-foreground disabled:opacity-30" title="Ctrl+Shift+Z">
+            ↪
           </button>
+
+          {/* Toggles */}
           <button onClick={() => set({ showGrid: !state.showGrid })}
-            className={cn("px-2 py-1 rounded text-xs border ml-2",
+            className={cn("px-1.5 py-0.5 rounded text-[10px] border",
               state.showGrid ? 'bg-blue-900/40 border-blue-500 text-blue-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
-            ▦ Grid
+            ▦
           </button>
-          {state.rectStart && (
-            <span className="text-xs text-yellow-400 ml-2">📐 Click end point...</span>
-          )}
+          <button onClick={() => set({ showPassability: !state.showPassability })}
+            className={cn("px-1.5 py-0.5 rounded text-[10px] border",
+              state.showPassability ? 'bg-red-900/40 border-red-500 text-red-300' : 'bg-[#222] border-[#444] text-muted-foreground')}
+            title="Show passability overlay">
+            🚧
+          </button>
+
+          {/* Status indicators */}
+          {state.rectStart && <span className="text-[10px] text-yellow-400 ml-1">📐 Click end...</span>}
+          {state.tileTool === 'EYEDROP' && <span className="text-[10px] text-cyan-400 ml-1">💉 Click to pick tile</span>}
+          {state.tileTool === 'PASSABILITY' && <span className="text-[10px] text-red-400 ml-1">🚧 Click: walk→block→trigger</span>}
         </div>
       )}
 
