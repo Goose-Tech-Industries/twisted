@@ -11,7 +11,12 @@ import type {
   Item,
   DialogueMessage,
   BloodOgham,
-  GameMap
+  GameMap,
+  Companion,
+  KOInteraction,
+  PvpKOChoice,
+  SignatureTech,
+  SigTechDiscovery
 } from './game-types'
 import type { GameView } from './game-types'
 import { api, type CharacterFull, type ActiveQuest, type QuestDefinition } from './game-api'
@@ -146,6 +151,49 @@ const MOCK_MAP: GameMap = (() => {
   }
 })()
 
+interface MapBattleIndicator {
+  battleId: number
+  x: number
+  y: number
+  playerCount: number
+  enemyCount: number
+  playerNames: string[]
+  enemyNames: string[]
+}
+
+interface BattleChatMessage {
+  from: string
+  fromCharId: number
+  teamId: string
+  text: string
+  ts: number
+}
+
+interface BattleEmoteEvent {
+  from: string
+  fromCharId: number
+  emote: string
+  icon: string
+  gridX: number
+  gridY: number
+}
+
+interface NegotiateResult {
+  success: boolean | null
+  willingness?: number
+  targetName: string
+  dialogue: string
+  targetCharId: number
+  pending?: boolean
+}
+
+interface NegotiateRequest {
+  fromName: string
+  fromCharId: number
+  toTeamId: string
+  battleId: number
+}
+
 // =================================================================
 // STATE TYPES
 // =================================================================
@@ -175,7 +223,15 @@ interface GameState {
   // Multiplayer
   nearbyPlayers: NearbyPlayer[]
   partyMembers: PartyMember[]
-  
+  mapBattles: MapBattleIndicator[]
+  battleChat: BattleChatMessage[]
+  battleEmote: BattleEmoteEvent | null
+  negotiateResult: NegotiateResult | null
+  negotiateRequest: NegotiateRequest | null
+
+  // Companions
+  companions: Companion[]
+
   // Connection
   socketConnected: boolean
   apiAvailable: boolean
@@ -184,6 +240,13 @@ interface GameState {
   pendingDailyReward: { gold: number; streak: number; bonus: boolean; message: string } | null
   tutorialDone: boolean
   myCharacters: Array<{ id: number; name: string; level: number; class_name: string; race_name: string }>
+
+  // Session 8: KO interactions
+  battleKoNpcs?: KOInteraction[]
+  pvpKoChoice?: PvpKOChoice | null
+
+  // Session 11: Signature tech discovery
+  sigTechDiscovery?: SigTechDiscovery | null
 
   // Tutorial — track whether player needs to see it (set after init_self fires)
   showTutorial: boolean
@@ -204,6 +267,8 @@ interface NearbyPlayer {
   className?: string
   x: number
   y: number
+  isOffline?: boolean
+  presence?: string
   }
 
 interface PartyMember {
@@ -243,6 +308,12 @@ type GameAction =
   | { type: 'SET_OGHAMS'; payload: BloodOgham[] }
   | { type: 'SET_NEARBY_PLAYERS'; payload: NearbyPlayer[] }
   | { type: 'SET_PARTY_MEMBERS'; payload: PartyMember[] }
+  | { type: 'SET_MAP_BATTLES'; payload: MapBattleIndicator[] }
+  | { type: 'ADD_BATTLE_CHAT'; payload: BattleChatMessage }
+  | { type: 'CLEAR_BATTLE_CHAT' }
+  | { type: 'SET_BATTLE_EMOTE'; payload: BattleEmoteEvent | null }
+  | { type: 'SET_NEGOTIATE_RESULT'; payload: NegotiateResult | null }
+  | { type: 'SET_NEGOTIATE_REQUEST'; payload: NegotiateRequest | null }
   | { type: 'SET_SOCKET_CONNECTED'; payload: boolean }
   | { type: 'SET_API_AVAILABLE'; payload: boolean }
   | { type: 'SET_MAP'; payload: GameMap | null }
@@ -251,6 +322,20 @@ type GameAction =
   | { type: 'SET_MY_CHARACTERS'; payload: Array<{ id: number; name: string; level: number; class_name: string; race_name: string }> }
   | { type: 'SET_SHOW_TUTORIAL'; payload: boolean }
   | { type: 'SET_TUTORIAL_DONE'; payload: boolean }
+  | { type: 'SET_COMPANIONS'; payload: Companion[] }
+  | { type: 'ADD_COMPANION'; payload: Companion }
+  | { type: 'REMOVE_COMPANION'; payload: number }
+  | { type: 'UPDATE_COMPANION'; payload: { npcId: number; changes: Partial<Companion> } }
+  // Session 8
+  | { type: 'SET_BATTLE_KO_NPCS'; payload: KOInteraction[] }
+  | { type: 'SET_PVP_KO_CHOICE'; payload: PvpKOChoice | null }
+  // Player visibility
+  | { type: 'PLAYER_JOINED'; payload: NearbyPlayer }
+  | { type: 'PLAYER_MOVED'; payload: { id: number; x: number; y: number } }
+  | { type: 'PLAYER_LEFT'; payload: number }
+  | { type: 'PLAYER_STATUS_CHANGE'; payload: NearbyPlayer }
+  // Session 11
+  | { type: 'SET_SIG_TECH_DISCOVERY'; payload: SigTechDiscovery | null }
 
 // =================================================================
 // INITIAL STATE
@@ -274,6 +359,12 @@ const initialState: GameState = {
   currentMap: null,
   nearbyPlayers: [],
   partyMembers: [],
+  mapBattles: [],
+  battleChat: [],
+  battleEmote: null,
+  negotiateResult: null,
+  negotiateRequest: null,
+  companions: [],
   socketConnected: false,
   pendingDailyReward: null,
   tutorialDone: false,
@@ -400,7 +491,19 @@ function gameReducer(state: GameState, action: GameAction): GameState {
     
     case 'SET_NEARBY_PLAYERS':
       return { ...state, nearbyPlayers: action.payload }
-    
+    case 'SET_MAP_BATTLES':
+      return { ...state, mapBattles: action.payload }
+    case 'ADD_BATTLE_CHAT':
+      return { ...state, battleChat: [...state.battleChat, action.payload].slice(-50) }
+    case 'CLEAR_BATTLE_CHAT':
+      return { ...state, battleChat: [], battleEmote: null }
+    case 'SET_BATTLE_EMOTE':
+      return { ...state, battleEmote: action.payload }
+    case 'SET_NEGOTIATE_RESULT':
+      return { ...state, negotiateResult: action.payload }
+    case 'SET_NEGOTIATE_REQUEST':
+      return { ...state, negotiateRequest: action.payload }
+
     case 'SET_PARTY_MEMBERS':
       return { ...state, partyMembers: action.payload }
     
@@ -412,7 +515,35 @@ case 'SET_API_AVAILABLE':
   
   case 'SET_MAP':
   return { ...state, currentMap: action.payload }
-  
+
+  case 'SET_COMPANIONS':
+    return { ...state, companions: action.payload }
+  case 'ADD_COMPANION':
+    return { ...state, companions: [...state.companions, action.payload] }
+  case 'REMOVE_COMPANION':
+    return { ...state, companions: state.companions.filter(c => c.npcId !== action.payload) }
+  case 'UPDATE_COMPANION':
+    return { ...state, companions: state.companions.map(c =>
+      c.npcId === action.payload.npcId ? { ...c, ...action.payload.changes } : c
+    ) }
+
+  // Player visibility
+  case 'PLAYER_JOINED':
+    return { ...state, nearbyPlayers: [...state.nearbyPlayers.filter(p => p.charId !== action.payload.charId), action.payload] }
+  case 'PLAYER_MOVED':
+    return { ...state, nearbyPlayers: state.nearbyPlayers.map(p => p.charId === action.payload.id ? { ...p, x: action.payload.x, y: action.payload.y } : p) }
+  case 'PLAYER_LEFT':
+    return { ...state, nearbyPlayers: state.nearbyPlayers.filter(p => p.charId !== action.payload) }
+  case 'PLAYER_STATUS_CHANGE':
+    return { ...state, nearbyPlayers: state.nearbyPlayers.map(p =>
+      p.charId === action.payload.charId ? { ...p, ...action.payload } : p
+    ) }
+
+  case 'SET_BATTLE_KO_NPCS': return { ...state, battleKoNpcs: action.payload }
+  case 'SET_PVP_KO_CHOICE': return { ...state, pvpKoChoice: action.payload }
+
+  case 'SET_SIG_TECH_DISCOVERY': return { ...state, sigTechDiscovery: action.payload }
+
   default:
   return state
   }
@@ -508,8 +639,26 @@ export function GameProvider({ children }: { children: ReactNode }) {
     })
     
     // Player list updates
-socket.on('player_list', (data: { players: NearbyPlayer[] }) => {
-  dispatch({ type: 'SET_NEARBY_PLAYERS', payload: data.players || [] })
+socket.on('player_list', (data: NearbyPlayer[] | { players: NearbyPlayer[] }) => {
+  const players = Array.isArray(data) ? data : (data.players || [])
+  dispatch({ type: 'SET_NEARBY_PLAYERS', payload: players })
+  })
+
+  socket.on('player_joined', (player: NearbyPlayer) => {
+    if (!player || player.charId === state.character?.charId) return
+    dispatch({ type: 'PLAYER_JOINED', payload: player })
+  })
+
+  socket.on('player_moved', (data: { id: number; x: number; y: number }) => {
+    dispatch({ type: 'PLAYER_MOVED', payload: data })
+  })
+
+  socket.on('player_left', (charId: number) => {
+    dispatch({ type: 'PLAYER_LEFT', payload: charId })
+  })
+
+  socket.on('player_status_change', (data: NearbyPlayer & { isOffline?: boolean }) => {
+    dispatch({ type: 'PLAYER_STATUS_CHANGE', payload: data })
   })
   
   // Map data updates
@@ -538,7 +687,7 @@ socket.on('player_list', (data: { players: NearbyPlayer[] }) => {
         dispatch({ type: 'SET_DIALOGUE', payload: {
           speaker: (evt.npcName as string) || 'NPC',
           text: '',
-          choices: choices.map((c, i) => ({ id: i + 1, label: c.text || c.id }))
+          choices: choices.map((c, i) => ({ id: i + 1, label: c.text || c.id, choiceId: c.id }))
         }})
       } else if (evt.cmd === 'npc_talk_prompt') {
         // Server wants the client to open a talk prompt with this NPC
@@ -553,6 +702,40 @@ socket.on('player_list', (data: { players: NearbyPlayer[] }) => {
     }
   })
   
+  // Active battles on the map (for mid-battle join indicators)
+  socket.on('battles_on_map', (battles: Array<{ battleId: number; x: number; y: number; playerCount: number; enemyCount: number; playerNames: string[]; enemyNames: string[] }>) => {
+    dispatch({ type: 'SET_MAP_BATTLES', payload: battles })
+  })
+
+  socket.on('battle_ended_on_map', (data: { battleId: number }) => {
+    // Remove ended battle from map indicators
+    if (state.mapBattles) {
+      dispatch({ type: 'SET_MAP_BATTLES', payload: state.mapBattles.filter(b => b.battleId !== data.battleId) })
+    }
+  })
+
+  // Battle chat messages
+  socket.on('battle_chat_msg', (msg: BattleChatMessage) => {
+    dispatch({ type: 'ADD_BATTLE_CHAT', payload: msg })
+  })
+
+  // Battle emotes — show for 2.5s then clear
+  socket.on('battle_emote_show', (emote: BattleEmoteEvent) => {
+    dispatch({ type: 'SET_BATTLE_EMOTE', payload: emote })
+    setTimeout(() => dispatch({ type: 'SET_BATTLE_EMOTE', payload: null }), 2500)
+  })
+
+  // Negotiation results and requests
+  socket.on('negotiate_result', (data: NegotiateResult) => {
+    dispatch({ type: 'SET_NEGOTIATE_RESULT', payload: data })
+  })
+  socket.on('negotiate_request', (data: NegotiateRequest) => {
+    dispatch({ type: 'SET_NEGOTIATE_REQUEST', payload: data })
+  })
+
+  // Request current battles when map loads
+  socket.emit('get_battles_on_map')
+
   // PvE battle triggers — server tells us to start a fight, we confirm
   socket.on('trigger_pve_battle', (data: { npcId: number }) => {
     // Event-runner triggered battle (ENEMY map event or scripted)
@@ -590,20 +773,55 @@ socket.on('player_list', (data: { players: NearbyPlayer[] }) => {
     })
 
     socket.on('battle_result', (data: Record<string, unknown>) => {
-      // XP, gold, loot rewards after battle
       if (data.xp) notify('xp', `+${data.xp} XP`)
       if (data.gold) notify('item', `+${data.gold} gold`)
       dispatch({ type: 'SET_BATTLE', payload: null })
+      dispatch({ type: 'CLEAR_BATTLE_CHAT' })
+      dispatch({ type: 'SET_NEGOTIATE_RESULT', payload: null })
+      dispatch({ type: 'SET_NEGOTIATE_REQUEST', payload: null })
     })
 
     socket.on('battle_defeat', () => {
       notify('error', 'You have been defeated...')
       dispatch({ type: 'SET_BATTLE', payload: null })
+      dispatch({ type: 'CLEAR_BATTLE_CHAT' })
+      dispatch({ type: 'SET_NEGOTIATE_RESULT', payload: null })
+      dispatch({ type: 'SET_NEGOTIATE_REQUEST', payload: null })
     })
-    
+
+    // Session 8: KO interactions
+    socket.on('battle_ko_interact', (data: { koNpcs: KOInteraction[] }) => {
+      dispatch({ type: 'SET_BATTLE_KO_NPCS', payload: data.koNpcs })
+    })
+    socket.on('pvp_ko_choice', (data: PvpKOChoice) => {
+      dispatch({ type: 'SET_PVP_KO_CHOICE', payload: data })
+    })
+
+    // Session 11: Signature tech discovery
+    socket.on('sig_tech_discovery', (data: SigTechDiscovery) => {
+      dispatch({ type: 'SET_SIG_TECH_DISCOVERY', payload: data })
+    })
+
     // Party events
     socket.on('party_update', (data: { members: PartyMember[] }) => {
       dispatch({ type: 'SET_PARTY_MEMBERS', payload: data.members || [] })
+    })
+
+    // Companion events
+    socket.on('companion_list', (data: Companion[]) => {
+      dispatch({ type: 'SET_COMPANIONS', payload: data || [] })
+    })
+    socket.on('companion_joined', (data: Companion) => {
+      dispatch({ type: 'ADD_COMPANION', payload: data })
+    })
+    socket.on('companion_dismissed', (data: { npcId: number }) => {
+      dispatch({ type: 'REMOVE_COMPANION', payload: data.npcId })
+    })
+    socket.on('companion_moved', (data: { npcId: number; x: number; y: number }) => {
+      dispatch({ type: 'UPDATE_COMPANION', payload: { npcId: data.npcId, changes: { x: data.x, y: data.y } } })
+    })
+    socket.on('companion_tactics_changed', (data: { npcId: number; tactics: Companion['tactics'] }) => {
+      dispatch({ type: 'UPDATE_COMPANION', payload: { npcId: data.npcId, changes: { tactics: data.tactics } } })
     })
     
     // Notifications

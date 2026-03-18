@@ -148,15 +148,21 @@ export interface BattleState {
   turnCharId: number
   status: 'ACTIVE' | 'VICTORY' | 'DEFEAT' | 'FLED' | 'FINISHED'
   winner?: number | null
+  winnerTeamId?: string | null
 
   // Backward compat (1v1)
   me: BattleCombatant
   opponent: BattleCombatant
 
-  // Multi-combatant teams
+  // Multi-combatant teams (legacy 2-team)
   playerTeam: BattleCombatant[]
   enemyTeam: BattleCombatant[]
   turnOrder: TurnOrderEntry[]
+
+  // Multi-team (FFA / N-team)
+  allTeams?: Record<string, BattleCombatant[]>
+  myTeamId?: string
+  teamCount?: number
 
   // Tactical grid
   grid: BattleGrid
@@ -166,6 +172,63 @@ export interface BattleState {
 
   commands: BattleCommand[]
   log: BattleLogEntry[]
+
+  // Session 8: Feature flags + combat settings
+  settings?: BattleSettings
+
+  // Session 16: Win condition
+  winCondition?: { type: string; description: string; icon: string; params: Record<string, unknown> }
+
+  // Session 17: Weather
+  weather?: { name: string; label: string; icon: string; visibility: number }
+}
+
+// Session 8: Feature toggles sent to the client
+export interface BattleSettings {
+  enableLimbTargeting: boolean
+  enableActiveDefense: boolean
+  enableNonlethal: boolean
+  enableDiminishingReturns: boolean
+  enableWoundDegradation: boolean
+  enableCalledShotPenalty: boolean
+  defensePromptTimeoutMs: number
+  // Session 9
+  enableFlavorText?: boolean
+  enableComboProcs?: boolean
+  // Session 10
+  enableKiChanneling?: boolean
+  enableBleedTiers?: boolean
+  // Session 11
+  enableSignatureTechs?: boolean
+  // Session 12
+  // Sessions 17-22
+  enableWeatherEffects?: boolean
+  enableStealth?: boolean
+  enableLinkAttacks?: boolean
+  enableTransformations?: boolean
+  enableRevive?: boolean
+  enableTraps?: boolean
+  enableSpectatorMode?: boolean
+  // Session 23
+  // Session 24
+  enableAlignmentSystem?: boolean
+  enableBattleRules?: boolean
+  enableElementalReactions?: boolean
+  enableThreatSystem?: boolean
+  enableStatusCombos?: boolean
+  enableEquipSwap?: boolean
+  enableAfterlife?: boolean
+  aiDifficulty?: 'easy' | 'normal' | 'hard'
+  initiativeType?: 'speed' | 'roll' | 'phased' | 'countdown'
+  enableBossPhases?: boolean
+  enableCustomWinConditions?: boolean
+  enableSummons?: boolean
+  enableSpellSlots?: boolean
+  summonCostType?: 'mp' | 'spell_slot'
+  enableFightingStyles?: boolean
+  enableRpDescriptions?: boolean
+  enableBattleNarration?: boolean
+  enableRpCommands?: boolean
 }
 
 export interface TurnOrderEntry {
@@ -180,15 +243,30 @@ export interface BattleGrid {
   width: number
   height: number
   tokens: BattleToken[]
+  objects?: BattleObject[]
+}
+
+export interface BattleObject {
+  x: number
+  y: number
+  preset: string
+  icon: string
+  label: string
+  hp: number
+  maxHp: number
+  destroyed: boolean
+  blocking: boolean
+  coverValue: number
 }
 
 export interface BattleToken {
   charId: number
   name: string
-  teamId: number
+  teamId: string | number
   gridX: number
   gridY: number
   dead: boolean
+  knockedOut?: boolean
   hp: number
   maxHp: number
 }
@@ -208,6 +286,123 @@ export interface BattleCombatant {
   teamId?: number
   dead?: boolean
   charging?: { skillId: number; turnsLeft: number; skillName: string } | null
+
+  // Session 8: Limb targeting
+  limbHp?: Record<string, { current: number; max: number }>
+  woundLevels?: Record<string, WoundLevel>
+  bodyTypeId?: number
+  limbZones?: LimbZoneInfo[]
+
+  // Session 8: Knockout / Non-lethal
+  knockedOut?: boolean
+  nonLethal?: boolean
+
+  // Session 8: Wound flags
+  prone?: boolean
+  woundFlags?: WoundFlags | null
+
+  // Session 8: Active defense
+  defaultDefense?: 'dodge' | 'block' | 'counter' | 'none'
+
+  // Session 10
+  kiChanneled?: { turnsLeft: number } | null
+  bleeds?: { tier: string; turnsLeft: number; icon: string; label: string }[]
+
+  // Session 12: RP effects
+  taunted?: { by: number; turnsLeft: number } | null
+  intimidated?: { turnsLeft: number } | null
+  rallied?: { turnsLeft: number; atkBonus: number } | null
+  tauntBonus?: { turnsLeft: number } | null
+
+  // Session 13: Fighting style
+  fightingStyle?: {
+    styleName: string; styleIcon: string;
+    rank: number; rankLabel: string; styleType: string
+  } | null
+
+  // Session 15: Summon
+  // Session 24
+  alignment?: number
+  alignmentTier?: { name: string; icon: string; color?: string } | null
+
+  // Sessions 17-22
+  isStealthed?: boolean
+  transformed?: { name: string; icon: string; turnsLeft: number; visual?: unknown } | null
+
+  // Session 16
+  isBoss?: boolean
+  currentPhase?: number
+  bossPhaseCount?: number
+
+  spellSlots?: Record<string, { max: number; current: number }> | null
+  isSummon?: boolean
+  summonTurnsLeft?: number | null
+  summonedBy?: number | null
+}
+
+// Session 8: Wound severity levels
+export type WoundLevel = 'normal' | 'light' | 'heavy' | 'disabled'
+
+// Session 8: Limb zone display info (from server)
+export interface LimbZoneInfo {
+  key: string
+  label: string
+  icon: string
+  sortOrder: number
+}
+
+// Session 8: Wound restriction flags
+export interface WoundFlags {
+  cantFlee?: boolean
+  cantMove?: boolean
+  cantUseItems?: boolean
+  cantDualWield?: boolean
+  moveRangeMod?: number
+}
+
+// Session 8: KO'd NPC for post-battle interaction
+export interface KOInteraction {
+  charId: number
+  name: string
+  icon: string
+  actions: ('interrogate' | 'recruit' | 'loot' | 'release')[]
+}
+
+// Session 8: PvP KO choice
+export interface PvpKOChoice {
+  koPvpPlayers: { charId: number; name: string }[]
+  battleId: number
+  repBonusSpare: number
+  repPenaltyFinish: number
+}
+
+// Session 11: Signature Techniques
+export interface SignatureTech {
+  techId: number
+  name: string
+  icon: string
+  techType: 'ki_attack' | 'physical' | 'ki_heal'
+  level: number
+  xp: number
+  totalUses: number
+  element?: string | null
+  battleText?: string
+  damagePct: number
+  costPct: number
+  healPct: number
+  dodgeMod: number
+  abilities: { id: number; name: string; label: string; icon: string }[]
+  abilityEffects: Record<string, unknown>
+  isSigTech: true
+}
+
+export interface SigTechDiscovery {
+  discovered: true
+  suggestedName: string
+  suggestedType: 'ki_attack' | 'physical' | 'ki_heal'
+  suggestedElement?: string | null
+  dominantKeywords: { keyword: string; count: number }[]
+  originKeywords: string[]
 }
 
 export interface BattleCommand {
@@ -217,6 +412,7 @@ export interface BattleCommand {
   type: 'attack' | 'skill' | 'item' | 'defend' | 'flee' | 'limit'
   skills?: Skill[]
   items?: Item[]
+  signatureTechs?: SignatureTech[]
 }
 
 export interface BattleLogEntry {
@@ -238,6 +434,7 @@ export interface DialogueMessage {
 export interface DialogueChoice {
   id: number
   label: string
+  choiceId?: string  // Original server-side choice ID (e.g. 'quest_5', 'companion_recruit')
 }
 
 export interface BloodOgham {
@@ -254,8 +451,24 @@ export interface BloodOgham {
   slotted: boolean
 }
 
+// NPC Companion
+export interface Companion {
+  npcId: number
+  name: string
+  icon: string
+  level: number
+  currentHp: number
+  maxHp: number
+  currentMp: number
+  maxMp: number
+  tactics: 'AGGRESSIVE' | 'BALANCED' | 'DEFENSIVE' | 'SUPPORT'
+  x: number
+  y: number
+  isActive: boolean
+}
+
 export interface GameView {
-  type: 'character' | 'inventory' | 'quests' | 'map' | 'battle' | 'dialogue' | 'shop' | 'party' | 'oghams' | 'guild' | 'bestiary' | 'achievements' | 'leaderboards' | 'skills' | 'crafting'
+  type: 'character' | 'inventory' | 'quests' | 'map' | 'battle' | 'dialogue' | 'shop' | 'party' | 'oghams' | 'guild' | 'bestiary' | 'achievements' | 'leaderboards' | 'skills' | 'crafting' | 'companions'
 }
 
 // Map data for minimap rendering
@@ -376,4 +589,6 @@ export interface NearbyPlayer {
   level: number
   inParty?: boolean
   className?: string
+  isOffline?: boolean
+  presence?: string
 }

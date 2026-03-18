@@ -54,6 +54,51 @@ export type EntityType =
   | 'craft_recipe'    // CraftManagerPanel  → game_craft_recipes
   | 'auction_listing' // AuctionPanel       → auction_listings
   | 'limit'           // LimitBreakPanel    → game_limit_breaks
+  // ── Session 8: Limb Targeting / Combat Options ──────────────────
+  | 'body_type'       // BodyTypePanel      → game_body_types
+  | 'limb_zone'       // LimbZonePanel      → game_limb_zones
+  | 'battle_knockout' // KO log             → game_battle_knockouts
+  // ── Session 9: Flavor Text / Combo ──────────────────────────────
+  | 'flavor_text'    // FlavorTextPanel    → game_flavor_texts
+  | 'flavor_keyword' // FlavorKeywordPanel → game_flavor_keywords
+  // ── Session 10: Ki Channeling / Bleed ───────────────────────────
+  | 'bleed_tier'     // BleedTierPanel     → game_bleed_tiers
+  // ── Session 11: Signature Techniques ────────────────────────────
+  | 'sig_level'      // SigLevelPanel      → game_signature_levels
+  | 'sig_ability'    // SigAbilityPanel    → game_signature_abilities
+  | 'sig_tech'       // SigTechPanel       → character_signature_techs
+  // ── Session 12: RP Engine ───────────────────────────────────────
+  | 'narration'      // NarrationPanel     → game_battle_narrations
+  | 'premade_sig'    // PremadeSigTechPanel→ game_premade_sig_techs
+  | 'training_log'   // TrainingLogPanel   → game_master_training_log
+  // ── Session 13: Fighting Styles ─────────────────────────────────
+  | 'fighting_style' // FightingStylePanel → game_fighting_styles
+  | 'style_rank'     // StyleRankPanel     → game_fighting_style_ranks
+  | 'char_style'     // CharStylePanel     → character_fighting_styles
+  // ── Session 14: Tournaments ─────────────────────────────────────
+  | 'tournament'     // TournamentPanel    → game_tournaments
+  | 'tourney_match'  // TourneyMatchPanel  → game_tournament_matches
+  | 'tourney_history'// TourneyHistoryPanel→ game_tournament_history
+  // ── Session 16: Boss Phases / Win Conditions ────────────────────
+  // ── Session 23: Final Systems ─────────────────────────────────
+  // ── Session 24: Alignment + Battle Rules ──────────────────────
+  // ── Session 25: Training ──────────────────────────────────────
+  | 'terminology'    // TerminologyPanel   → game_terminology
+  | 'training_config'// TrainingConfigPanel→ game_training_config
+  | 'alignment_tier' // AlignmentTierPanel → game_alignment_tiers
+  | 'alignment_action'// AlignmentActionPanel→ game_alignment_actions
+  | 'battle_rule'    // BattleRulePanel    → game_battle_rules
+  | 'elem_reaction'  // ElementReactionPanel→ game_elemental_reactions
+  | 'status_combo'   // StatusComboPanel   → game_status_combos
+  | 'afterlife'      // AfterlifePanel     → game_afterlife_worlds
+  | 'death_penalty'  // DeathPenaltyPanel  → game_death_penalties
+  | 'transformation' // TransformPanel     → game_transformations
+  | 'link_attack'    // LinkAttackPanel    → game_link_attacks
+  | 'trap'           // TrapPanel          → game_battle_traps
+  | 'weather'        // WeatherPanel       → game_weather_effects
+  | 'boss_phase'     // BossPhasePanel     → game_boss_phases
+  | 'win_condition'  // WinConditionPanel  → game_win_conditions
+  | 'quest_battle_override' // QuestBattleOverridePanel → game_quest_battle_overrides
 
 export const adminApi = {
   dashboard: {

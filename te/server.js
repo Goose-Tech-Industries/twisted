@@ -52,11 +52,19 @@ async function loadAiConfig() {
     const now = Date.now();
     if (_aiConfigCache && now - _aiConfigCacheAt < 60000) return _aiConfigCache;
     try {
-        const [rows] = await db.query(
-            "SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'ai_%'"
-        );
+        // Check both system_settings (legacy) and game_settings (admin panel) for AI config
         const c = {};
-        for (const r of rows) c[r.setting_key] = r.setting_value;
+        try {
+            const [sysRows] = await db.query(
+                "SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'ai_%'");
+            for (const r of sysRows) c[r.setting_key] = r.setting_value;
+        } catch {}
+        try {
+            const [gameRows] = await db.query(
+                "SELECT setting_key, setting_value FROM game_settings WHERE setting_key LIKE 'ai_%'");
+            // game_settings (admin panel) overrides system_settings
+            for (const r of gameRows) c[r.setting_key] = r.setting_value;
+        } catch {}
         _aiConfigCache = {
             provider:     c.ai_provider     || null,   // null = fall back to .env logic in npc_brain
             apiKey:       c.ai_api_key      || '',
@@ -381,6 +389,11 @@ let mapCache = {};
 global._mapCache = mapCache;
 let npcMemory  = {};
 let worldFlags = {};   // key -> value, loaded from DB + updated by SET_WORLD_FLAG events
+
+// ── COMPANION STATE ──────────────────────────────────────────────────────────
+// In-memory tracking of active companions per player character.
+// charId -> [{ npcId, name, icon, x, y, mapId, charId (combat), level, currentHp, maxHp, currentMp, maxMp, tactics }]
+let companionState = {};
 
 // ── WORLD FLAG CONDITION CHECKER ─────────────────────────────────────────────
 // Defined at MODULE LEVEL so it's accessible from both:
@@ -908,13 +921,39 @@ async function startServer() {
                             gold_mult:        _joinRegion.gold_mult,
                         } : null
                     });
-                    const mapPlayers = Object.values(onlinePlayers).filter(p => p.mapId === char.map_id);
-                    socket.emit('player_list', mapPlayers);
+                    const mapPlayers = Object.values(onlinePlayers).filter(p => p.mapId === char.map_id && p.charId !== char.id);
+
+                    // Also load offline players on this map (sleeping characters)
+                    let offlinePlayers = [];
+                    try {
+                        const [offRows] = await db.query(
+                            `SELECT id AS charId, name, x, y, level, 'offline' AS presence
+                             FROM characters WHERE map_id=? AND id!=?
+                             AND is_offline_visible=1 AND presence_status='offline'`, [char.map_id, char.id]);
+                        // Filter out anyone who's actually online (already in mapPlayers)
+                        const onlineIds = new Set(mapPlayers.map(p => p.charId));
+                        offlinePlayers = offRows.filter(p => !onlineIds.has(p.charId))
+                            .map(p => ({ ...p, isOffline: true }));
+                    } catch {}
+
+                    socket.emit('player_list', [...mapPlayers, ...offlinePlayers]);
                     socket.to('map_' + char.map_id).emit('player_joined', onlinePlayers[socket.id]);
 
                     // Send live NPC positions for this map (loads from DB if first visitor)
                     await loadMapNpcs(char.map_id);
                     socket.emit('npc_list', getNpcsForMap(char.map_id));
+
+                    // Load and send companions
+                    const _joinP = onlinePlayers[socket.id];
+                    const comps = await loadCompanions(_joinP.charId);
+                    spawnCompanionsAtPlayer(_joinP);
+                    socket.emit('companion_list', comps);
+                    // Broadcast companion sprites to other players on this map
+                    for (const comp of comps) {
+                        socket.to('map_' + _joinP.mapId).emit('companion_moved', {
+                            ownerId: _joinP.charId, npcId: comp.npcId, name: comp.name, icon: comp.icon, x: comp.x, y: comp.y
+                        });
+                    }
 
                     // Crowd reaction: check reputation on this map and react if notable
                     await _triggerCrowdReaction(socket, db, onlinePlayers[socket.id], char.map_id);
@@ -1000,6 +1039,25 @@ async function startServer() {
 
                     p.x = target.x; p.y = target.y;
                     socket.to('map_' + p.mapId).emit('player_moved', { id: p.charId, x: p.x, y: p.y });
+
+                    // --- COMPANION FOLLOW ---
+                    const _comps = getActiveCompanions(p.charId);
+                    for (const comp of _comps) {
+                        const dx = p.x - comp.x;
+                        const dy = p.y - comp.y;
+                        const dist = Math.abs(dx) + Math.abs(dy);
+                        if (dist > 1) {
+                            // Move one step toward the player's position
+                            const stepX = dx !== 0 ? Math.sign(dx) : 0;
+                            const stepY = dx === 0 && dy !== 0 ? Math.sign(dy) : 0;
+                            comp.x += stepX;
+                            comp.y += stepY;
+                            socket.emit('companion_moved', { npcId: comp.npcId, x: comp.x, y: comp.y });
+                            socket.to('map_' + p.mapId).emit('companion_moved', {
+                                ownerId: p.charId, npcId: comp.npcId, name: comp.name, icon: comp.icon, x: comp.x, y: comp.y
+                            });
+                        }
+                    }
 
                     // --- EVENT RUNNER: Check STEP_ON events at new position ---
                     if (Array.isArray(map.events)) {
@@ -1215,6 +1273,17 @@ async function startServer() {
                     socket.emit('npc_list', getNpcsForMap(newMap));
                     socket.to('map_' + newMap).emit('player_joined', p);
 
+                    // Teleport companions to new map
+                    const _tpComps = getActiveCompanions(p.charId);
+                    for (const comp of _tpComps) {
+                        comp.mapId = newMap;
+                        comp.x = p.x;
+                        comp.y = p.y;
+                    }
+                    if (_tpComps.length) {
+                        socket.emit('companion_list', _tpComps);
+                    }
+
                     // Crowd reaction + environmental reaction on the new map
                     await _triggerCrowdReaction(socket, db, p, newMap);
                     await _triggerEnvironmentalReaction(socket, db, p, newMap);
@@ -1326,6 +1395,33 @@ async function startServer() {
                             // Haggle only available if player has interacted before
                             if (mem.reputation >= 20) {
                                 choices.push({ id: `haggle_${liveNpc.shopId}`, text: '💰 Ask for a deal...' });
+                            }
+                        }
+
+                        // --- Companion recruit/dismiss ---
+                        if (liveNpc.isRecruitable) {
+                            const [existComp] = await db.query(
+                                'SELECT id, is_active FROM character_companions WHERE character_id=? AND npc_id=? LIMIT 1',
+                                [p.charId, liveNpc.id]);
+                            if (existComp.length && existComp[0].is_active) {
+                                choices.push({ id: 'companion_dismiss', text: '👋 I need you to wait here' });
+                            } else {
+                                const meetsRep = mem.reputation >= (liveNpc.recruitRepReq || 50);
+                                let meetsQuest = true;
+                                if (liveNpc.recruitQuestReq) {
+                                    const qs = charState.quests || {};
+                                    meetsQuest = qs[liveNpc.recruitQuestReq] && qs[liveNpc.recruitQuestReq].step === -1;
+                                }
+                                const currentComps = getActiveCompanions(p.charId).length;
+                                if (meetsRep && meetsQuest && currentComps < 3) {
+                                    choices.push({ id: 'companion_recruit', text: '⚔️ Join my party!' });
+                                } else if (!meetsRep) {
+                                    choices.push({ id: 'companion_locked_rep', text: '🔒 Join my party (needs higher reputation)' });
+                                } else if (!meetsQuest) {
+                                    choices.push({ id: 'companion_locked_quest', text: '🔒 Join my party (complete a quest first)' });
+                                } else if (currentComps >= 3) {
+                                    choices.push({ id: 'companion_full', text: '🔒 Join my party (party full)' });
+                                }
                             }
                         }
 
@@ -1566,6 +1662,64 @@ async function startServer() {
                             ]);
                         }
 
+                    } else if (choiceId === 'companion_recruit') {
+                        // Recruit this NPC as a companion
+                        try {
+                            await db.query(
+                                `INSERT INTO character_companions (character_id, npc_id, is_active, tactics)
+                                 VALUES (?, ?, 1, 'BALANCED')
+                                 ON DUPLICATE KEY UPDATE is_active=1, recruited_at=NOW()`,
+                                [p.charId, npc.id]
+                            );
+                            // Load companion data
+                            const comps = await loadCompanions(p.charId);
+                            spawnCompanionsAtPlayer(p);
+                            const newComp = comps.find(c => c.npcId === npc.id);
+                            if (newComp) {
+                                socket.emit('companion_joined', newComp);
+                            }
+                            socket.emit('event_queue', [
+                                { cmd: 'dialogue', speaker: npc.name,
+                                  text: `*${npc.name} nods firmly.* "I'll fight by your side. Lead the way."` },
+                                { cmd: 'notification', text: `⚔️ ${npc.name} joined your party!`, type: 'info' }
+                            ]);
+                            // Boost reputation
+                            await _upsertMemory(db, p.charId, npc.name, mem.facts, Math.min(100, mem.reputation + 10));
+                        } catch (e) { console.error('Companion recruit error:', e); }
+
+                    } else if (choiceId === 'companion_dismiss') {
+                        // Dismiss companion
+                        try {
+                            await db.query(
+                                'UPDATE character_companions SET is_active=0 WHERE character_id=? AND npc_id=?',
+                                [p.charId, npc.id]
+                            );
+                            companionState[p.charId] = (companionState[p.charId] || []).filter(c => c.npcId !== npc.id);
+                            socket.emit('companion_dismissed', { npcId: npc.id });
+                            socket.emit('event_queue', [
+                                { cmd: 'dialogue', speaker: npc.name,
+                                  text: `*${npc.name} steps back.* "I'll be here if you need me again."` }
+                            ]);
+                        } catch (e) { console.error('Companion dismiss error:', e); }
+
+                    } else if (choiceId === 'companion_locked_rep') {
+                        socket.emit('event_queue', [
+                            { cmd: 'dialogue', speaker: npc.name,
+                              text: `*${npc.name} considers your request.* "I don't know you well enough yet. Prove yourself to me first."` }
+                        ]);
+
+                    } else if (choiceId === 'companion_locked_quest') {
+                        socket.emit('event_queue', [
+                            { cmd: 'dialogue', speaker: npc.name,
+                              text: `*${npc.name} shakes their head.* "There's something I need done first. Help me with that, and we'll talk."` }
+                        ]);
+
+                    } else if (choiceId === 'companion_full') {
+                        socket.emit('event_queue', [
+                            { cmd: 'dialogue', speaker: npc.name,
+                              text: `*${npc.name} glances at your companions.* "Looks like your hands are full already. Come back if you make room."` }
+                        ]);
+
                     } else if (choiceId === 'talk') {
                         socket.emit('event_queue', [{ cmd: 'npc_talk_prompt', npcName: npc.name }]);
 
@@ -1576,6 +1730,36 @@ async function startServer() {
                         socket.emit('event_queue', [{ cmd: 'dialogue', speaker: npc.name, text: farewell }]);
                     }
                 } catch (err) { console.error('npc_menu_choice error:', err); }
+            });
+
+            // 4b2. COMPANION MANAGEMENT
+            socket.on('companion_set_tactics', async ({ npcId, tactics }) => {
+                try {
+                    const p = onlinePlayers[socket.id];
+                    if (!p) return;
+                    const valid = ['AGGRESSIVE', 'BALANCED', 'DEFENSIVE', 'SUPPORT'];
+                    if (!valid.includes(tactics)) return;
+                    await db.query(
+                        'UPDATE character_companions SET tactics=? WHERE character_id=? AND npc_id=? AND is_active=1',
+                        [tactics, p.charId, npcId]
+                    );
+                    const comp = (companionState[p.charId] || []).find(c => c.npcId === npcId);
+                    if (comp) comp.tactics = tactics;
+                    socket.emit('companion_tactics_changed', { npcId, tactics });
+                } catch (e) { console.error('companion_set_tactics error:', e); }
+            });
+
+            socket.on('companion_dismiss', async ({ npcId }) => {
+                try {
+                    const p = onlinePlayers[socket.id];
+                    if (!p) return;
+                    await db.query(
+                        'UPDATE character_companions SET is_active=0 WHERE character_id=? AND npc_id=?',
+                        [p.charId, npcId]
+                    );
+                    companionState[p.charId] = (companionState[p.charId] || []).filter(c => c.npcId !== npcId);
+                    socket.emit('companion_dismissed', { npcId });
+                } catch (e) { console.error('companion_dismiss error:', e); }
             });
 
             // 4c. CHOICE RESPONSE (Player picked an option from event_queue)
@@ -1903,7 +2087,9 @@ async function startServer() {
 
                     const charId = socket._battleCharId;
                     if (!charId || !battle.combatants[charId]) return;
-                    if (battle.turnCharId !== charId && !battle.teams.players.includes(charId)) return;
+                    // Check if this socket's character is on any team in the battle
+                    const myTeamId = battle.getTeamId(charId);
+                    if (battle.turnCharId !== charId && !myTeamId) return;
 
                     // In 3v3: the socket owns ALL player chars — allow movement for
                     // any of their characters whose turn it is
@@ -2100,12 +2286,171 @@ async function startServer() {
                         return;
                     }
 
-                    const battleId = await BattleManager.createBattle(db, io, socket, null, p.charId, resolvedCharId, 'PVE');
+                    // Check for active companions with combat stats
+                    const _bComps = getActiveCompanions(p.charId).filter(c => c.charId);
+                    let battleId;
+
+                    if (_bComps.length > 0) {
+                        // Use party battle: player + companions vs enemy
+                        // Companions are placed on the player team but marked as AI
+                        const playerCharIds = [p.charId];
+                        const companionCharIds = _bComps.map(c => c.charId);
+                        const companionTactics = {};
+                        for (const c of _bComps) companionTactics[c.charId] = c.tactics || 'BALANCED';
+
+                        // Build combined player team stats
+                        const allPlayerStats = await Promise.all(
+                            playerCharIds.map(id => BattleManager.getEffectiveStats(db, id))
+                        );
+                        const companionStats = await Promise.all(
+                            companionCharIds.map(id => BattleManager.getEffectiveStats(db, id))
+                        );
+                        // Mark companions as AI-controlled with tactics
+                        for (const cs of companionStats) {
+                            if (cs) {
+                                cs._isCompanionAI = true;
+                                cs._tactics = companionTactics[cs.charId] || 'BALANCED';
+                            }
+                        }
+
+                        const socketMap = { [p.charId]: socket };
+                        // Use createPartyBattle with the enemy npc_id
+                        battleId = await BattleManager.createPartyBattle(
+                            db, io,
+                            playerCharIds,
+                            [parseInt(enemyCharId)],  // Pass the original npc_id
+                            socketMap,
+                            companionStats.filter(Boolean)  // Pass companion stats for ally AI
+                        );
+                    } else {
+                        battleId = await BattleManager.createBattle(db, io, socket, null, p.charId, resolvedCharId, 'PVE');
+                    }
+
                     if (battleId) {
                         socket.join('battle_' + battleId);
                         socket._battleCharId = p.charId;
+                        // Notify map room that a battle started here
+                        const battles = BattleManager.getBattlesOnMap(p.mapId);
+                        io.to('map_' + p.mapId).emit('battles_on_map', battles);
                     }
                 } catch (err) { console.error('PVE start error:', err); }
+            });
+
+            // 5c-join. JOIN ONGOING BATTLE (mid-battle join)
+            socket.on('join_battle', async ({ battleId }) => {
+                try {
+                    const p = onlinePlayers[socket.id];
+                    if (!p) return;
+                    if (socket._battleCharId) {
+                        socket.emit('error_msg', 'You are already in a battle.');
+                        return;
+                    }
+
+                    const battle = BattleManager.getBattle(battleId);
+                    if (!battle || battle.status !== 'ACTIVE') {
+                        socket.emit('error_msg', 'Battle not found or already ended.');
+                        return;
+                    }
+
+                    // Must be on the same map
+                    if (battle.mapId !== p.mapId) {
+                        socket.emit('error_msg', 'You must be on the same map to join.');
+                        return;
+                    }
+
+                    // Check allow_mid_battle_join setting for this zone
+                    try {
+                        const [arenas] = await db.query(
+                            `SELECT allow_mid_battle_join FROM game_arenas
+                             WHERE map_id=? AND enabled=1 AND ?>=x_min AND ?<=x_max AND ?>=y_min AND ?<=y_max LIMIT 1`,
+                            [p.mapId, p.x, p.x, p.y, p.y]);
+                        // If in an arena zone, respect its setting. Otherwise default to allowed.
+                        if (arenas.length && !arenas[0].allow_mid_battle_join) {
+                            socket.emit('error_msg', 'Mid-battle joining is not allowed in this zone.');
+                            return;
+                        }
+                    } catch {}
+
+                    // Check max combatants
+                    const totalAlive = Object.values(battle.combatants).filter(c => c.currentHp > 0).length;
+                    if (totalAlive >= 8) {
+                        socket.emit('error_msg', 'Battle is full (max 8 combatants).');
+                        return;
+                    }
+
+                    // Load player stats and add to player team
+                    const stats = await BattleManager.getEffectiveStats(db, p.charId);
+                    if (!stats) {
+                        socket.emit('error_msg', 'Failed to load your stats.');
+                        return;
+                    }
+
+                    // Scale enemy stats for the new party size
+                    // Find the player's team and enemy teams
+                    const joinTeamId = battle.getTeamIds().find(t =>
+                        (battle.teams[t] || []).some(id => battle.combatants[id] && !battle.combatants[id].isAI)
+                    ) || 'players';
+                    const enemyTeamIds = battle.getTeamIds().filter(t => t !== joinTeamId);
+                    const newPlayerCount = (battle.teams[joinTeamId] || []).filter(
+                        id => battle.combatants[id]?.currentHp > 0).length + 1;
+                    const factor = await BattleManager.getScalingFactor(db, p.mapId);
+                    // Re-scale remaining enemies based on new player count
+                    const allEnemyIds = enemyTeamIds.flatMap(t => battle.teams[t] || []);
+                    for (const eid of allEnemyIds) {
+                        const e = battle.combatants[eid];
+                        if (!e || e.currentHp <= 0) continue;
+                        const hpPct = e.currentHp / e.maxHp;
+                        const newMax = Math.round(e._baseMaxHp || e.maxHp);
+                        const scaled = BattleManager.applyEnemyScaling({ maxHp: newMax, currentHp: newMax,
+                            atk: e._baseAtk || e.atk, def: e._baseDef || e.def,
+                            mo: e._baseMo || e.mo, md: e._baseMd || e.md,
+                            speed: e._baseSpeed || e.speed }, newPlayerCount, factor);
+                        // Store base stats on first scale
+                        if (!e._baseMaxHp) {
+                            e._baseMaxHp = e.maxHp; e._baseAtk = e.atk; e._baseDef = e.def;
+                            e._baseMo = e.mo; e._baseMd = e.md; e._baseSpeed = e.speed;
+                        }
+                        e.maxHp = scaled.maxHp;
+                        e.currentHp = Math.round(scaled.maxHp * hpPct); // preserve HP%
+                        e.atk = scaled.atk; e.def = scaled.def;
+                        e.mo = scaled.mo; e.md = scaled.md; e.speed = scaled.speed;
+                    }
+
+                    battle.addCombatant(stats, joinTeamId, false);
+
+                    // Join socket rooms
+                    socket.join('battle_' + battleId);
+                    socket._battleCharId = p.charId;
+
+                    // Record participant
+                    try {
+                        await db.query(
+                            'INSERT IGNORE INTO game_battle_participants (battle_id,character_id,team,is_ai) VALUES (?,?,1,0)',
+                            [battleId, p.charId]);
+                    } catch {}
+
+                    // Get commands for the new player
+                    const cmds = await BattleManager.getAvailableCommands(db, stats);
+
+                    // Send battle_start to the joining player
+                    socket.emit('battle_start', { ...battle.toClientState(p.charId), commands: cmds });
+
+                    // Broadcast updated state to all existing participants
+                    await BattleManager.broadcastBattleUpdate(io, battle, { text: `${stats.name} joins the fight!` }, db);
+
+                    // Update map battle indicators
+                    const battles = BattleManager.getBattlesOnMap(p.mapId);
+                    io.to('map_' + p.mapId).emit('battles_on_map', battles);
+
+                } catch (err) { console.error('Join battle error:', err); }
+            });
+
+            // 5c-query. GET BATTLES ON MAP (for UI indicators)
+            socket.on('get_battles_on_map', () => {
+                const p = onlinePlayers[socket.id];
+                if (!p) return;
+                const battles = BattleManager.getBattlesOnMap(p.mapId);
+                socket.emit('battles_on_map', battles);
             });
 
             // 5d. BATTLE ACTION (Attack, Skill, Item, Defend, Run, Limit)
@@ -2182,6 +2527,463 @@ async function startServer() {
                     await db.query("DELETE FROM character_equipment WHERE character_id=? AND slot_key=?", [p.charId, slotKey]);
                     socket.emit('equip_result', { success: true, message: 'Unequipped.' });
                 } catch (err) { socket.emit('equip_result', { success: false, message: 'Error' }); }
+            });
+
+            // =============================================================
+            // 6b. BATTLE CHAT + SURRENDER + EMOTES (Session 5)
+            // =============================================================
+
+            // Battle chat — real-time text between all combatants
+            socket.on('battle_chat', async ({ battleId, text }) => {
+                try {
+                    const p = onlinePlayers[socket.id];
+                    if (!p) return;
+                    const battle = BattleManager.getBattle(parseInt(battleId));
+                    if (!battle || battle.status !== 'ACTIVE') return;
+                    if (!battle.combatants[p.charId]) return; // not in this battle
+                    const msg = String(text || '').trim().slice(0, 200).replace(/</g, '&lt;');
+                    if (!msg) return;
+                    const payload = {
+                        from: p.name, fromCharId: p.charId,
+                        teamId: battle.getTeamId(p.charId),
+                        text: msg, ts: Date.now()
+                    };
+                    // Broadcast to all sockets in the battle room
+                    io.to('battle_' + battleId).emit('battle_chat_msg', payload);
+                    // Also persist in battle log for replay
+                    battle.addLog({ actor: p.name, text: `[Chat] ${msg}`, type: 'chat' });
+                } catch (e) { console.error('battle_chat error:', e.message); }
+            });
+
+            // Battle emote — visual effect on grid
+            socket.on('battle_emote', async ({ battleId, emote }) => {
+                try {
+                    const p = onlinePlayers[socket.id];
+                    if (!p) return;
+                    const battle = BattleManager.getBattle(parseInt(battleId));
+                    if (!battle || battle.status !== 'ACTIVE') return;
+                    if (!battle.combatants[p.charId]) return;
+                    const validEmotes = ['taunt', 'respect', 'laugh', 'rage', 'wave'];
+                    if (!validEmotes.includes(emote)) return;
+                    const emoteIcons = { taunt: '😤', respect: '🫡', laugh: '😂', rage: '🔥', wave: '👋' };
+                    const payload = {
+                        from: p.name, fromCharId: p.charId, emote,
+                        icon: emoteIcons[emote] || '❓',
+                        gridX: battle.combatants[p.charId].gridX,
+                        gridY: battle.combatants[p.charId].gridY
+                    };
+                    io.to('battle_' + battleId).emit('battle_emote_show', payload);
+                    battle.addLog({ actor: p.name, text: `${emoteIcons[emote]} ${p.name} ${emote}s!`, type: 'emote' });
+                } catch (e) { console.error('battle_emote error:', e.message); }
+            });
+
+            // Surrender — ends battle, opposing team(s) win
+            socket.on('battle_surrender', async ({ battleId }) => {
+                try {
+                    const p = onlinePlayers[socket.id];
+                    if (!p) return;
+                    const battle = BattleManager.getBattle(parseInt(battleId));
+                    if (!battle || battle.status !== 'ACTIVE') return;
+                    if (!battle.combatants[p.charId]) return;
+
+                    // Check if surrender is allowed (arena setting)
+                    // Default: allowed in PvP, not in PvE
+                    if (battle.type === 'PVE' || battle.type === 'PARTY_PVE') {
+                        socket.emit('battle_error', 'Cannot surrender in PvE — use Flee instead.');
+                        return;
+                    }
+
+                    const myTeamId = battle.getTeamId(p.charId);
+                    // Kill all members of the surrendering team (HP to 0)
+                    for (const cid of (battle.teams[myTeamId] || [])) {
+                        if (battle.combatants[cid]) battle.combatants[cid].currentHp = 0;
+                    }
+
+                    battle.addLog({ actor: 'system', text: `🏳️ ${p.name}'s team surrenders!` });
+                    battle.checkWinCondition();
+
+                    const result = { actor: 'system', actions: [], log: [`🏳️ ${p.name}'s team surrenders!`] };
+                    result.actions.push({ type: 'surrender', team: myTeamId, name: p.name });
+                    await BattleManager.broadcastBattleUpdate(io, battle, result, db);
+
+                    if (battle.status === 'FINISHED') {
+                        await BattleManager.endBattle(db, io, battle);
+                    }
+                } catch (e) { console.error('battle_surrender error:', e.message); }
+            });
+
+            // =============================================================
+            // 6c. MID-BATTLE NEGOTIATION / DIPLOMACY (Session 6)
+            // =============================================================
+
+            // Negotiate with an enemy (NPC or player)
+            socket.on('battle_negotiate', async ({ battleId, targetCharId }) => {
+                try {
+                    const p = onlinePlayers[socket.id];
+                    if (!p) return;
+                    const battle = BattleManager.getBattle(parseInt(battleId));
+                    if (!battle || battle.status !== 'ACTIVE') return;
+                    const actor = battle.combatants[p.charId];
+                    if (!actor) return;
+                    const target = battle.combatants[parseInt(targetCharId)];
+                    if (!target || target.currentHp <= 0) {
+                        socket.emit('battle_error', 'Invalid target for negotiation.');
+                        return;
+                    }
+                    if (target.teamId === actor.teamId) {
+                        socket.emit('battle_error', 'Already on your team!');
+                        return;
+                    }
+                    // Must be the actor's turn
+                    if (battle.turnCharId !== p.charId) {
+                        socket.emit('battle_error', 'Not your turn.');
+                        return;
+                    }
+                    // Range check: must be within 3 tiles (talking distance)
+                    if (actor.gridX !== undefined && target.gridX !== undefined) {
+                        const dist = Math.max(Math.abs(actor.gridX - target.gridX), Math.abs(actor.gridY - target.gridY));
+                        if (dist > 3) {
+                            socket.emit('battle_error', `Too far to negotiate. Move closer (dist ${dist}, need ≤3).`);
+                            return;
+                        }
+                    }
+
+                    if (target.isAI) {
+                        // ── NPC NEGOTIATION ──────────────────────────────
+                        // Load NPC persona for AI dialogue
+                        let persona = 'A hostile creature.';
+                        let npcName = target.name;
+                        try {
+                            const [npcRow] = await db.query('SELECT persona, name FROM game_npcs WHERE char_id=? LIMIT 1', [target.charId]);
+                            if (npcRow.length && npcRow[0].persona) persona = npcRow[0].persona;
+                            if (npcRow.length && npcRow[0].name) npcName = npcRow[0].name;
+                        } catch {}
+
+                        // Store persona on combatant for willingness calc
+                        target._persona = persona;
+                        const willingness = BattleManager.calculateNpcWillingness(target);
+                        const success = willingness >= 45; // threshold
+
+                        // Try AI dialogue
+                        let dialogue = '';
+                        try {
+                            const aiConfig = await _loadAiConfig();
+                            if (aiConfig && aiConfig.provider && aiConfig.provider !== 'disabled') {
+                                const { getNpcReply } = require('./npc_brain');
+                                const hpPct = Math.round((target.currentHp / target.maxHp) * 100);
+                                const negotiatePrompt = success
+                                    ? `The player ${actor.name} is trying to convince you to switch sides mid-battle. You are wounded (${hpPct}% HP) and considering it. Reluctantly agree to join them. Stay in character.`
+                                    : `The player ${actor.name} is trying to convince you to switch sides mid-battle. You refuse defiantly. Stay in character.`;
+                                dialogue = await getNpcReply({
+                                    npc: { name: npcName, persona },
+                                    player: { name: actor.name, level: actor.level || 1 },
+                                    message: negotiatePrompt,
+                                    history: [], memory: { facts: [], reputation: 0 },
+                                    worldFlags: {}, region: null, aiConfig
+                                });
+                            }
+                        } catch {}
+
+                        if (!dialogue) {
+                            dialogue = success
+                                ? `*${npcName} lowers their weapon* "...Fine. I'll fight with you. But this changes nothing between us."`
+                                : `*${npcName} snarls* "You think I'd betray my own? Never!"`;
+                        }
+
+                        if (success) {
+                            battle.switchTeam(target.charId, actor.teamId);
+                            target.isAI = true; // stays AI-controlled but on player's team now
+                        }
+
+                        const result = { actor: actor.name, actions: [], log: [] };
+                        result.log.push(`🤝 ${actor.name} attempts to negotiate with ${npcName}...`);
+                        result.actions.push({ type: 'negotiate', target: npcName, success, willingness });
+                        battle.addLog({ actor: actor.name, text: `🤝 Negotiation with ${npcName}: ${success ? 'SUCCESS' : 'FAILED'} (willingness: ${willingness}%)` });
+
+                        // Broadcast the negotiation result
+                        await BattleManager.broadcastBattleUpdate(io, battle, result, db);
+
+                        // Send detailed dialogue to the negotiator
+                        socket.emit('negotiate_result', {
+                            success, willingness, targetName: npcName,
+                            dialogue, targetCharId: target.charId
+                        });
+
+                        // End turn after negotiation (uses the action)
+                        battle.checkWinCondition();
+                        if (battle.status !== 'ACTIVE') {
+                            await BattleManager.endBattle(db, io, battle);
+                            return;
+                        }
+                        battle.nextTurn();
+                        await BattleManager.broadcastBattleUpdate(io, battle, null, db);
+                        const nextActor = battle.getCombatant(battle.turnCharId);
+                        if (nextActor && nextActor.isAI) setTimeout(() => BattleManager.aiTurn(db, io, battleId), 1200);
+
+                    } else {
+                        // ── PLAYER NEGOTIATION ───────────────────────────
+                        // Send a request to the target player to switch teams
+                        try {
+                            const allSocks = await io.in('battle_' + battleId).fetchSockets();
+                            const targetSock = allSocks.find(s => s._battleCharId === target.charId);
+                            if (targetSock) {
+                                targetSock.emit('negotiate_request', {
+                                    fromName: actor.name, fromCharId: actor.charId,
+                                    toTeamId: actor.teamId, battleId: parseInt(battleId)
+                                });
+                                socket.emit('negotiate_result', {
+                                    success: null, targetName: target.name,
+                                    dialogue: `Waiting for ${target.name} to respond...`,
+                                    targetCharId: target.charId, pending: true
+                                });
+                                battle.addLog({ actor: actor.name, text: `🤝 ${actor.name} proposes an alliance to ${target.name}...` });
+                                await BattleManager.broadcastBattleUpdate(io, battle, {
+                                    actor: actor.name, log: [`🤝 ${actor.name} proposes an alliance to ${target.name}...`], actions: []
+                                }, db);
+                            }
+                        } catch {}
+                    }
+                } catch (e) { console.error('battle_negotiate error:', e); }
+            });
+
+            // Player responds to a negotiate request (accept/decline alliance)
+            socket.on('negotiate_respond', async ({ battleId, fromCharId, accept }) => {
+                try {
+                    const p = onlinePlayers[socket.id];
+                    if (!p) return;
+                    const battle = BattleManager.getBattle(parseInt(battleId));
+                    if (!battle || battle.status !== 'ACTIVE') return;
+                    const responder = battle.combatants[p.charId];
+                    const proposer = battle.combatants[parseInt(fromCharId)];
+                    if (!responder || !proposer) return;
+
+                    if (accept) {
+                        battle.switchTeam(responder.charId, proposer.teamId);
+                        const result = { actor: 'system', log: [`🤝 ${responder.name} accepts the alliance with ${proposer.name}!`],
+                            actions: [{ type: 'alliance_shift', from: responder.name, toTeam: proposer.teamId }] };
+                        battle.addLog({ actor: 'system', text: result.log[0] });
+                        await BattleManager.broadcastBattleUpdate(io, battle, result, db);
+                        battle.checkWinCondition();
+                        if (battle.status !== 'ACTIVE') await BattleManager.endBattle(db, io, battle);
+                    } else {
+                        const result = { actor: 'system', log: [`❌ ${responder.name} declines the alliance.`], actions: [] };
+                        battle.addLog({ actor: 'system', text: result.log[0] });
+                        await BattleManager.broadcastBattleUpdate(io, battle, result, db);
+                    }
+                } catch (e) { console.error('negotiate_respond error:', e); }
+            });
+
+            // Session 8: Toggle non-lethal mode
+            socket.on('battle_toggle_nonlethal', (data) => {
+                const result = BattleManager.toggleNonLethal(data.battleId, socket._battleCharId);
+                if (result) socket.emit('battle_nonlethal_toggled', result);
+            });
+
+            // Session 8: Set defense stance
+            socket.on('battle_set_defense', (data) => {
+                const result = BattleManager.setDefenseStance(data.battleId, socket._battleCharId, data.defense);
+                if (result) socket.emit('battle_defense_set', result);
+            });
+
+            // Session 8: Set limb target
+            socket.on('battle_limb_target', (data) => {
+                const result = BattleManager.setLimbTarget(data.battleId, socket._battleCharId, data.limbKey);
+                if (result) socket.emit('battle_limb_target_set', result);
+            });
+
+            // Session 8: Post-battle KO interaction
+            socket.on('battle_ko_action', async (data) => {
+                const result = await BattleManager.processKoAction(db, io, data.battleId, socket._battleCharId, data.npcCharId, data.action);
+                socket.emit('battle_ko_result', result);
+            });
+
+            // Session 8: PvP KO choice (spare/finish)
+            socket.on('battle_pvp_ko_choice', async (data) => {
+                const result = await BattleManager.processPvpKoChoice(db, io, data.battleId, socket._battleCharId, data.targetCharId, data.spare);
+                socket.emit('battle_pvp_ko_result', result);
+            });
+
+            // Session 11: Create signature technique
+            socket.on('sig_tech_create', async (data) => {
+                const charId = onlinePlayers[socket.id]?.charId;
+                if (!charId) return;
+                const result = await BattleManager.createSignatureTech(db, charId, data);
+                socket.emit('sig_tech_created', result);
+            });
+
+            // Session 11: Equip ability on signature tech
+            socket.on('sig_tech_equip_ability', async (data) => {
+                const charId = onlinePlayers[socket.id]?.charId;
+                if (!charId) return;
+                const result = await BattleManager.addSigTechAbility(db, charId, data.techId, data.abilityId, data.slot);
+                socket.emit('sig_tech_ability_equipped', result);
+            });
+
+            // Session 11: Get available abilities for a slot
+            socket.on('sig_tech_get_abilities', async (data) => {
+                try {
+                    const [abilities] = await db.query('SELECT * FROM game_signature_abilities WHERE active=1 OR active IS NULL ORDER BY min_level, name');
+                    socket.emit('sig_tech_abilities_list', { abilities });
+                } catch {}
+            });
+
+            // Session 12: Train under master NPC
+            socket.on('master_train', async (data) => {
+                const charId = onlinePlayers[socket.id]?.charId;
+                if (!charId) return;
+                const result = await BattleManager.trainUnderMaster(db, charId, data.npcId);
+                socket.emit('master_train_result', result);
+            });
+
+            // Session 25: Generic training handler (works for self_train, meditate, etc.)
+            socket.on('train', async ({ trainingType }) => {
+                const p = onlinePlayers[socket.id];
+                if (!p) return;
+                try {
+                    const [config] = await db.query("SELECT * FROM game_training_config WHERE name=? AND active=1", [trainingType || 'self_train']);
+                    if (!config.length) { socket.emit('train_result', { success: false, message: 'This training type is not available.' }); return; }
+                    const cfg = config[0];
+
+                    // Check race/class restriction
+                    const [charInfo] = await db.query('SELECT race_id, class_id FROM characters WHERE id=?', [p.charId]);
+                    if (charInfo.length) {
+                        try {
+                            const allowedRaces = cfg.allowed_race_ids ? JSON.parse(cfg.allowed_race_ids) : null;
+                            const allowedClasses = cfg.allowed_class_ids ? JSON.parse(cfg.allowed_class_ids) : null;
+                            if (allowedRaces && !allowedRaces.includes(charInfo[0].race_id)) {
+                                socket.emit('train_result', { success: false, message: 'Your race cannot use this training method.' }); return;
+                            }
+                            if (allowedClasses && !allowedClasses.includes(charInfo[0].class_id)) {
+                                socket.emit('train_result', { success: false, message: 'Your class cannot use this training method.' }); return;
+                            }
+                        } catch {}
+                    }
+
+                    // Check requires partner/master
+                    if (cfg.requires_partner) { socket.emit('train_result', { success: false, message: 'This requires a sparring partner.' }); return; }
+                    if (cfg.requires_master) { socket.emit('train_result', { success: false, message: 'This requires an NPC master.' }); return; }
+
+                    // Check daily limit
+                    const [countRow] = await db.query(
+                        "SELECT COUNT(*) as cnt FROM character_training_log WHERE character_id=? AND training_type=? AND DATE(trained_at)=CURDATE()",
+                        [p.charId, trainingType]);
+                    if (countRow[0].cnt >= cfg.daily_limit) { socket.emit('train_result', { success: false, message: `Daily limit reached (${cfg.daily_limit}/day).` }); return; }
+
+                    // Apply gains
+                    const gains = JSON.parse(cfg.stat_gains || '{}');
+                    const costs = cfg.stat_costs ? JSON.parse(cfg.stat_costs) : {};
+                    const [charRow] = await db.query('SELECT * FROM characters WHERE id=?', [p.charId]);
+                    if (!charRow.length) return;
+                    const c = charRow[0];
+
+                    const actualGains = {};
+                    for (const [stat, pct] of Object.entries(gains)) {
+                        const base = c[stat] || c['max_hp'] || 100;
+                        const gain = Math.max(1, Math.floor(base * pct));
+                        actualGains[stat] = gain;
+                        await db.query(`UPDATE characters SET \`${stat}\`=\`${stat}\`+? WHERE id=?`, [gain, p.charId]);
+                    }
+                    for (const [stat, pct] of Object.entries(costs)) {
+                        const loss = Math.max(1, Math.floor((c[stat] || 100) * pct));
+                        await db.query(`UPDATE characters SET \`${stat}\`=GREATEST(1,\`${stat}\`-?) WHERE id=?`, [loss, p.charId]);
+                    }
+
+                    await db.query('INSERT INTO character_training_log (character_id, training_type, stat_gains_json) VALUES (?,?,?)',
+                        [p.charId, trainingType, JSON.stringify(actualGains)]);
+
+                    socket.emit('train_result', { success: true, type: trainingType, gains: actualGains, label: cfg.label });
+                } catch (e) { socket.emit('train_result', { success: false, message: e.message }); }
+            });
+
+
+            socket.on('spar_request', async ({ targetCharId }) => {
+                const p = onlinePlayers[socket.id];
+                if (!p) return;
+                const targetEntry = Object.values(onlinePlayers).find(pl => pl.charId === targetCharId);
+                if (!targetEntry) { socket.emit('spar_error', 'Player not found or offline.'); return; }
+                const targetSockId = targetEntry.socketId;
+                io.to(targetSockId).emit('spar_requested', { fromName: p.name, fromCharId: p.charId });
+                socket.emit('spar_sent', { targetName: targetEntry.name });
+            });
+
+            socket.on('spar_accept', async ({ fromCharId }) => {
+                const p = onlinePlayers[socket.id];
+                if (!p) return;
+                try {
+                    const [config] = await db.query("SELECT * FROM game_training_config WHERE name='spar' AND active=1");
+                    if (!config.length) return;
+                    const cfg = config[0];
+                    const gains = JSON.parse(cfg.stat_gains || '{}');
+                    const costs = JSON.parse(cfg.stat_costs || '{}');
+
+                    // Apply to both players
+                    for (const charId of [p.charId, fromCharId]) {
+                        const [charRow] = await db.query('SELECT * FROM characters WHERE id=?', [charId]);
+                        if (!charRow.length) continue;
+                        const c = charRow[0];
+                        const actualGains = {};
+                        for (const [stat, pct] of Object.entries(gains)) {
+                            const gain = Math.max(1, Math.floor((c[stat] || 100) * pct));
+                            actualGains[stat] = gain;
+                            await db.query(`UPDATE characters SET \`${stat}\`=\`${stat}\`+? WHERE id=?`, [gain, charId]);
+                        }
+                        for (const [stat, pct] of Object.entries(costs)) {
+                            const loss = Math.max(1, Math.floor((c[stat] || 100) * pct));
+                            await db.query(`UPDATE characters SET \`${stat}\`=GREATEST(1,\`${stat}\`-?) WHERE id=?`, [loss, charId]);
+                        }
+                        await db.query('INSERT INTO character_training_log (character_id, training_type, partner_char_id, stat_gains_json) VALUES (?,?,?,?)',
+                            [charId, 'spar', charId === p.charId ? fromCharId : p.charId, JSON.stringify(actualGains)]);
+                    }
+
+                    // Notify both
+                    const fromEntry = Object.values(onlinePlayers).find(pl => pl.charId === fromCharId);
+                    socket.emit('train_result', { success: true, type: 'spar', partner: fromEntry?.name || 'Partner' });
+                    if (fromEntry) io.to(fromEntry.socketId).emit('train_result', { success: true, type: 'spar', partner: p.name });
+                } catch (e) { socket.emit('train_result', { success: false, message: e.message }); }
+            });
+
+            // Session 22: Spectator mode
+            socket.on('battle_spectate', (data) => {
+                const result = BattleManager.spectate(io, socket, data.battleId);
+                socket.emit('battle_spectate_result', result);
+            });
+            socket.on('battle_unspectate', () => {
+                BattleManager.unspectate(io, socket);
+            });
+
+            // Session 14: Tournament interactions
+            socket.on('tournament_register', async (data) => {
+                const charId = onlinePlayers[socket.id]?.charId;
+                if (!charId) return;
+                try {
+                    const TournamentManager = require('./tournament_manager');
+                    const result = await TournamentManager.register(db, data.tournamentId, charId);
+                    socket.emit('tournament_register_result', result);
+                } catch (e) { socket.emit('tournament_register_result', { success: false, message: e.message }); }
+            });
+
+            socket.on('tournament_get_bracket', async (data) => {
+                try {
+                    const TournamentManager = require('./tournament_manager');
+                    const bracket = await TournamentManager.getBracket(db, data.tournamentId);
+                    socket.emit('tournament_bracket', bracket);
+                } catch {}
+            });
+
+            socket.on('tournament_list', async () => {
+                try {
+                    const TournamentManager = require('./tournament_manager');
+                    const list = await TournamentManager.list(db);
+                    socket.emit('tournament_list', list);
+                } catch {}
+            });
+
+            socket.on('tournament_leaderboard', async () => {
+                try {
+                    const TournamentManager = require('./tournament_manager');
+                    const lb = await TournamentManager.leaderboard(db);
+                    socket.emit('tournament_leaderboard', lb);
+                } catch {}
             });
 
             // =============================================================
@@ -3155,7 +3957,24 @@ async function startServer() {
                     const p = onlinePlayers[socket.id];
                     if (p) {
                         await db.query("UPDATE characters SET x=?, y=?, map_id=? WHERE id=?", [p.x, p.y, p.mapId, p.charId]);
-                        socket.to('map_' + p.mapId).emit('player_left', p.charId);
+
+                        // Check if offline players stay visible on map
+                        let offlineVisible = true;
+                        try {
+                            const [sv] = await db.query("SELECT setting_value FROM system_settings WHERE setting_key='enable_offline_players'");
+                            offlineVisible = sv.length && sv[0].setting_value === 'true';
+                        } catch {}
+
+                        if (offlineVisible) {
+                            // Don't remove — just mark as sleeping
+                            socket.to('map_' + p.mapId).emit('player_status_change', {
+                                charId: p.charId, name: p.name,
+                                x: p.x, y: p.y, level: p.level,
+                                isOffline: true, presence: 'offline'
+                            });
+                        } else {
+                            socket.to('map_' + p.mapId).emit('player_left', p.charId);
+                        }
 
                         // Clean up party membership on disconnect
                         const partyId = charPartyMap[p.charId];
@@ -3165,6 +3984,9 @@ async function startServer() {
 
                         // FIX: clean up guild map entry — was leaking one entry per player per session
                         delete charGuildMap[p.charId];
+
+                        // Clean up companion state
+                        delete companionState[p.charId];
 
                         // FIX: clean up NPC conversation history — was leaking one entry per
                         // unique (player, npc) conversation pair, forever, until server restart.
@@ -3480,7 +4302,8 @@ async function startServer() {
                 `SELECT id, name, icon, map_id, x, y, persona, is_enemy,
                         move_type, wander_radius, char_id,
                         quest_offers_json, schedule_json, shop_id,
-                        mood, is_dead, predecessor_name
+                        mood, is_dead, predecessor_name,
+                        is_recruitable, recruit_rep_req, recruit_quest_req
                  FROM game_npcs
                  WHERE map_id = ? AND is_enemy = 0 AND is_dead = 0`,
                 [mapId]
@@ -3516,7 +4339,11 @@ async function startServer() {
                         // PATROL: waypoint list and current index
                         patrolPath:    safeJsonParse(row.patrol_path_json, null),
                         _patrolIdx:    0,       // which waypoint we're heading toward
-                        _patrolPause:  0        // ticks to wait at current waypoint
+                        _patrolPause:  0,       // ticks to wait at current waypoint
+                        // Companion recruitment
+                        isRecruitable:   !!row.is_recruitable,
+                        recruitRepReq:   row.recruit_rep_req || 50,
+                        recruitQuestReq: row.recruit_quest_req || null
                     };
                 }
             }
@@ -3532,6 +4359,59 @@ async function startServer() {
         // We only use this for the witness system — it's deliberately narrow.
         global.getNpcsForMap = getNpcsForMap;
         global._addRumor     = _addRumor;
+
+        // =============================================================
+        // COMPANION HELPERS
+        // =============================================================
+        async function loadCompanions(charId) {
+            try {
+                const [rows] = await db.query(
+                    `SELECT cc.npc_id, cc.tactics, cc.is_active,
+                            gn.name, gn.icon, gn.char_id,
+                            c.level, c.current_hp, c.max_hp, c.current_mp, c.max_mp
+                     FROM character_companions cc
+                     JOIN game_npcs gn ON gn.id = cc.npc_id
+                     LEFT JOIN characters c ON c.id = gn.char_id
+                     WHERE cc.character_id = ? AND cc.is_active = 1`,
+                    [charId]
+                );
+                const comps = rows.map(r => ({
+                    npcId:     r.npc_id,
+                    name:      r.name,
+                    icon:      r.icon || '👤',
+                    charId:    r.char_id,
+                    level:     r.level || 1,
+                    currentHp: r.current_hp || 10,
+                    maxHp:     r.max_hp || 10,
+                    currentMp: r.current_mp || 0,
+                    maxMp:     r.max_mp || 0,
+                    tactics:   r.tactics || 'BALANCED',
+                    x:         0,
+                    y:         0,
+                    mapId:     0,
+                    isActive:  true
+                }));
+                companionState[charId] = comps;
+                return comps;
+            } catch (e) {
+                console.error('loadCompanions error:', e);
+                return [];
+            }
+        }
+
+        function getActiveCompanions(charId) {
+            return companionState[charId] || [];
+        }
+
+        // Spawn companions at player position
+        function spawnCompanionsAtPlayer(p) {
+            const comps = getActiveCompanions(p.charId);
+            for (const comp of comps) {
+                comp.mapId = p.mapId;
+                comp.x = p.x;
+                comp.y = p.y;
+            }
+        }
 
         // Expose NPC mood setter — called by event_runner SET_NPC_MOOD action
         // Expose worldFlags and npcState getter for admin routes

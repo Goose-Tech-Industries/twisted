@@ -729,6 +729,188 @@ router.get('/character-appearance/:charId', requireStaff, async (req, res) => {
     } catch(e) { res.json({ success: false, message: e.message }); }
 });
 // =================================================================
+// BATTLE CONFIG MEGA-PANEL — All settings + terminology in one call
+// =================================================================
+router.get('/battle-config', requireStaff, async (req, res) => {
+    try {
+        // Load all system_settings
+        const [settings] = await db.query('SELECT setting_key, setting_value FROM system_settings');
+        const settingsMap = {};
+        for (const s of settings) settingsMap[s.setting_key] = s.setting_value;
+
+        // Load terminology
+        const [terms] = await db.query('SELECT * FROM game_terminology ORDER BY category, term_key');
+
+        // Organize settings into categories with metadata
+        const categories = {
+            core_combat: {
+                label: 'Core Combat', icon: '⚔️',
+                settings: [
+                    { key: 'enable_limb_targeting', type: 'toggle', label: 'Limb Targeting', desc: 'Target specific body parts for tactical damage.', termKey: 'limb_targeting' },
+                    { key: 'enable_active_defense', type: 'toggle', label: 'Active Defense', desc: 'Dodge/Block/Counter on incoming attacks.', termKey: 'active_defense' },
+                    { key: 'enable_nonlethal', type: 'toggle', label: 'Non-Lethal Mode', desc: 'Knockout instead of kill.', termKey: 'nonlethal' },
+                    { key: 'enable_wound_degradation', type: 'toggle', label: 'Wound Degradation', desc: 'Stats degrade as limbs take damage.', termKey: 'wound_system' },
+                    { key: 'enable_called_shot_penalty', type: 'toggle', label: 'Called Shot Penalty', desc: 'Targeting limbs has an accuracy penalty.' },
+                    { key: 'enable_diminishing_returns', type: 'toggle', label: 'Diminishing Returns', desc: 'Repeating the same attack gives opponent dodge bonus.' },
+                ]
+            },
+            defense_tuning: {
+                label: 'Defense Tuning', icon: '🛡️',
+                settings: [
+                    { key: 'dodge_base_chance', type: 'percent', label: 'Dodge Base Chance', desc: 'Base probability to dodge (0.15 = 15%).', min: 0, max: 1 },
+                    { key: 'dodge_speed_factor', type: 'percent', label: 'Dodge Speed Factor', desc: 'Added per 2x speed advantage.' },
+                    { key: 'dodge_max_chance', type: 'percent', label: 'Dodge Max Chance', desc: 'Maximum dodge probability.' },
+                    { key: 'block_die_sides', type: 'number', label: 'Block Die Sides', desc: 'Sides on the block die (Mado: 6).' },
+                    { key: 'block_one_arm_reduction', type: 'percent', label: 'Block One Arm Reduction', desc: 'Damage reduction for one-arm block.' },
+                    { key: 'block_two_arm_reduction', type: 'percent', label: 'Block Two Arm Reduction', desc: 'Damage reduction for two-arm block.' },
+                    { key: 'block_stun_die_sides', type: 'number', label: 'Block Die (Stunned)', desc: 'Die sides when stunned (harder to block).' },
+                    { key: 'counter_base_chance', type: 'percent', label: 'Counter Base Chance', desc: 'Base counter-attack probability.' },
+                    { key: 'counter_charge_bonus', type: 'percent', label: 'Counter Charge Bonus', desc: 'Extra chance if already charging.' },
+                    { key: 'counter_max_chance', type: 'percent', label: 'Counter Max Chance', desc: 'Maximum counter probability.' },
+                    { key: 'diminishing_returns_per_repeat', type: 'percent', label: 'Diminishing Returns per Repeat', desc: 'Dodge bonus per repeated attack.' },
+                    { key: 'diminishing_returns_max', type: 'percent', label: 'Diminishing Returns Max', desc: 'Maximum accumulated dodge bonus.' },
+                ]
+            },
+            damage: {
+                label: 'Damage & Wounds', icon: '🩸',
+                settings: [
+                    { key: 'limb_bleed_through_default', type: 'percent', label: 'Limb Bleed-Through', desc: 'Fraction of limb damage that hits main HP.' },
+                    { key: 'wound_threshold_light', type: 'percent', label: 'Light Wound Threshold', desc: 'Below this % = light wound.' },
+                    { key: 'wound_threshold_heavy', type: 'percent', label: 'Heavy Wound Threshold', desc: 'Below this % = heavy wound.' },
+                    { key: 'called_shot_penalty_head', type: 'percent', label: 'Called Shot Penalty (Head)', desc: 'Accuracy penalty for head shots.' },
+                    { key: 'called_shot_penalty_arms', type: 'percent', label: 'Called Shot Penalty (Arms)', desc: 'Accuracy penalty for arm shots.' },
+                    { key: 'called_shot_penalty_legs', type: 'percent', label: 'Called Shot Penalty (Legs)', desc: 'Accuracy penalty for leg shots.' },
+                    { key: 'ki_ranged_dodge_bonus', type: 'percent', label: 'Ranged/Magic Dodge Bonus', desc: 'Extra dodge chance vs ranged/magic attacks.' },
+                    { key: 'enemy_scaling_factor', type: 'number', label: 'Enemy Scaling Factor', desc: 'How much enemies scale per party member (0.3 = +30% per extra player).' },
+                ]
+            },
+            rp_system: {
+                label: 'RP & Narration', icon: '🎭',
+                settings: [
+                    { key: 'enable_rp_descriptions', type: 'toggle', label: 'RP Descriptions', desc: 'Players describe actions for damage bonus.', termKey: 'flavor_text' },
+                    { key: 'enable_flavor_text', type: 'toggle', label: 'Flavor Text (Legacy)', desc: 'Simple flavor text system (Session 9).' },
+                    { key: 'enable_battle_narration', type: 'toggle', label: 'Battle Narration', desc: 'DM-style combat descriptions.', termKey: 'narration' },
+                    { key: 'enable_rp_commands', type: 'toggle', label: 'RP Commands', desc: 'Taunt, Intimidate, Rally.', termKey: 'rp_commands' },
+                    { key: 'rp_desc_max_bonus', type: 'percent', label: 'Max RP Description Bonus', desc: 'Maximum damage bonus from descriptions.' },
+                    { key: 'rp_desc_short_bonus', type: 'percent', label: 'Short Description Bonus', desc: 'Bonus for 20+ char descriptions.' },
+                    { key: 'rp_desc_detailed_bonus', type: 'percent', label: 'Detailed Description Bonus', desc: 'Bonus for 50+ char descriptions.' },
+                    { key: 'rp_desc_context_bonus', type: 'percent', label: 'Context-Aware Bonus', desc: 'Extra bonus per battlefield reference.' },
+                ]
+            },
+            ki_magic: {
+                label: 'Ki / Magic / Mana', icon: '🔥',
+                settings: [
+                    { key: 'enable_ki_channeling', type: 'toggle', label: 'Ki Channeling', desc: 'Surge to full power temporarily.', termKey: 'channel_ki' },
+                    { key: 'ki_channel_duration', type: 'number', label: 'Channel Duration (turns)', desc: 'How long the power surge lasts.' },
+                    { key: 'ki_channel_crash_pct', type: 'percent', label: 'Channel Crash %', desc: 'HP drops to this fraction after surge.' },
+                    { key: 'enable_spell_slots', type: 'toggle', label: 'Spell Slots (BG3-style)', desc: 'Limited-use ability charges.', termKey: 'spell_slots' },
+                    { key: 'summon_cost_type', type: 'select', label: 'Summon Cost Type', desc: 'How summons are paid for.', options: ['mp', 'spell_slot'] },
+                    { key: 'enable_summons', type: 'toggle', label: 'Summons', desc: 'Call creatures via rare Oghams.', termKey: 'summon' },
+                ]
+            },
+            progression: {
+                label: 'Progression & Styles', icon: '🥋',
+                settings: [
+                    { key: 'enable_signature_techs', type: 'toggle', label: 'Signature Techniques', desc: 'Player-created skills from RP.', termKey: 'sig_tech' },
+                    { key: 'sig_tech_require_unlock', type: 'toggle', label: 'Require Master for Sig Tech', desc: 'Must train under a master first.' },
+                    { key: 'sig_tech_discovery_threshold', type: 'number', label: 'Discovery Threshold', desc: 'Similar flavor texts needed to discover.' },
+                    { key: 'sig_tech_max_per_character', type: 'number', label: 'Max Sig Techs per Character' },
+                    { key: 'enable_fighting_styles', type: 'toggle', label: 'Fighting Styles', desc: 'Martial arts with belt progression.', termKey: 'fighting_style' },
+                    { key: 'enable_combo_procs', type: 'toggle', label: 'Combo Procs', desc: 'Physical attacks can chain.', termKey: 'combo' },
+                    { key: 'enable_bleed_tiers', type: 'toggle', label: 'Bleed Tiers', desc: 'Light/Moderate/Heavy bleeding.' },
+                ]
+            },
+            advanced: {
+                label: 'Advanced Combat', icon: '👑',
+                settings: [
+                    { key: 'enable_boss_phases', type: 'toggle', label: 'Boss Phases', desc: 'Multi-stage boss encounters.', termKey: 'boss_phase' },
+                    { key: 'enable_custom_win_conditions', type: 'toggle', label: 'Custom Win Conditions', desc: 'Survive, protect, capture, etc.' },
+                    { key: 'enable_weather_effects', type: 'toggle', label: 'Weather Effects', desc: 'Rain, storm, fog affect combat.', termKey: 'weather' },
+                    { key: 'enable_stealth', type: 'toggle', label: 'Stealth System', desc: 'Hide and ambush.', termKey: 'stealth' },
+                    { key: 'enable_transformations', type: 'toggle', label: 'Transformations', desc: 'Power-up forms.', termKey: 'transform' },
+                    { key: 'enable_link_attacks', type: 'toggle', label: 'Link Attacks', desc: 'Combined partner attacks.' },
+                    { key: 'enable_revive', type: 'toggle', label: 'Revive', desc: 'Bring back fallen allies.' },
+                    { key: 'enable_traps', type: 'toggle', label: 'Traps', desc: 'Placeable grid hazards.' },
+                    { key: 'enable_elemental_reactions', type: 'toggle', label: 'Elemental Reactions', desc: 'Genshin-style element combos.' },
+                    { key: 'enable_status_combos', type: 'toggle', label: 'Status Combos', desc: 'Status pairs trigger bonus effects.' },
+                    { key: 'enable_battle_rules', type: 'toggle', label: 'Battle Rules Engine', desc: 'No-code IF/THEN rules.' },
+                ]
+            },
+            social: {
+                label: 'Social & Alignment', icon: '⚖️',
+                settings: [
+                    { key: 'enable_alignment_system', type: 'toggle', label: 'Alignment System', desc: 'KOTOR-style good/evil scale.', termKey: 'alignment' },
+                    { key: 'alignment_affects_stats', type: 'toggle', label: 'Alignment Affects Stats', desc: 'Good/evil gives stat bonuses.' },
+                    { key: 'alignment_affects_skills', type: 'toggle', label: 'Alignment Affects Skills', desc: 'Some skills locked by alignment.' },
+                    { key: 'alignment_affects_shops', type: 'toggle', label: 'Alignment Affects Prices', desc: 'Evil characters pay more.' },
+                ]
+            },
+            ai: {
+                label: 'AI & Initiative', icon: '🤖',
+                settings: [
+                    { key: 'ai_difficulty', type: 'select', label: 'AI Difficulty', desc: 'How smart/strong AI opponents are.', options: ['easy', 'normal', 'hard'] },
+                    { key: 'initiative_type', type: 'select', label: 'Turn Order System', desc: 'How turn order is determined.', options: ['speed', 'roll', 'phased', 'countdown'] },
+                ]
+            },
+            meta: {
+                label: 'Meta Systems', icon: '🌍',
+                settings: [
+                    { key: 'enable_afterlife', type: 'toggle', label: 'Afterlife System', desc: 'Death sends you to another world.', termKey: 'afterlife' },
+                    { key: 'enable_tournaments', type: 'toggle', label: 'Tournaments', desc: 'Scheduled competitive events.', termKey: 'tournament' },
+                    { key: 'enable_spectator_mode', type: 'toggle', label: 'Spectator Mode', desc: 'Watch battles without participating.' },
+                    { key: 'enable_offline_players', type: 'toggle', label: 'Offline Players Visible', desc: 'Sleeping players stay on the map.' },
+                    { key: 'enable_training_system', type: 'toggle', label: 'Training System', desc: 'Self-train, spar, master training.' },
+                    { key: 'enable_battle_equip_swap', type: 'toggle', label: 'Equipment Swap in Battle', desc: 'Change weapons mid-fight.' },
+                ]
+            },
+        };
+
+        // Inject current values + terminology into each setting
+        const termsMap = {};
+        for (const t of terms) termsMap[t.term_key] = t;
+
+        for (const cat of Object.values(categories)) {
+            for (const s of cat.settings) {
+                s.value = settingsMap[s.key] ?? null;
+                if (s.termKey && termsMap[s.termKey]) {
+                    s.terminology = termsMap[s.termKey];
+                }
+            }
+        }
+
+        res.json({ success: true, categories, terminology: terms, allSettings: settingsMap });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// Update a battle setting + optional terminology rename
+router.post('/battle-config', requireStaff, async (req, res) => {
+    try {
+        const { key, value, termKey, displayName, icon, description } = req.body;
+
+        // Update the setting value
+        if (key && value !== undefined) {
+            await db.query(
+                'INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=?',
+                [key, String(value), String(value)]);
+        }
+
+        // Update terminology if provided
+        if (termKey && displayName) {
+            await db.query(
+                `UPDATE game_terminology SET display_name=?, icon=COALESCE(?,icon), description=COALESCE(?,description)
+                 WHERE term_key=?`,
+                [displayName, icon || null, description || null, termKey]);
+        }
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// =================================================================
 // NEW ROUTES — Added for Next.js UI compatibility
 // These aliases bridge the gap between what the v0 UI calls and
 // what the original admin panel provides.
@@ -744,7 +926,7 @@ router.get('/character-appearance/:charId', requireStaff, async (req, res) => {
 const ENTITY_TABLE_MAP = {
     // ── original types ────────────────────────────────────────────
     item: 'game_items', skill: 'game_skills', npc: 'game_npcs',
-    map: 'game_maps', quest: 'game_quests', class: 'game_classes',
+    map: 'game_maps', quest: 'quest_definitions', class: 'game_classes',
     race: 'game_races', ogham: 'game_oghams', ogham_family: 'ogham_families',
     shop: 'game_shops', arena: 'game_arenas', artifact: 'legendary_artifacts',
     status: 'game_statuses', feat: 'game_feats', loot_table: 'npc_loot_tables',
@@ -760,6 +942,51 @@ const ENTITY_TABLE_MAP = {
     craft_recipe:   'game_craft_recipes',    // CraftManagerPanel
     auction_listing:'auction_listings',      // AuctionPanel
     limit:          'game_limit_breaks',     // LimitBreakPanel (alias for existing 'limit' type)
+    // ── Session 8: Limb Targeting / Combat Options ──────────────────
+    body_type:      'game_body_types',       // BodyTypePanel
+    limb_zone:      'game_limb_zones',       // LimbZonePanel (child of body_type)
+    battle_knockout:'game_battle_knockouts', // KO log (read-only in practice)
+    // ── Session 9: Flavor Text / Combo ─────────────────────────────
+    flavor_text:    'game_flavor_texts',     // FlavorTextPanel
+    flavor_keyword: 'game_flavor_keywords',  // FlavorKeywordPanel
+    // ── Session 10: Ki Channeling / Bleed ──────────────────────────
+    bleed_tier:     'game_bleed_tiers',      // BleedTierPanel
+    // ── Session 11: Signature Techniques ───────────────────────────
+    sig_level:      'game_signature_levels',     // SigLevelPanel
+    sig_ability:    'game_signature_abilities',  // SigAbilityPanel
+    sig_tech:       'character_signature_techs', // SigTechPanel (read/manage player techs)
+    // ── Session 12: RP Engine ──────────────────────────────────────
+    // ── Session 13: Fighting Styles ───────────────────────────────
+    // ── Session 14: Tournaments ───────────────────────────────────
+    // ── Session 16: Boss Phases / Win Conditions ─────────────────
+    // ── Session 23: Final Systems ─────────────────────────────────
+    // ── Session 24: Alignment + Battle Rules ──────────────────────
+    // ── Session 25: Training ──────────────────────────────────────
+    terminology:    'game_terminology',             // TerminologyPanel
+    training_config:'game_training_config',       // TrainingConfigPanel
+    alignment_tier: 'game_alignment_tiers',      // AlignmentTierPanel
+    alignment_action:'game_alignment_actions',   // AlignmentActionPanel
+    battle_rule:    'game_battle_rules',          // BattleRulePanel (no-code builder)
+    elem_reaction:  'game_elemental_reactions',  // ElementReactionPanel
+    status_combo:   'game_status_combos',        // StatusComboPanel
+    afterlife:      'game_afterlife_worlds',     // AfterlifePanel
+    death_penalty:  'game_death_penalties',       // DeathPenaltyPanel
+    transformation: 'game_transformations',       // TransformPanel
+    link_attack:    'game_link_attacks',          // LinkAttackPanel
+    trap:           'game_battle_traps',          // TrapPanel
+    weather:        'game_weather_effects',       // WeatherPanel
+    boss_phase:     'game_boss_phases',          // BossPhasePanel
+    win_condition:  'game_win_conditions',       // WinConditionPanel
+    quest_battle_override: 'game_quest_battle_overrides', // QuestBattleOverridePanel
+    tournament:     'game_tournaments',          // TournamentPanel
+    tourney_match:  'game_tournament_matches',   // TourneyMatchPanel
+    tourney_history:'game_tournament_history',   // TourneyHistoryPanel
+    fighting_style: 'game_fighting_styles',      // FightingStylePanel
+    style_rank:     'game_fighting_style_ranks', // StyleRankPanel
+    char_style:     'character_fighting_styles', // CharStylePanel (admin view)
+    narration:      'game_battle_narrations',    // NarrationPanel
+    premade_sig:    'game_premade_sig_techs',    // PremadeSigTechPanel
+    training_log:   'game_master_training_log',  // TrainingLogPanel (read-only)
 };
 const ENTITY_PK_MAP = {
     artifact:       'artifact_id',
@@ -767,6 +994,8 @@ const ENTITY_PK_MAP = {
     quest:          'quest_id',
     loot_table:     'id',
     spawn:          'id',
+    sig_level:      'level',
+    death_penalty:  'death_count',
 };
 
 function getTable(type) {
@@ -777,7 +1006,7 @@ function getTable(type) {
 function getPk(type) { return ENTITY_PK_MAP[type] || 'id'; }
 
 // ── type union used by the three generic CRUD routes below ────────
-const ENTITY_TYPES = 'item|skill|npc|map|quest|class|race|ogham|ogham_family|shop|arena|artifact|status|feat|loot_table|spawn|battle_cmd|background|stat|shop_supply|artifact_power|quest_board|region|faction|scheduled_task|craft_recipe|auction_listing|limit';
+const ENTITY_TYPES = 'item|skill|npc|map|quest|class|race|ogham|ogham_family|shop|arena|artifact|status|feat|loot_table|spawn|battle_cmd|background|stat|shop_supply|artifact_power|quest_board|region|faction|scheduled_task|craft_recipe|auction_listing|limit|body_type|limb_zone|battle_knockout|flavor_text|flavor_keyword|bleed_tier|sig_level|sig_ability|sig_tech|narration|premade_sig|training_log|fighting_style|style_rank|char_style|tournament|tourney_match|tourney_history|terminology|training_config|alignment_tier|alignment_action|battle_rule|elem_reaction|status_combo|afterlife|death_penalty|transformation|link_attack|trap|weather|boss_phase|win_condition|quest_battle_override';
 
 // GET /admin-panel/:type — list all entities of a type
 router.get(`/:type(${ENTITY_TYPES})`, requireStaff, async (req, res) => {
@@ -811,12 +1040,17 @@ router.post('/:type/:id/delete', requireStaff, async (req, res) => {
 });
 
 // POST /admin-panel/:type/:id — update existing entity
-router.post('/:type/:id([0-9]+)', requireStaff, async (req, res) => {
+router.post('/:type/:id([\\w.-]+)', requireStaff, async (req, res) => {
     try {
         const table = getTable(req.params.type);
         const pk = getPk(req.params.type);
-        const data = req.body;
-        delete data[pk]; // never update PK
+        // Strip fields that don't exist as columns (prevents "Unknown column" errors)
+        const [cols] = await db.query('SHOW COLUMNS FROM ??', [table]);
+        const validCols = new Set(cols.map(c => c.Field));
+        const data = {};
+        for (const [k, v] of Object.entries(req.body)) {
+            if (validCols.has(k) && k !== pk) data[k] = v;
+        }
         if (!Object.keys(data).length) return res.status(400).json({ success: false, message: 'No data' });
         await db.query('UPDATE ?? SET ? WHERE ??=?', [table, data, pk, req.params.id]);
         const [rows] = await db.query('SELECT * FROM ?? WHERE ??=?', [table, pk, req.params.id]);
@@ -829,7 +1063,14 @@ router.post(`/:type(${ENTITY_TYPES})`, requireStaff, async (req, res) => {
     try {
         const table = getTable(req.params.type);
         const pk = getPk(req.params.type);
-        const data = req.body;
+        // Strip fields that don't exist as columns (prevents "Unknown column" errors)
+        const [cols] = await db.query('SHOW COLUMNS FROM ??', [table]);
+        const validCols = new Set(cols.map(c => c.Field));
+        const data = {};
+        for (const [k, v] of Object.entries(req.body)) {
+            if (validCols.has(k) && k !== pk) data[k] = v;
+        }
+        if (!Object.keys(data).length) return res.status(400).json({ success: false, message: 'No valid data' });
         const [result] = await db.query('INSERT INTO ?? SET ?', [table, data]);
         const insertId = result.insertId;
         const [rows] = await db.query('SELECT * FROM ?? WHERE ??=?', [table, pk, insertId]);
@@ -1001,14 +1242,22 @@ router.post('/player/clear-status', requireStaff, async (req, res) => {
 // POST /admin-panel/settings — saves settings object
 router.get('/settings', requireStaff, async (req, res) => {
     try {
-        const [rows] = await db.query('SELECT setting_key, setting_value, setting_type FROM game_settings').catch(() => [[]]);
         const settings = {};
-        for (const row of rows) {
-            let val = row.setting_value;
-            if (row.setting_type === 'number') val = parseFloat(val);
-            else if (row.setting_type === 'boolean') val = val === 'true' || val === '1';
-            settings[row.setting_key] = val;
-        }
+        // Load from system_settings first (legacy / engine defaults)
+        try {
+            const [sysRows] = await db.query('SELECT setting_key, setting_value FROM system_settings');
+            for (const row of sysRows) settings[row.setting_key] = row.setting_value;
+        } catch {}
+        // Overlay with game_settings (admin panel overrides)
+        try {
+            const [rows] = await db.query('SELECT setting_key, setting_value, setting_type FROM game_settings');
+            for (const row of rows) {
+                let val = row.setting_value;
+                if (row.setting_type === 'number') val = parseFloat(val);
+                else if (row.setting_type === 'boolean') val = val === 'true' || val === '1';
+                settings[row.setting_key] = val;
+            }
+        } catch {} // table may not exist yet
         res.json({ success: true, data: settings });
     } catch(e) { res.status(500).json({ success: false, message: e.message }); }
 });
@@ -1016,12 +1265,28 @@ router.get('/settings', requireStaff, async (req, res) => {
 router.post('/settings', requireStaff, async (req, res) => {
     try {
         const settings = req.body;
+        // Ensure game_settings table exists
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS game_settings (
+                setting_key VARCHAR(100) PRIMARY KEY,
+                setting_value TEXT,
+                setting_type VARCHAR(20) DEFAULT 'string',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        `).catch(() => {});
+
         for (const [key, value] of Object.entries(settings)) {
             const type = typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string';
+            // Write to game_settings (primary admin store)
             await db.query(
                 'INSERT INTO game_settings (setting_key, setting_value, setting_type) VALUES (?,?,?) ON DUPLICATE KEY UPDATE setting_value=?, setting_type=?',
                 [key, String(value), type, String(value), type]
-            ).catch(() => {}); // ignore if table doesn't exist
+            ).catch(() => {});
+            // Also write to system_settings for keys the engine reads directly (ai_*, enemy_scaling_factor)
+            await db.query(
+                'INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=?',
+                [key, String(value), String(value)]
+            ).catch(() => {});
         }
         res.json({ success: true, message: 'Settings saved' });
     } catch(e) { res.status(500).json({ success: false, message: e.message }); }

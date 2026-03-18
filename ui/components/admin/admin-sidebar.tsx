@@ -16,7 +16,7 @@ export type AdminSection =
   | 'world_forge' | 'world' | 'maps' | 'regions' | 'spawns' | 'map_connections' | 'scheduler'
   | 'items' | 'npcs' | 'quests' | 'questboard' | 'shop_supply' | 'loot_tables' | 'crafting' | 'auction'
   | 'classes' | 'races' | 'feats' | 'stat' | 'class_skill' | 'character_creator'
-  | 'battle_cmd' | 'limit' | 'status' | 'arenas'
+  | 'battle_config' | 'battle_cmd' | 'limit' | 'status' | 'arenas'
   | 'oghams' | 'ogham_family' | 'artifacts' | 'skills'
   | 'gm_notes' | 'live_social' | 'reports' | 'referrals' | 'achievements' | 'event_log'
   | 'settings' | 'modules'
@@ -58,6 +58,7 @@ const NAV_GROUPS: NavGroup[] = [
     { id: 'character_creator',label: 'Creator Preview',   icon: Users2 },
   ]},
   { title: 'Combat', items: [
+    { id: 'battle_config',    label: 'Battle Config',     icon: Settings },
     { id: 'battle_cmd',       label: 'Battle Commands',   icon: Swords },
     { id: 'limit',            label: 'Limit Breaks',      icon: Zap },
     { id: 'status',           label: 'Status Effects',    icon: Droplets },

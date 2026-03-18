@@ -20,7 +20,10 @@ import {
   Compass,
   Lock,
   Loader2,
-  Users
+  Users,
+  Swords,
+  Handshake,
+  UserPlus
 } from "lucide-react"
 
 const TILE_SIZE = 32
@@ -46,13 +49,15 @@ interface SelectedEntity {
   name: string
   x: number
   y: number
+  charId?: number
+  level?: number
 }
 
 export function MapPanel() {
   const game = useGame()
   const { state, dispatch, socket } = game
   const { notify } = useNotification()
-  const { character, currentMap, nearbyPlayers } = state
+  const { character, currentMap, nearbyPlayers, mapBattles, companions } = state
   const move = (game as unknown as Record<string, unknown>).move as (direction: 'up' | 'down' | 'left' | 'right') => void
   const interact = (game as unknown as Record<string, unknown>).interact as () => void
 
@@ -312,11 +317,16 @@ export function MapPanel() {
                   <User className="w-4 h-4" />
                 </button>
 
-                {/* Nearby Players */}
-                {nearbyPlayers.map(p => (
+                {/* Nearby Players (filtered to exclude self) */}
+                {nearbyPlayers.filter(p => p.charId !== character?.charId).map(p => (
                   <button
                     key={p.charId}
-                    className="absolute flex items-center justify-center rounded-full bg-[oklch(0.55_0.15_140)] text-white"
+                    className={cn(
+                      "absolute flex items-center justify-center rounded-full z-10 hover:ring-2 hover:ring-primary cursor-pointer",
+                      p.isOffline
+                        ? "bg-muted text-muted-foreground opacity-50"
+                        : "bg-[oklch(0.55_0.15_140)] text-white"
+                    )}
                     style={{
                       width: TILE_SIZE - 4,
                       height: TILE_SIZE - 4,
@@ -324,10 +334,34 @@ export function MapPanel() {
                       top: (p.y ?? 0) * (TILE_SIZE + 1) + 2,
                       transition: 'left 0.15s ease, top 0.15s ease'
                     }}
-                    title={p.name}
+                    title={`${p.name} (Lv.${p.level})${p.isOffline ? ' — Sleeping' : ''}`}
+                    onClick={() => setSelectedEntity({
+                      type: 'player', name: p.name,
+                      x: p.x, y: p.y,
+                      charId: p.charId, level: p.level
+                    })}
                   >
-                    <User className="w-4 h-4" />
+                    {p.isOffline ? <span className="text-[10px]">💤</span> : <User className="w-4 h-4" />}
                   </button>
+                ))}
+
+                {/* Companions */}
+                {(companions || []).map(comp => (
+                  <div
+                    key={`comp-${comp.npcId}`}
+                    className="absolute flex items-center justify-center rounded-full bg-[oklch(0.60_0.15_185)] text-white ring-1 ring-[oklch(0.55_0.12_185)]/50 z-[5]"
+                    style={{
+                      width: TILE_SIZE - 4,
+                      height: TILE_SIZE - 4,
+                      left: (comp.x ?? 0) * (TILE_SIZE + 1) + 2,
+                      top: (comp.y ?? 0) * (TILE_SIZE + 1) + 2,
+                      transition: 'left 0.15s ease, top 0.15s ease',
+                      fontSize: Math.round(TILE_SIZE * 0.45),
+                    }}
+                    title={`${comp.name} (Companion)`}
+                  >
+                    {comp.icon || '⚔️'}
+                  </div>
                 ))}
 
                 {/* Map Entities (NPCs, enemies, shops) */}
@@ -353,6 +387,30 @@ export function MapPanel() {
                     </button>
                   )
                 })}
+
+                {/* Active Battle Indicators */}
+                {(mapBattles || []).map(b => (
+                  <button
+                    key={`battle-${b.battleId}`}
+                    className="absolute flex items-center justify-center rounded-full bg-[oklch(0.55_0.22_25)] text-white animate-pulse-slow z-20"
+                    style={{
+                      width: TILE_SIZE + 4,
+                      height: TILE_SIZE + 4,
+                      left: b.x * (TILE_SIZE + 1) - 1,
+                      top: b.y * (TILE_SIZE + 1) - 1,
+                      boxShadow: '0 0 12px rgba(255,50,50,0.5)',
+                    }}
+                    onClick={() => {
+                      if (!socket || state.battle) return
+                      if (confirm(`Join battle? (${b.playerNames.join(', ')} vs ${b.enemyNames.join(', ')})`)) {
+                        socket.emit('join_battle', { battleId: b.battleId })
+                      }
+                    }}
+                    title={`Battle: ${b.playerNames.join(', ')} vs ${b.enemyNames.join(', ')} — Click to join!`}
+                  >
+                    <Swords className="w-5 h-5" />
+                  </button>
+                ))}
               </div>
             </CardContent>
           </Card>
@@ -416,6 +474,7 @@ export function MapPanel() {
                 {selectedEntity.type === 'npc' && 'A local inhabitant. Perhaps they have information.'}
                 {selectedEntity.type === 'enemy' && 'A hostile creature prowling the area.'}
                 {selectedEntity.type === 'shop' && 'A merchant offering goods and services.'}
+                {selectedEntity.type === 'player' && `Level ${selectedEntity.level || '?'} adventurer.`}
               </p>
             </CardContent>
           </Card>
@@ -438,6 +497,37 @@ export function MapPanel() {
                 <Store className="w-4 h-4 mr-2" />
                 Browse Wares
               </Button>
+            )}
+            {selectedEntity.type === 'player' && selectedEntity.charId && (
+              <>
+                <Button className="w-full bg-destructive hover:bg-destructive/90" onClick={() => {
+                  socket?.emit('duel_challenge', { targetId: selectedEntity.charId })
+                  notify('info', `Duel challenge sent to ${selectedEntity.name}!`)
+                }}>
+                  <Swords className="w-4 h-4 mr-2" />
+                  Challenge to Duel
+                </Button>
+                <Button className="w-full" variant="outline" onClick={() => {
+                  socket?.emit('trade_request', { targetCharId: selectedEntity.charId })
+                  notify('info', `Trade request sent to ${selectedEntity.name}!`)
+                }}>
+                  <Handshake className="w-4 h-4 mr-2" />
+                  Trade
+                </Button>
+                <Button className="w-full" variant="outline" onClick={() => {
+                  socket?.emit('party_invite', { targetCharId: selectedEntity.charId })
+                  notify('info', `Party invite sent to ${selectedEntity.name}!`)
+                }}>
+                  <UserPlus className="w-4 h-4 mr-2" />
+                  Invite to Party
+                </Button>
+                <Button className="w-full" variant="outline" onClick={() => {
+                  socket?.emit('spar_request', { targetCharId: selectedEntity.charId })
+                  notify('info', `Spar request sent to ${selectedEntity.name}!`)
+                }}>
+                  🤝 Spar
+                </Button>
+              </>
             )}
           </div>
 

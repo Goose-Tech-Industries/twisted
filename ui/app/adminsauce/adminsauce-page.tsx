@@ -49,6 +49,7 @@ import { ClassSkillPanel }       from "@/components/admin/class-skill-panel"
 // ── Combat ────────────────────────────────────────────────────────
 import { LimitBreakPanel }       from "@/components/admin/limit-battle-panels"
 import { BattleCmdPanel }        from "@/components/admin/limit-battle-panels"
+import { BattleConfigPanel }     from "@/components/admin/battle-config-panel"
 
 // ── Magic ─────────────────────────────────────────────────────────
 import { OghamPanel }            from "@/components/admin/ogham-panel"
@@ -116,6 +117,7 @@ function SectionContent({ section }: { section: AdminSection }) {
     case 'character_creator': return <CharacterCreatorPanel />
 
     // Combat
+    case 'battle_config':     return <BattleConfigPanel />
     case 'battle_cmd':        return <BattleCmdPanel />
     case 'limit':             return <LimitBreakPanel />
     case 'status':            return <EntityManager section="status" />

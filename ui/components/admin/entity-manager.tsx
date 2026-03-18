@@ -94,55 +94,77 @@ const ENTITY_CONFIGS: Record<string, EntityConfig> = {
       ]},
       { name: 'mp_cost', label: 'MP Cost', type: 'number', default: 0 },
       { name: 'cooldown', label: 'Cooldown (turns)', type: 'number', default: 0 },
-      { name: 'effects', label: 'Effects (JSON)', type: 'json', placeholder: '{"damage": {"formula": "atk * 1.5"}}' }
+      { name: 'effects', label: 'Effects (JSON)', type: 'json', placeholder: '{"damage": {"formula": "atk * 1.5"}}' },
+      { name: 'is_nonlethal', label: 'Non-Lethal (KO instead of kill)', type: 'checkbox' },
+      { name: 'heal_limb', label: 'Heal Limb (zone key, "any", or empty for main HP)', type: 'text' },
+      { name: 'combo_chance', label: 'Combo Chance (0.20 = 20%)', type: 'number', default: 0 },
+      { name: 'combo_max_chain', label: 'Max Combo Chain', type: 'number', default: 1 },
+      { name: 'spell_slot_level', label: 'Spell Slot Cost (blank = no slot cost)', type: 'number' },
+      { name: 'bleed_tier', label: 'Bleed Tier (light/moderate/heavy)', type: 'select', options: [
+        { value: '', label: 'None' },
+        { value: 'light', label: 'Light (2 turns)' },
+        { value: 'moderate', label: 'Moderate (4 turns)' },
+        { value: 'heavy', label: 'Heavy (5 turns)' }
+      ]}
     ]
   },
   npcs: {
     type: 'npc',
     title: 'NPCs & Enemies',
     icon: 'Skull',
-    listColumns: ['icon', 'name', 'is_enemy', 'level', 'map_id'],
+    listColumns: ['icon', 'name', 'is_enemy', 'map_id'],
     fields: [
       { name: 'name', label: 'Name', type: 'text', required: true },
       { name: 'icon', label: 'Icon', type: 'icon', placeholder: 'Ghost' },
-      { name: 'description', label: 'Description', type: 'textarea' },
+      { name: 'persona', label: 'Persona / Description', type: 'textarea' },
       { name: 'is_enemy', label: 'Is Enemy', type: 'checkbox' },
-      { name: 'level', label: 'Level', type: 'number', default: 1 },
+      { name: 'char_id', label: 'Character ID (for stats)', type: 'number' },
       { name: 'map_id', label: 'Map ID', type: 'number' },
       { name: 'x', label: 'X Position', type: 'number', default: 5 },
       { name: 'y', label: 'Y Position', type: 'number', default: 5 },
-      { name: 'hp', label: 'Max HP', type: 'number', default: 100 },
-      { name: 'mp', label: 'Max MP', type: 'number', default: 50 },
-      { name: 'atk', label: 'Attack', type: 'number', default: 10 },
-      { name: 'def', label: 'Defense', type: 'number', default: 5 },
-      { name: 'speed', label: 'Speed', type: 'number', default: 5 },
-      { name: 'exp_reward', label: 'EXP Reward', type: 'number', default: 10 },
-      { name: 'gold_reward', label: 'Gold Reward', type: 'number', default: 5 },
-      { name: 'skills', label: 'Skills (JSON array)', type: 'json', placeholder: '[1, 2, 3]' },
+      { name: 'move_type', label: 'Movement', type: 'select', options: [
+        { value: 'STATIONARY', label: 'Stationary' },
+        { value: 'WANDER', label: 'Wander' },
+        { value: 'PATROL', label: 'Patrol' }
+      ]},
+      { name: 'wander_radius', label: 'Wander Radius', type: 'number', default: 3 },
+      { name: 'script_key', label: 'Script Key', type: 'text' },
+      { name: 'shop_id', label: 'Shop ID (if shopkeeper)', type: 'number' },
       { name: 'drop_table_json', label: 'Loot Table (JSON)', type: 'json', placeholder: '[{"item_id": 1, "chance": 50}]' },
-      { name: 'dialogue_script', label: 'Dialogue Script', type: 'textarea' }
+      { name: 'quest_offers_json', label: 'Quest Offers (JSON)', type: 'json', placeholder: '["quest_id_1"]' },
+      { name: 'is_recruitable', label: 'Recruitable (Companion)', type: 'checkbox' },
+      { name: 'recruit_rep_req', label: 'Recruit Rep Required', type: 'number', default: 50 },
+      { name: 'recruit_quest_req', label: 'Recruit Quest ID Required', type: 'number' },
+      { name: 'body_type_id', label: 'Body Type (1=Humanoid, 2=Beast, 3=Serpent, 4=Amorphous)', type: 'number', default: 1 },
+      // Session 12: Master training
+      { name: 'is_master', label: 'Is Master (can train players)', type: 'checkbox' },
+      { name: 'teaches_sig_tech_id', label: 'Teaches Pre-Made Sig Tech ID', type: 'number' },
+      { name: 'unlocks_sig_tech_creation', label: 'Unlocks Sig Tech Creation', type: 'checkbox' },
+      { name: 'master_skill_ids', label: 'Skills This Master Teaches (JSON)', type: 'json', placeholder: '[1, 5, 12]' },
+      { name: 'training_gain_pct', label: 'Training Gain % (0.02 = 2%)', type: 'number', default: 0.02 }
     ]
   },
   quests: {
     type: 'quest',
     title: 'Quests',
     icon: 'ScrollText',
-    listColumns: ['name', 'type', 'min_level', 'repeatable'],
+    listColumns: ['title', 'quest_type', 'required_level', 'is_active'],
     fields: [
-      { name: 'name', label: 'Name', type: 'text', required: true },
+      { name: 'quest_id', label: 'Quest ID (unique slug)', type: 'text', required: true },
+      { name: 'title', label: 'Title', type: 'text', required: true },
       { name: 'description', label: 'Description', type: 'textarea' },
-      { name: 'type', label: 'Type', type: 'select', options: [
-        { value: 'MAIN', label: 'Main Story' },
-        { value: 'SIDE', label: 'Side Quest' },
-        { value: 'BOUNTY', label: 'Bounty' },
-        { value: 'DAILY', label: 'Daily' },
-        { value: 'EVENT', label: 'Event' }
+      { name: 'quest_type', label: 'Type', type: 'select', options: [
+        { value: 'main', label: 'Main Story' },
+        { value: 'side', label: 'Side Quest' },
+        { value: 'bounty', label: 'Bounty' },
+        { value: 'daily', label: 'Daily' },
+        { value: 'event', label: 'Event' }
       ]},
-      { name: 'giver_npc_id', label: 'Quest Giver NPC ID', type: 'number' },
-      { name: 'min_level', label: 'Min Level', type: 'number', default: 1 },
-      { name: 'repeatable', label: 'Repeatable', type: 'checkbox' },
-      { name: 'objectives', label: 'Objectives (JSON)', type: 'json', placeholder: '[{"type": "KILL", "target": 1, "count": 5}]' },
-      { name: 'rewards', label: 'Rewards (JSON)', type: 'json', placeholder: '{"exp": 100, "gold": 50, "items": []}' },
+      { name: 'required_level', label: 'Min Level', type: 'number', default: 1 },
+      { name: 'is_repeatable', label: 'Repeatable', type: 'checkbox' },
+      { name: 'objectives_json', label: 'Objectives (JSON)', type: 'json', placeholder: '[{"type": "KILL", "target_npc_id": 1, "count": 5, "label": "Kill 5 Goblins"}]' },
+      { name: 'rewards_json', label: 'Rewards (JSON)', type: 'json', placeholder: '{"xp": 100, "gold": 50, "items": [{"item_id": 1, "qty": 1}]}' },
+      { name: 'is_active', label: 'Active', type: 'checkbox' },
       { name: 'prerequisites', label: 'Prerequisites (JSON)', type: 'json', placeholder: '{"quests": [], "level": 1}' }
     ]
   },
@@ -239,7 +261,47 @@ const ENTITY_CONFIGS: Record<string, EntityConfig> = {
       { name: 'entry_fee', label: 'Entry Fee', type: 'number', default: 0 },
       { name: 'reward_multiplier', label: 'Reward Multiplier', type: 'number', default: 1 },
       { name: 'max_players', label: 'Max Players', type: 'number', default: 20 },
-      { name: 'enabled', label: 'Enabled', type: 'checkbox' }
+      { name: 'enabled', label: 'Enabled', type: 'checkbox' },
+      // Zone bounds
+      { name: 'x_min', label: 'Zone X Min', type: 'number', default: 0 },
+      { name: 'y_min', label: 'Zone Y Min', type: 'number', default: 0 },
+      { name: 'x_max', label: 'Zone X Max', type: 'number', default: 0 },
+      { name: 'y_max', label: 'Zone Y Max', type: 'number', default: 0 },
+      // Battle settings
+      { name: 'scaling_factor', label: 'Enemy Scaling Factor', type: 'number', default: 0.3 },
+      { name: 'allow_mid_battle_join', label: 'Allow Mid-Battle Join', type: 'checkbox' },
+      { name: 'allow_free_for_all', label: 'Allow Free-for-All', type: 'checkbox' },
+      { name: 'max_teams', label: 'Max Teams', type: 'number', default: 2 },
+      { name: 'max_combatants', label: 'Max Combatants', type: 'number', default: 8 },
+      { name: 'allow_surrender', label: 'Allow Surrender', type: 'checkbox' },
+      { name: 'allow_battle_chat', label: 'Allow Battle Chat', type: 'checkbox' },
+      { name: 'allow_diplomacy', label: 'Allow Diplomacy', type: 'checkbox' },
+      // Session 8 overrides
+      { name: 'override_limb_targeting', label: 'Limb Targeting Override', type: 'select', options: [
+        { value: 'default', label: 'Use Global Setting' },
+        { value: 'on', label: 'Force ON' },
+        { value: 'off', label: 'Force OFF' }
+      ]},
+      { name: 'override_active_defense', label: 'Active Defense Override', type: 'select', options: [
+        { value: 'default', label: 'Use Global Setting' },
+        { value: 'on', label: 'Force ON' },
+        { value: 'off', label: 'Force OFF' }
+      ]},
+      { name: 'override_nonlethal', label: 'Non-Lethal Override', type: 'select', options: [
+        { value: 'default', label: 'Use Global Setting' },
+        { value: 'on', label: 'Force ON (tournament mode)' },
+        { value: 'off', label: 'Force OFF' }
+      ]},
+      { name: 'override_diminishing_returns', label: 'Diminishing Returns Override', type: 'select', options: [
+        { value: 'default', label: 'Use Global Setting' },
+        { value: 'on', label: 'Force ON' },
+        { value: 'off', label: 'Force OFF' }
+      ]},
+      { name: 'override_ki_channeling', label: 'Ki Channeling Override', type: 'select', options: [
+        { value: 'default', label: 'Use Global Setting' },
+        { value: 'on', label: 'Force ON' },
+        { value: 'off', label: 'Force OFF' }
+      ]}
     ]
   },
   oghams: {
@@ -263,7 +325,13 @@ const ENTITY_CONFIGS: Record<string, EntityConfig> = {
       ]},
       { name: 'stat_bonus', label: 'Stat Bonus (JSON)', type: 'json', placeholder: '{"atk": 5, "luck": 3}' },
       { name: 'on_hit_status', label: 'On-Hit Status', type: 'text' },
-      { name: 'on_hit_chance', label: 'On-Hit Chance %', type: 'number', default: 0 }
+      { name: 'on_hit_chance', label: 'On-Hit Chance %', type: 'number', default: 0 },
+      // Session 15: Summon Oghams
+      { name: 'summon_npc_id', label: 'Summon NPC Char ID (rare oghams)', type: 'number' },
+      { name: 'summon_duration', label: 'Summon Duration (turns)', type: 'number', default: 3 },
+      { name: 'summon_mp_cost', label: 'Summon MP Cost (flat, for MP mode)', type: 'number', default: 0 },
+      { name: 'summon_slot_level', label: 'Summon Spell Slot Level (for slot mode)', type: 'number', default: 1 },
+      { name: 'summon_scaling_json', label: 'Summon Scaling per Rank (JSON)', type: 'json', placeholder: '{"hp_per_rank":0.10,"atk_per_rank":0.05}' }
     ]
   },
   status: {
@@ -324,6 +392,269 @@ const ENTITY_CONFIGS: Record<string, EntityConfig> = {
       ]},
       { name: 'source', label: 'Source', type: 'text', placeholder: 'Dropped by...' },
       { name: 'effects', label: 'Effects (JSON)', type: 'json', placeholder: '{"passive": "fire_resist", "active_skill": 5}' }
+    ]
+  },
+  body_types: {
+    type: 'body_type' as EntityType,
+    title: 'Body Types',
+    icon: 'Accessibility',
+    listColumns: ['icon', 'name', 'label'],
+    fields: [
+      { name: 'name', label: 'Key (unique)', type: 'text', required: true },
+      { name: 'label', label: 'Display Name', type: 'text', required: true },
+      { name: 'icon', label: 'Icon', type: 'icon', placeholder: '🧍' },
+      { name: 'description', label: 'Description', type: 'textarea' }
+    ]
+  },
+  limb_zones: {
+    type: 'limb_zone' as EntityType,
+    title: 'Limb Zones',
+    icon: 'Bone',
+    listColumns: ['icon', 'label', 'body_type_id', 'zone_key', 'hp_pct'],
+    fields: [
+      { name: 'body_type_id', label: 'Body Type ID', type: 'number', required: true },
+      { name: 'zone_key', label: 'Zone Key (head, torso, etc)', type: 'text', required: true },
+      { name: 'label', label: 'Display Name', type: 'text', required: true },
+      { name: 'icon', label: 'Icon', type: 'icon', placeholder: '🦴' },
+      { name: 'hp_pct', label: 'HP % of Max (0.25 = 25%)', type: 'number', default: 0.20 },
+      { name: 'called_shot_penalty', label: 'Called Shot Penalty (0.20 = -20% accuracy)', type: 'number', default: 0.0 },
+      { name: 'bleed_through', label: 'Bleed-through to Main HP (0.60 = 60%)', type: 'number', default: 0.60 },
+      { name: 'wound_effects', label: 'Wound Effects (JSON)', type: 'json', placeholder: '{"light":{"speed":-0.15},"heavy":{"speed":-0.30}}' },
+      { name: 'disable_effects', label: 'Disable Effects (JSON)', type: 'json', placeholder: '{"prone":true,"cant_flee":true}' },
+      { name: 'sort_order', label: 'Sort Order', type: 'number', default: 0 }
+    ]
+  },
+  flavor_texts: {
+    type: 'flavor_text' as EntityType,
+    title: 'Flavor Texts (RP Bonus)',
+    icon: 'Feather',
+    listColumns: ['category', 'text', 'bonus_pct', 'approved', 'active'],
+    fields: [
+      { name: 'text', label: 'Flavor Text', type: 'textarea', required: true },
+      { name: 'bonus_pct', label: 'Damage Bonus (0.05 = 5%)', type: 'number', default: 0.05 },
+      { name: 'category', label: 'Category', type: 'select', options: [
+        { value: 'attack', label: 'Attack' },
+        { value: 'defense', label: 'Defense' },
+        { value: 'heal', label: 'Heal' },
+        { value: 'movement', label: 'Movement' },
+        { value: 'taunt', label: 'Taunt' }
+      ]},
+      { name: 'skill_id', label: 'Skill ID (blank = any skill)', type: 'number' },
+      { name: 'command_id', label: 'Command ID (blank = any command)', type: 'number' },
+      { name: 'min_length', label: 'Min Text Length (0 = template only)', type: 'number', default: 0 },
+      { name: 'is_template', label: 'Admin Template', type: 'checkbox' },
+      { name: 'approved', label: 'Approved', type: 'checkbox' },
+      { name: 'active', label: 'Active', type: 'checkbox' }
+    ]
+  },
+  flavor_keywords: {
+    type: 'flavor_keyword' as EntityType,
+    title: 'Flavor Keywords',
+    icon: 'Hash',
+    listColumns: ['keyword', 'bonus_pct', 'category', 'terrain_match'],
+    fields: [
+      { name: 'keyword', label: 'Keyword', type: 'text', required: true },
+      { name: 'bonus_pct', label: 'Bonus (0.02 = +2%)', type: 'number', default: 0.02 },
+      { name: 'category', label: 'Category', type: 'select', options: [
+        { value: 'general', label: 'General' },
+        { value: 'terrain', label: 'Terrain-Aware' },
+        { value: 'weapon', label: 'Weapon' },
+        { value: 'element', label: 'Element' },
+        { value: 'taunt', label: 'Taunt' }
+      ]},
+      { name: 'terrain_match', label: 'Terrain Match (blank = any)', type: 'select', options: [
+        { value: '', label: 'Any / None' },
+        { value: 'forest', label: 'Forest' },
+        { value: 'high_ground', label: 'High Ground' },
+        { value: 'cover', label: 'Cover' },
+        { value: 'water', label: 'Water' },
+        { value: 'fire', label: 'Fire' }
+      ]},
+      { name: 'active', label: 'Active', type: 'checkbox' }
+    ]
+  },
+  bleed_tiers: {
+    type: 'bleed_tier' as EntityType,
+    title: 'Bleed Tiers',
+    icon: 'Droplet',
+    listColumns: ['icon', 'name', 'label', 'duration_turns', 'damage_pct'],
+    fields: [
+      { name: 'name', label: 'Key (light/moderate/heavy)', type: 'text', required: true },
+      { name: 'label', label: 'Display Name', type: 'text', required: true },
+      { name: 'icon', label: 'Icon', type: 'icon', placeholder: '🩸' },
+      { name: 'duration_turns', label: 'Duration (turns)', type: 'number', default: 2 },
+      { name: 'damage_pct', label: 'Damage per Turn (0.03 = 3% of base HP)', type: 'number', default: 0.03 },
+      { name: 'description', label: 'Description', type: 'textarea' },
+      { name: 'color', label: 'CSS Color Class', type: 'text', placeholder: 'text-destructive' }
+    ]
+  },
+  sig_levels: {
+    type: 'sig_level' as EntityType,
+    title: 'Signature Tech Levels',
+    icon: 'TrendingUp',
+    listColumns: ['level', 'damage_pct', 'cost_pct', 'heal_pct', 'ability_slots', 'xp_required'],
+    fields: [
+      { name: 'level', label: 'Level', type: 'number', required: true },
+      { name: 'damage_pct', label: 'Damage % (0.10 = 10%)', type: 'number', default: 0.10 },
+      { name: 'cost_pct', label: 'Cost % (0.01 = 1% HP)', type: 'number', default: 0.01 },
+      { name: 'heal_pct', label: 'Heal % (for ki_heal type)', type: 'number', default: 0.10 },
+      { name: 'ability_slots', label: 'Cumulative Ability Slots', type: 'number', default: 0 },
+      { name: 'xp_required', label: 'Total XP Required', type: 'number', default: 0 },
+      { name: 'description', label: 'Description', type: 'textarea' }
+    ]
+  },
+  sig_abilities: {
+    type: 'sig_ability' as EntityType,
+    title: 'Signature Abilities',
+    icon: 'Gem',
+    listColumns: ['icon', 'label', 'category', 'min_level', 'damage_modifier', 'cost_modifier'],
+    fields: [
+      { name: 'name', label: 'Key (unique)', type: 'text', required: true },
+      { name: 'label', label: 'Display Name', type: 'text', required: true },
+      { name: 'icon', label: 'Icon', type: 'icon', placeholder: '⚡' },
+      { name: 'description', label: 'Description', type: 'textarea', required: true },
+      { name: 'category', label: 'Category', type: 'select', options: [
+        { value: 'offense', label: 'Offense' },
+        { value: 'defense', label: 'Defense' },
+        { value: 'utility', label: 'Utility' },
+        { value: 'heal', label: 'Heal' }
+      ]},
+      { name: 'effects', label: 'Effects (JSON)', type: 'json', placeholder: '{"stun_turns":1}' },
+      { name: 'damage_modifier', label: 'Damage Modifier (-0.10 = -10%)', type: 'number', default: 0 },
+      { name: 'cost_modifier', label: 'Cost Modifier (+0.04 = +4%)', type: 'number', default: 0 },
+      { name: 'dodge_modifier', label: 'Opponent Dodge Modifier', type: 'number', default: 0 },
+      { name: 'min_level', label: 'Min Tech Level to Equip', type: 'number', default: 1 },
+      { name: 'exclusive_with', label: 'Exclusive With (JSON ability IDs)', type: 'json', placeholder: '[2]' }
+    ]
+  },
+  sig_techs: {
+    type: 'sig_tech' as EntityType,
+    title: 'Player Signature Techs',
+    icon: 'Flame',
+    listColumns: ['name', 'character_id', 'tech_type', 'current_level', 'total_uses', 'element'],
+    fields: [
+      { name: 'character_id', label: 'Character ID', type: 'number', required: true },
+      { name: 'name', label: 'Technique Name', type: 'text', required: true },
+      { name: 'icon', label: 'Icon', type: 'icon', placeholder: '⚡' },
+      { name: 'description', label: 'Description', type: 'textarea' },
+      { name: 'tech_type', label: 'Type', type: 'select', options: [
+        { value: 'ki_attack', label: 'Ki Attack' },
+        { value: 'physical', label: 'Physical' },
+        { value: 'ki_heal', label: 'Ki Heal' }
+      ]},
+      { name: 'current_level', label: 'Current Level', type: 'number', default: 1 },
+      { name: 'current_xp', label: 'Current XP', type: 'number', default: 0 },
+      { name: 'total_uses', label: 'Total Uses', type: 'number', default: 0 },
+      { name: 'element', label: 'Element', type: 'select', options: [
+        { value: '', label: 'None' },
+        { value: 'fire', label: 'Fire' },
+        { value: 'ice', label: 'Ice' },
+        { value: 'lightning', label: 'Lightning' },
+        { value: 'earth', label: 'Earth' },
+        { value: 'dark', label: 'Dark' },
+        { value: 'light', label: 'Light' }
+      ]},
+      { name: 'origin_text', label: 'Origin Flavor Text', type: 'textarea' },
+      { name: 'battle_text', label: 'Battle Announcement', type: 'text', placeholder: '{name} unleashes {skill}!' }
+    ]
+  },
+  narrations: {
+    type: 'narration' as EntityType,
+    title: 'Battle Narrations',
+    icon: 'BookOpen',
+    listColumns: ['action_type', 'weapon_type', 'element', 'terrain', 'weight'],
+    fields: [
+      { name: 'action_type', label: 'Action Type', type: 'select', required: true, options: [
+        { value: 'attack', label: 'Attack' }, { value: 'skill', label: 'Skill' },
+        { value: 'defend', label: 'Defend' }, { value: 'dodge', label: 'Dodge' },
+        { value: 'block', label: 'Block' }, { value: 'heal', label: 'Heal' },
+        { value: 'kill', label: 'Kill' }, { value: 'ko', label: 'Knockout' },
+        { value: 'miss', label: 'Miss' }, { value: 'crit', label: 'Critical Hit' },
+        { value: 'combo', label: 'Combo' }, { value: 'flee', label: 'Flee' },
+        { value: 'flee_fail', label: 'Flee Failed' },
+        { value: 'ki_channel', label: 'Ki Channel' },
+        { value: 'limb_disabled', label: 'Limb Disabled' },
+        { value: 'taunt', label: 'Taunt' }, { value: 'intimidate', label: 'Intimidate' },
+        { value: 'rally', label: 'Rally' }
+      ]},
+      { name: 'weapon_type', label: 'Weapon Type (blank = any)', type: 'select', options: [
+        { value: '', label: 'Any' }, { value: 'sword', label: 'Sword' },
+        { value: 'axe', label: 'Axe' }, { value: 'staff', label: 'Staff' },
+        { value: 'bow', label: 'Bow' }, { value: 'fist', label: 'Fist' },
+        { value: 'dagger', label: 'Dagger' }, { value: 'mace', label: 'Mace' }
+      ]},
+      { name: 'element', label: 'Element (blank = any)', type: 'select', options: [
+        { value: '', label: 'Any' }, { value: 'fire', label: 'Fire' },
+        { value: 'ice', label: 'Ice' }, { value: 'lightning', label: 'Lightning' },
+        { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }
+      ]},
+      { name: 'terrain', label: 'Terrain (blank = any)', type: 'select', options: [
+        { value: '', label: 'Any' }, { value: 'forest', label: 'Forest' },
+        { value: 'high_ground', label: 'High Ground' }, { value: 'cover', label: 'Cover' },
+        { value: 'water', label: 'Water' }, { value: 'fire', label: 'Fire' }
+      ]},
+      { name: 'target_zone', label: 'Target Zone (blank = any)', type: 'select', options: [
+        { value: '', label: 'Any' }, { value: 'head', label: 'Head' },
+        { value: 'torso', label: 'Torso' }, { value: 'left_arm', label: 'Left Arm' },
+        { value: 'right_arm', label: 'Right Arm' }, { value: 'legs', label: 'Legs' }
+      ]},
+      { name: 'text_template', label: 'Narration Text', type: 'textarea', required: true },
+      { name: 'weight', label: 'Weight (higher = more likely)', type: 'number', default: 1 },
+      { name: 'active', label: 'Active', type: 'checkbox' }
+    ]
+  },
+  premade_sigs: {
+    type: 'premade_sig' as EntityType,
+    title: 'Pre-Made Signature Techs',
+    icon: 'Scroll',
+    listColumns: ['icon', 'name', 'tech_type', 'element'],
+    fields: [
+      { name: 'name', label: 'Technique Name', type: 'text', required: true },
+      { name: 'icon', label: 'Icon', type: 'icon', placeholder: '⚡' },
+      { name: 'description', label: 'Description', type: 'textarea' },
+      { name: 'tech_type', label: 'Type', type: 'select', options: [
+        { value: 'ki_attack', label: 'Ki Attack' },
+        { value: 'physical', label: 'Physical' },
+        { value: 'ki_heal', label: 'Ki Heal' }
+      ]},
+      { name: 'element', label: 'Element', type: 'select', options: [
+        { value: '', label: 'None' }, { value: 'fire', label: 'Fire' },
+        { value: 'ice', label: 'Ice' }, { value: 'lightning', label: 'Lightning' },
+        { value: 'earth', label: 'Earth' }, { value: 'dark', label: 'Dark' },
+        { value: 'light', label: 'Light' }
+      ]},
+      { name: 'battle_text', label: 'Battle Text', type: 'text', placeholder: '{name} unleashes {skill}!' },
+      { name: 'preset_abilities', label: 'Pre-equipped Abilities (JSON IDs)', type: 'json', placeholder: '[1, 4]' },
+      { name: 'lore_text', label: 'Lore / History', type: 'textarea' }
+    ]
+  },
+  training_configs: {
+    type: 'training_config' as EntityType,
+    title: 'Training Types',
+    icon: 'Dumbbell',
+    listColumns: ['name', 'label', 'training_type', 'daily_limit'],
+    fields: [
+      { name: 'name', label: 'Key (unique)', type: 'text', required: true },
+      { name: 'label', label: 'Display Name', type: 'text', required: true },
+      { name: 'description', label: 'Description', type: 'textarea' },
+      { name: 'training_type', label: 'Type', type: 'select', options: [
+        { value: 'self_train', label: 'Self Training' },
+        { value: 'spar', label: 'Spar' },
+        { value: 'master_train', label: 'Master Training' },
+        { value: 'meditate', label: 'Meditate' }
+      ]},
+      { name: 'stat_gains', label: 'Stat Gains per Session (JSON)', type: 'json', placeholder: '{"max_hp":0.01,"atk":0.005}' },
+      { name: 'stat_costs', label: 'Stat Costs / Fatigue (JSON)', type: 'json', placeholder: '{"current_hp":0.01}' },
+      { name: 'daily_limit', label: 'Max Times per Day', type: 'number', default: 4 },
+      { name: 'cooldown_minutes', label: 'Cooldown (minutes)', type: 'number', default: 0 },
+      { name: 'requires_partner', label: 'Requires Partner (spar)', type: 'checkbox' },
+      { name: 'requires_master', label: 'Requires NPC Master', type: 'checkbox' },
+      { name: 'min_level', label: 'Min Level', type: 'number', default: 1 },
+      { name: 'allowed_race_ids', label: 'Allowed Race IDs (JSON, blank = all)', type: 'json', placeholder: '[1, 3]' },
+      { name: 'allowed_class_ids', label: 'Allowed Class IDs (JSON, blank = all)', type: 'json', placeholder: '[2, 5]' },
+      { name: 'weighted_clothing_bonus', label: 'Weighted Clothing Bonus', type: 'number', default: 0 },
+      { name: 'gravity_multiplier', label: 'Gravity Multiplier Enabled', type: 'checkbox' },
+      { name: 'active', label: 'Active', type: 'checkbox' }
     ]
   }
 }
