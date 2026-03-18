@@ -108,7 +108,8 @@ interface EditorState {
   objects: MapObject[]
   anims: MapAnim[]
   layer: Layer
-  tileLayer: 'ground' | 'overlay'  // Which tile sub-layer to paint
+  tilesFringe: number[]     // Layer 3 (renders ABOVE the player — tree tops, roofs)
+  tileLayer: 'ground' | 'overlay' | 'fringe'
   brush: number
   tool: EventTool
   tileTool: TileTool
@@ -147,19 +148,20 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     if (!tiles.length) tiles = new Array(map.width * map.height).fill(0)
     // Parse overlay layer (stored in tiles_json as second array if present)
     let tilesOverlay: number[] = new Array(map.width * map.height).fill(-1)
+    let tilesFringe: number[] = new Array(map.width * map.height).fill(-1)
     let passability: number[] = new Array(map.width * map.height).fill(0)
     try {
       const parsed = JSON.parse(map.tiles_json || '[]')
       if (Array.isArray(parsed) && parsed.length > 0 && Array.isArray(parsed[0])) {
-        // Multi-layer format: [[ground], [overlay], [passability]]
         tiles = parsed[0] || tiles
         tilesOverlay = parsed[1] || tilesOverlay
         passability = parsed[2] || passability
+        tilesFringe = parsed[3] || tilesFringe
       }
     } catch {}
 
     return {
-      tiles, tilesOverlay, passability, events, objects, anims,
+      tiles, tilesOverlay, tilesFringe, passability, events, objects, anims,
       layer: 'TILES', tileLayer: 'ground' as const, brush: 0, tool: 'NPC',
       tileTool: 'PAINT' as TileTool, brushSize: 1, objectPreset: 'LANTERN',
       zoom: 1, ambientDark: map.ambient_dark || 0, tilesetUrl: map.tileset_url || '',
@@ -504,7 +506,7 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     if (state.layer === 'TILES') {
       // Eyedropper — pick tile under cursor
       if (state.tileTool === 'EYEDROP') {
-        const activeTiles = state.tileLayer === 'overlay' ? state.tilesOverlay : state.tiles
+        const activeTiles = state.tileLayer === 'fringe' ? state.tilesFringe : state.tileLayer === 'overlay' ? state.tilesOverlay : state.tiles
         set({ brush: activeTiles[i], tileTool: 'PAINT' })
         return
       }
@@ -515,10 +517,10 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
         set({ passability: pass })
         return
       }
-      const activeTiles = state.tileLayer === 'overlay' ? state.tilesOverlay : state.tiles
+      const activeTiles = state.tileLayer === 'fringe' ? state.tilesFringe : state.tileLayer === 'overlay' ? state.tilesOverlay : state.tiles
       pushUndo(activeTiles)
-      const layerKey = state.tileLayer === 'overlay' ? 'tilesOverlay' : 'tiles'
-      const eraseVal = state.tileLayer === 'overlay' ? -1 : 0
+      const layerKey = state.tileLayer === 'fringe' ? 'tilesFringe' : state.tileLayer === 'overlay' ? 'tilesOverlay' : 'tiles'
+      const eraseVal = state.tileLayer === 'ground' ? 0 : -1
 
       // Auto-tile mode
       if (state.tileTool === 'AUTOTILE' && autotileGroups[selectedAutotile]) {
@@ -591,7 +593,7 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     if (state.painting && state.layer === 'TILES' && state.tileTool === 'AUTOTILE' && autotileGroups[selectedAutotile]) {
       const group = autotileGroups[selectedAutotile]
       const layerKey = state.tileLayer === 'overlay' ? 'tilesOverlay' : 'tiles'
-      const activeTiles = state.tileLayer === 'overlay' ? state.tilesOverlay : state.tiles
+      const activeTiles = state.tileLayer === 'fringe' ? state.tilesFringe : state.tileLayer === 'overlay' ? state.tilesOverlay : state.tiles
       set({ [layerKey]: paintAutotile(x, y, activeTiles, group) } as Partial<EditorState>)
     }
     if (state.painting && state.layer === 'TILES' && (state.tileTool === 'PAINT' || state.tileTool === 'ERASER')) {
@@ -615,7 +617,7 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
   const save = async () => {
     setSaving(true); setSaveMsg('')
     const payload = {
-      tiles_json:      JSON.stringify([state.tiles, state.tilesOverlay, state.passability]),
+      tiles_json:      JSON.stringify([state.tiles, state.tilesOverlay, state.passability, state.tilesFringe]),
       collisions_json: JSON.stringify(state.events),
       objects_json:    JSON.stringify(state.objects),
       anims_json:      JSON.stringify(state.anims),
@@ -721,12 +723,17 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
           <button onClick={() => set({ tileLayer: 'ground' })}
             className={cn("px-1.5 py-0.5 rounded text-[10px] border",
               state.tileLayer==='ground' ? 'bg-green-900/60 border-green-500 text-green-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
-            Ground
+            ① Ground
           </button>
           <button onClick={() => set({ tileLayer: 'overlay' })}
             className={cn("px-1.5 py-0.5 rounded text-[10px] border",
               state.tileLayer==='overlay' ? 'bg-cyan-900/60 border-cyan-500 text-cyan-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
-            Overlay
+            ② Overlay
+          </button>
+          <button onClick={() => set({ tileLayer: 'fringe' })}
+            className={cn("px-1.5 py-0.5 rounded text-[10px] border",
+              state.tileLayer==='fringe' ? 'bg-purple-900/60 border-purple-500 text-purple-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
+            ③ Fringe
           </button>
 
           <span className="text-[#333] mx-1">|</span>
