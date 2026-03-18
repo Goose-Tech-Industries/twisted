@@ -93,7 +93,12 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 // ── MAP EDITOR ────────────────────────────────────────────────────
-type TileTool = 'PAINT' | 'FILL' | 'RECT' | 'ERASER' | 'EYEDROP' | 'PASSABILITY'
+type TileTool = 'PAINT' | 'FILL' | 'RECT' | 'ERASER' | 'EYEDROP' | 'PASSABILITY' | 'AUTOTILE'
+
+interface AutotileGroup {
+  id: number; name: string; icon: string; base_tile: number
+  tileMap: Record<string, number> // bitmask string → tile index
+}
 
 interface EditorState {
   tiles: number[]
@@ -167,6 +172,8 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
   const [npcs, setNpcs]   = useState<NPC[]>([])
   const [shops, setShops] = useState<Shop[]>([])
   const [items, setItems] = useState<Item[]>([])
+  const [autotileGroups, setAutotileGroups] = useState<AutotileGroup[]>([])
+  const [selectedAutotile, setSelectedAutotile] = useState<number>(0)
   const [modal, setModal] = useState<ModalState>({ type: null, x:0, y:0, ei:-1, oi:-1 })
   const [hoveredCell, setHoveredCell] = useState<{x:number;y:number;tile:number} | null>(null)
 
@@ -241,6 +248,18 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     adminApi.entity.getAll('npc').then(r => setNpcs((r.data || []) as NPC[]))
     adminApi.entity.getAll('shop').then(r => setShops((r.data || []) as Shop[]))
     adminApi.entity.getAll('item').then(r => setItems((r.data || []) as Item[]))
+    // Load autotile groups
+    const API = process.env.NEXT_PUBLIC_API_URL || ''
+    fetch(`${API}/admin-panel/autotile_group`, { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success && d.data) {
+          setAutotileGroups(d.data.map((g: Record<string, unknown>) => ({
+            id: g.id, name: g.name, icon: g.icon || '🔲', base_tile: g.base_tile,
+            tileMap: typeof g.tile_map === 'string' ? JSON.parse(g.tile_map as string) : (g.tile_map || {})
+          })))
+        }
+      }).catch(() => {})
   }, [])
 
   const set = useCallback((update: Partial<EditorState>) => {
@@ -288,6 +307,66 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     ctx.strokeRect(selCol*PICKER_TILE+1, selRow*PICKER_TILE+1, PICKER_TILE-2, PICKER_TILE-2)
   }, [state.tilesetLoaded, state.brush, state.tilesetCols])
 
+  // Auto-tiling: calculate bitmask for a tile position
+  // Checks 4 cardinal neighbors (N,E,S,W) to determine which tile variant to use
+  // Bitmask: bit0=N same, bit1=E same, bit2=S same, bit3=W same
+  const getAutotileBitmask = (tiles: number[], x: number, y: number, group: AutotileGroup) => {
+    const w = map.width, h = map.height
+    const baseTiles = Object.values(group.tileMap).concat([group.base_tile])
+    const isSame = (nx: number, ny: number) => {
+      if (nx < 0 || nx >= w || ny < 0 || ny >= h) return true // edges count as same
+      return baseTiles.includes(tiles[ny * w + nx])
+    }
+    let mask = 0
+    if (isSame(x, y - 1)) mask |= 1  // N
+    if (isSame(x + 1, y)) mask |= 2  // E
+    if (isSame(x, y + 1)) mask |= 4  // S
+    if (isSame(x - 1, y)) mask |= 8  // W
+    return mask
+  }
+
+  // Paint an auto-tile and update all neighbors
+  const paintAutotile = (cx: number, cy: number, tiles: number[], group: AutotileGroup) => {
+    const w = map.width, h = map.height
+    const newTiles = [...tiles]
+    const size = state.brushSize
+    const half = Math.floor(size / 2)
+
+    // Paint the target area with base tile first
+    for (let dy = -half; dy < size - half; dy++) {
+      for (let dx = -half; dx < size - half; dx++) {
+        const nx = cx + dx, ny = cy + dy
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+          newTiles[ny * w + nx] = group.base_tile
+        }
+      }
+    }
+
+    // Now recalculate all affected tiles + their neighbors
+    const toRecalc = new Set<string>()
+    for (let dy = -half - 1; dy < size - half + 1; dy++) {
+      for (let dx = -half - 1; dx < size - half + 1; dx++) {
+        const nx = cx + dx, ny = cy + dy
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+          toRecalc.add(`${nx},${ny}`)
+        }
+      }
+    }
+
+    for (const key of toRecalc) {
+      const [px, py] = key.split(',').map(Number)
+      const idx = py * w + px
+      // Only recalculate tiles that belong to this autotile group
+      const allGroupTiles = Object.values(group.tileMap).concat([group.base_tile])
+      if (!allGroupTiles.includes(newTiles[idx])) continue
+      const mask = getAutotileBitmask(newTiles, px, py, group)
+      const variant = group.tileMap[String(mask)]
+      if (variant !== undefined) newTiles[idx] = variant
+    }
+
+    return newTiles
+  }
+
   // Keyboard shortcuts (undo/redo)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -331,6 +410,14 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
       pushUndo(activeTiles)
       const layerKey = state.tileLayer === 'overlay' ? 'tilesOverlay' : 'tiles'
       const eraseVal = state.tileLayer === 'overlay' ? -1 : 0
+
+      // Auto-tile mode
+      if (state.tileTool === 'AUTOTILE' && autotileGroups[selectedAutotile]) {
+        const group = autotileGroups[selectedAutotile]
+        set({ [layerKey]: paintAutotile(x, y, activeTiles, group) } as Partial<EditorState>)
+        return
+      }
+
       if (state.tileTool === 'FILL') {
         const filled = floodFill(i, activeTiles[i], state.brush)
         set({ [layerKey]: filled } as Partial<EditorState>)
@@ -392,6 +479,12 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
   // Paint on drag
   const handleCellMouseEnter = (i: number, x: number, y: number, tile: number) => {
     setHoveredCell({ x, y, tile })
+    if (state.painting && state.layer === 'TILES' && state.tileTool === 'AUTOTILE' && autotileGroups[selectedAutotile]) {
+      const group = autotileGroups[selectedAutotile]
+      const layerKey = state.tileLayer === 'overlay' ? 'tilesOverlay' : 'tiles'
+      const activeTiles = state.tileLayer === 'overlay' ? state.tilesOverlay : state.tiles
+      set({ [layerKey]: paintAutotile(x, y, activeTiles, group) } as Partial<EditorState>)
+    }
     if (state.painting && state.layer === 'TILES' && (state.tileTool === 'PAINT' || state.tileTool === 'ERASER')) {
       if (state.tileTool === 'ERASER') {
         const tiles = [...state.tiles]; tiles[i] = 0; set({ tiles })
@@ -525,7 +618,7 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
           {/* Tools */}
           <span className="text-muted-foreground text-[10px] shrink-0">TOOL:</span>
           {([
-            ['PAINT','🖌️'],['FILL','🪣'],['RECT','⬜'],['EYEDROP','💉'],['PASSABILITY','🚧'],['ERASER','✕']
+            ['PAINT','🖌️'],['AUTOTILE','🧩'],['FILL','🪣'],['RECT','⬜'],['EYEDROP','💉'],['PASSABILITY','🚧'],['ERASER','✕']
           ] as [TileTool,string][]).map(([t,ic]) => (
             <button key={t} onClick={() => set({ tileTool: t, rectStart: null })}
               className={cn("px-1.5 py-0.5 rounded text-[10px] transition-colors border",
@@ -570,10 +663,26 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
             🚧
           </button>
 
+          {/* Auto-tile group picker */}
+          {state.tileTool === 'AUTOTILE' && autotileGroups.length > 0 && (
+            <>
+              <span className="text-[#333] mx-1">|</span>
+              <span className="text-muted-foreground text-[10px]">GROUP:</span>
+              {autotileGroups.map((g, i) => (
+                <button key={g.id} onClick={() => setSelectedAutotile(i)}
+                  className={cn("px-1.5 py-0.5 rounded text-[10px] border",
+                    selectedAutotile===i ? 'bg-green-900/60 border-green-500 text-green-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
+                  {g.icon} {g.name}
+                </button>
+              ))}
+            </>
+          )}
+
           {/* Status indicators */}
           {state.rectStart && <span className="text-[10px] text-yellow-400 ml-1">📐 Click end...</span>}
           {state.tileTool === 'EYEDROP' && <span className="text-[10px] text-cyan-400 ml-1">💉 Click to pick tile</span>}
           {state.tileTool === 'PASSABILITY' && <span className="text-[10px] text-red-400 ml-1">🚧 Click: walk→block→trigger</span>}
+          {state.tileTool === 'AUTOTILE' && <span className="text-[10px] text-green-400 ml-1">🧩 Smart borders auto-calculated</span>}
         </div>
       )}
 

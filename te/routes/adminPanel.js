@@ -1020,6 +1020,7 @@ const ENTITY_TABLE_MAP = {
     // ── Session 23: Final Systems ─────────────────────────────────
     // ── Session 24: Alignment + Battle Rules ──────────────────────
     // ── Session 25: Training ──────────────────────────────────────
+    autotile_group: 'game_autotile_groups',           // AutotilePanel
     template:       'game_templates',                // TemplatePanel
     terminology:    'game_terminology',             // TerminologyPanel
     training_config:'game_training_config',       // TrainingConfigPanel
@@ -1065,7 +1066,7 @@ function getTable(type) {
 function getPk(type) { return ENTITY_PK_MAP[type] || 'id'; }
 
 // ── type union used by the three generic CRUD routes below ────────
-const ENTITY_TYPES = 'item|skill|npc|map|quest|class|race|ogham|ogham_family|shop|arena|artifact|status|feat|loot_table|spawn|battle_cmd|background|stat|shop_supply|artifact_power|quest_board|region|faction|scheduled_task|craft_recipe|auction_listing|limit|body_type|limb_zone|battle_knockout|flavor_text|flavor_keyword|bleed_tier|sig_level|sig_ability|sig_tech|narration|premade_sig|training_log|fighting_style|style_rank|char_style|tournament|tourney_match|tourney_history|template|terminology|training_config|alignment_tier|alignment_action|battle_rule|elem_reaction|status_combo|afterlife|death_penalty|transformation|link_attack|trap|weather|boss_phase|win_condition|quest_battle_override';
+const ENTITY_TYPES = 'item|skill|npc|map|quest|class|race|ogham|ogham_family|shop|arena|artifact|status|feat|loot_table|spawn|battle_cmd|background|stat|shop_supply|artifact_power|quest_board|region|faction|scheduled_task|craft_recipe|auction_listing|limit|body_type|limb_zone|battle_knockout|flavor_text|flavor_keyword|bleed_tier|sig_level|sig_ability|sig_tech|narration|premade_sig|training_log|fighting_style|style_rank|char_style|tournament|tourney_match|tourney_history|autotile_group|template|terminology|training_config|alignment_tier|alignment_action|battle_rule|elem_reaction|status_combo|afterlife|death_penalty|transformation|link_attack|trap|weather|boss_phase|win_condition|quest_battle_override';
 
 // GET /admin-panel/:type — list all entities of a type
 router.get(`/:type(${ENTITY_TYPES})`, requireStaff, async (req, res) => {
