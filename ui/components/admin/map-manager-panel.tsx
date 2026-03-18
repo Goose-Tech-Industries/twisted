@@ -93,6 +93,8 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 // ── MAP EDITOR ────────────────────────────────────────────────────
+type TileTool = 'PAINT' | 'FILL' | 'RECT' | 'ERASER'
+
 interface EditorState {
   tiles: number[]
   events: MapEvent[]
@@ -101,6 +103,8 @@ interface EditorState {
   layer: Layer
   brush: number
   tool: EventTool
+  tileTool: TileTool
+  brushSize: number
   objectPreset: string
   zoom: number
   ambientDark: number
@@ -110,6 +114,8 @@ interface EditorState {
   tilesetSrc: string
   painting: boolean
   dirty: boolean
+  showGrid: boolean
+  rectStart: { x: number; y: number } | null
 }
 
 type ModalType = 'npc' | 'teleport' | 'shop' | 'enemy' | 'loot' | 'terrain' | 'object-flags' | 'custom-sprite' | null
@@ -128,9 +134,11 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     if (!tiles.length) tiles = new Array(map.width * map.height).fill(0)
     return {
       tiles, events, objects, anims,
-      layer: 'TILES', brush: 0, tool: 'NPC', objectPreset: 'LANTERN',
+      layer: 'TILES', brush: 0, tool: 'NPC', tileTool: 'PAINT' as TileTool, brushSize: 1,
+      objectPreset: 'LANTERN',
       zoom: 1, ambientDark: map.ambient_dark || 0, tilesetUrl: map.tileset_url || '',
-      tilesetLoaded: false, tilesetCols: 0, tilesetSrc: '', painting: false, dirty: false
+      tilesetLoaded: false, tilesetCols: 0, tilesetSrc: '', painting: false, dirty: false,
+      showGrid: true, rectStart: null
     }
   })
 
@@ -139,6 +147,67 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
   const [items, setItems] = useState<Item[]>([])
   const [modal, setModal] = useState<ModalState>({ type: null, x:0, y:0, ei:-1, oi:-1 })
   const [hoveredCell, setHoveredCell] = useState<{x:number;y:number;tile:number} | null>(null)
+
+  // Undo/Redo stack
+  const [undoStack, setUndoStack] = useState<number[][]>([])
+  const [redoStack, setRedoStack] = useState<number[][]>([])
+  const pushUndo = (tiles: number[]) => {
+    setUndoStack(prev => [...prev.slice(-19), [...tiles]])
+    setRedoStack([])
+  }
+  const undo = () => {
+    if (!undoStack.length) return
+    const prev = undoStack[undoStack.length - 1]
+    setRedoStack(r => [...r, [...state.tiles]])
+    setUndoStack(u => u.slice(0, -1))
+    set({ tiles: prev })
+  }
+  const redo = () => {
+    if (!redoStack.length) return
+    const next = redoStack[redoStack.length - 1]
+    setUndoStack(u => [...u, [...state.tiles]])
+    setRedoStack(r => r.slice(0, -1))
+    set({ tiles: next })
+  }
+
+  // Flood fill tool
+  const floodFill = (startIdx: number, targetTile: number, replaceTile: number) => {
+    if (targetTile === replaceTile) return state.tiles
+    const tiles = [...state.tiles]
+    const w = map.width, h = map.height
+    const queue = [startIdx]
+    const visited = new Set<number>()
+    let count = 0
+    while (queue.length && count < 500) {
+      const idx = queue.shift()!
+      if (visited.has(idx) || tiles[idx] !== targetTile) continue
+      visited.add(idx)
+      tiles[idx] = replaceTile
+      count++
+      const x = idx % w, y = Math.floor(idx / w)
+      if (x > 0) queue.push(idx - 1)
+      if (x < w - 1) queue.push(idx + 1)
+      if (y > 0) queue.push(idx - w)
+      if (y < h - 1) queue.push(idx + w)
+    }
+    return tiles
+  }
+
+  // Multi-tile brush paint
+  const paintBrush = (cx: number, cy: number, tiles: number[]) => {
+    const size = state.brushSize
+    const half = Math.floor(size / 2)
+    const newTiles = [...tiles]
+    for (let dy = -half; dy < size - half; dy++) {
+      for (let dx = -half; dx < size - half; dx++) {
+        const nx = cx + dx, ny = cy + dy
+        if (nx >= 0 && nx < map.width && ny >= 0 && ny < map.height) {
+          newTiles[ny * map.width + nx] = state.brush
+        }
+      }
+    }
+    return newTiles
+  }
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
 
@@ -197,6 +266,17 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     ctx.strokeRect(selCol*PICKER_TILE+1, selRow*PICKER_TILE+1, PICKER_TILE-2, PICKER_TILE-2)
   }, [state.tilesetLoaded, state.brush, state.tilesetCols])
 
+  // Keyboard shortcuts (undo/redo)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey) { e.preventDefault(); redo() }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); redo() }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  })
+
   // Picker click
   const handlePickerClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = pickerRef.current; if (!canvas) return
@@ -212,9 +292,38 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
   // Cell click
   const handleCellClick = (i: number, x: number, y: number) => {
     if (state.layer === 'TILES') {
-      const tiles = [...state.tiles]
-      tiles[i] = state.brush
-      set({ tiles })
+      pushUndo(state.tiles)
+      if (state.tileTool === 'FILL') {
+        const filled = floodFill(i, state.tiles[i], state.brush)
+        set({ tiles: filled })
+      } else if (state.tileTool === 'RECT') {
+        if (!state.rectStart) {
+          set({ rectStart: { x, y } })
+        } else {
+          // Fill rectangle
+          const sx = Math.min(state.rectStart.x, x), ex = Math.max(state.rectStart.x, x)
+          const sy = Math.min(state.rectStart.y, y), ey = Math.max(state.rectStart.y, y)
+          const tiles = [...state.tiles]
+          for (let ry = sy; ry <= ey; ry++) {
+            for (let rx = sx; rx <= ex; rx++) {
+              tiles[ry * map.width + rx] = state.brush
+            }
+          }
+          set({ tiles, rectStart: null })
+        }
+      } else if (state.tileTool === 'ERASER') {
+        const tiles = paintBrush(x, y, state.tiles)
+        for (let dy = -Math.floor(state.brushSize/2); dy < state.brushSize - Math.floor(state.brushSize/2); dy++) {
+          for (let dx = -Math.floor(state.brushSize/2); dx < state.brushSize - Math.floor(state.brushSize/2); dx++) {
+            const nx = x + dx, ny = y + dy
+            if (nx >= 0 && nx < map.width && ny >= 0 && ny < map.height) tiles[ny * map.width + nx] = 0
+          }
+        }
+        set({ tiles })
+      } else {
+        // PAINT tool with brush size
+        set({ tiles: paintBrush(x, y, state.tiles) })
+      }
       return
     }
     if (state.layer === 'OBJECTS') {
@@ -246,8 +355,12 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
   // Paint on drag
   const handleCellMouseEnter = (i: number, x: number, y: number, tile: number) => {
     setHoveredCell({ x, y, tile })
-    if (state.painting && state.layer === 'TILES') {
-      const tiles = [...state.tiles]; tiles[i] = state.brush; set({ tiles })
+    if (state.painting && state.layer === 'TILES' && (state.tileTool === 'PAINT' || state.tileTool === 'ERASER')) {
+      if (state.tileTool === 'ERASER') {
+        const tiles = [...state.tiles]; tiles[i] = 0; set({ tiles })
+      } else {
+        set({ tiles: paintBrush(x, y, state.tiles) })
+      }
     }
   }
 
@@ -353,6 +466,45 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
           </label>
         ))}
       </div>
+
+      {/* Toolbar for TILES layer */}
+      {state.layer === 'TILES' && (
+        <div className="flex items-center gap-1.5 px-4 py-1.5 bg-[#111] border-b border-border shrink-0 flex-wrap">
+          <span className="text-muted-foreground text-xs shrink-0">TOOL:</span>
+          {(['PAINT','FILL','RECT','ERASER'] as TileTool[]).map(t => (
+            <button key={t} onClick={() => set({ tileTool: t, rectStart: null })}
+              className={cn("px-2 py-1 rounded text-xs transition-colors border",
+                state.tileTool===t ? 'bg-blue-900/60 border-blue-500 text-blue-300' : 'bg-[#222] border-[#444] text-muted-foreground hover:text-foreground')}>
+              {t === 'PAINT' ? '🖌️' : t === 'FILL' ? '🪣' : t === 'RECT' ? '⬜' : '✕'} {t}
+            </button>
+          ))}
+          <span className="text-muted-foreground text-xs ml-2 shrink-0">SIZE:</span>
+          {[1,2,3].map(s => (
+            <button key={s} onClick={() => set({ brushSize: s })}
+              className={cn("px-2 py-1 rounded text-xs border",
+                state.brushSize===s ? 'bg-blue-900/60 border-blue-500 text-blue-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
+              {s}x{s}
+            </button>
+          ))}
+          <span className="text-muted-foreground text-xs ml-2 shrink-0">|</span>
+          <button onClick={undo} disabled={!undoStack.length}
+            className="px-2 py-1 rounded text-xs bg-[#222] border border-[#444] text-muted-foreground hover:text-foreground disabled:opacity-30" title="Undo (Ctrl+Z)">
+            ↩ Undo
+          </button>
+          <button onClick={redo} disabled={!redoStack.length}
+            className="px-2 py-1 rounded text-xs bg-[#222] border border-[#444] text-muted-foreground hover:text-foreground disabled:opacity-30" title="Redo (Ctrl+Shift+Z)">
+            ↪ Redo
+          </button>
+          <button onClick={() => set({ showGrid: !state.showGrid })}
+            className={cn("px-2 py-1 rounded text-xs border ml-2",
+              state.showGrid ? 'bg-blue-900/40 border-blue-500 text-blue-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
+            ▦ Grid
+          </button>
+          {state.rectStart && (
+            <span className="text-xs text-yellow-400 ml-2">📐 Click end point...</span>
+          )}
+        </div>
+      )}
 
       {/* Toolbar for EVENTS layer */}
       {state.layer === 'EVENTS' && (
