@@ -307,21 +307,42 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     ctx.strokeRect(selCol*PICKER_TILE+1, selRow*PICKER_TILE+1, PICKER_TILE-2, PICKER_TILE-2)
   }, [state.tilesetLoaded, state.brush, state.tilesetCols])
 
-  // Auto-tiling: calculate bitmask for a tile position
-  // Checks 4 cardinal neighbors (N,E,S,W) to determine which tile variant to use
-  // Bitmask: bit0=N same, bit1=E same, bit2=S same, bit3=W same
+  // Auto-tiling: 8-neighbor bitmask for full corner support (47 unique tiles)
+  // Checks all 8 neighbors. Corners only count if both adjacent cardinals are same.
+  // This matches RPG Maker's full autotile system.
+  // Bit layout: 0=N,1=NE,2=E,3=SE,4=S,5=SW,6=W,7=NW
+  // Reduced to 47 unique cases since corners depend on cardinals.
   const getAutotileBitmask = (tiles: number[], x: number, y: number, group: AutotileGroup) => {
     const w = map.width, h = map.height
     const baseTiles = Object.values(group.tileMap).concat([group.base_tile])
     const isSame = (nx: number, ny: number) => {
-      if (nx < 0 || nx >= w || ny < 0 || ny >= h) return true // edges count as same
+      if (nx < 0 || nx >= w || ny < 0 || ny >= h) return true
       return baseTiles.includes(tiles[ny * w + nx])
     }
+    const n = isSame(x, y-1), e = isSame(x+1, y), s = isSame(x, y+1), w_ = isSame(x-1, y)
+    // Corners only matter if both adjacent cardinals are present
+    const ne = n && e && isSame(x+1, y-1)
+    const se = s && e && isSame(x+1, y+1)
+    const sw = s && w_ && isSame(x-1, y+1)
+    const nw = n && w_ && isSame(x-1, y-1)
+
+    // Build 8-bit mask
     let mask = 0
-    if (isSame(x, y - 1)) mask |= 1  // N
-    if (isSame(x + 1, y)) mask |= 2  // E
-    if (isSame(x, y + 1)) mask |= 4  // S
-    if (isSame(x - 1, y)) mask |= 8  // W
+    if (n)  mask |= 1;   if (ne) mask |= 2
+    if (e)  mask |= 4;   if (se) mask |= 8
+    if (s)  mask |= 16;  if (sw) mask |= 32
+    if (w_) mask |= 64;  if (nw) mask |= 128
+
+    // Fall back to 4-bit (cardinal only) if group only defines 16 tiles
+    const groupSize = Object.keys(group.tileMap).length
+    if (groupSize <= 16) {
+      let simple = 0
+      if (n)  simple |= 1
+      if (e)  simple |= 2
+      if (s)  simple |= 4
+      if (w_) simple |= 8
+      return simple
+    }
     return mask
   }
 
@@ -367,12 +388,100 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
     return newTiles
   }
 
-  // Keyboard shortcuts (undo/redo)
+  // Copy selection to clipboard
+  const copySelection = () => {
+    if (!state.selStart || !state.selEnd) return
+    const sx = Math.min(state.selStart.x, state.selEnd.x), ex = Math.max(state.selStart.x, state.selEnd.x)
+    const sy = Math.min(state.selStart.y, state.selEnd.y), ey = Math.max(state.selStart.y, state.selEnd.y)
+    const w = ex - sx + 1, h = ey - sy + 1
+    const tiles: number[] = []
+    for (let y = sy; y <= ey; y++) {
+      for (let x = sx; x <= ex; x++) {
+        tiles.push(state.tiles[y * map.width + x])
+      }
+    }
+    set({ clipboard: { tiles, width: w, height: h, sx, sy } })
+  }
+
+  // Paste clipboard at position
+  const pasteClipboard = (px: number, py: number) => {
+    if (!state.clipboard) return
+    pushUndo(state.tiles)
+    const tiles = [...state.tiles]
+    const { width: cw, height: ch, tiles: ct } = state.clipboard
+    for (let dy = 0; dy < ch; dy++) {
+      for (let dx = 0; dx < cw; dx++) {
+        const tx = px + dx, ty = py + dy
+        if (tx < map.width && ty < map.height) {
+          tiles[ty * map.width + tx] = ct[dy * cw + dx]
+        }
+      }
+    }
+    set({ tiles })
+  }
+
+  // Map room templates — pre-built layouts admins can stamp
+  const MAP_TEMPLATES = [
+    { name: '🏠 Room 5x5', w: 5, h: 5, gen: (wall: number, floor: number) => {
+      const t: number[] = []
+      for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++)
+        t.push((x === 0 || x === 4 || y === 0 || y === 4) ? wall : floor)
+      return t
+    }},
+    { name: '🏰 Room 8x6', w: 8, h: 6, gen: (wall: number, floor: number) => {
+      const t: number[] = []
+      for (let y = 0; y < 6; y++) for (let x = 0; x < 8; x++)
+        t.push((x === 0 || x === 7 || y === 0 || y === 5) ? wall : floor)
+      return t
+    }},
+    { name: '🌲 Forest Clearing', w: 7, h: 7, gen: (_wall: number, floor: number) => {
+      const t: number[] = []
+      for (let y = 0; y < 7; y++) for (let x = 0; x < 7; x++) {
+        const dist = Math.sqrt((x-3)**2 + (y-3)**2)
+        t.push(dist <= 2.5 ? floor : floor + 1) // center clear, edges = different tile
+      }
+      return t
+    }},
+    { name: '➡️ Corridor H', w: 8, h: 3, gen: (wall: number, floor: number) => {
+      const t: number[] = []
+      for (let y = 0; y < 3; y++) for (let x = 0; x < 8; x++)
+        t.push(y === 1 ? floor : wall)
+      return t
+    }},
+    { name: '⬇️ Corridor V', w: 3, h: 8, gen: (wall: number, floor: number) => {
+      const t: number[] = []
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 3; x++)
+        t.push(x === 1 ? floor : wall)
+      return t
+    }},
+  ]
+
+  const stampTemplate = (tmpl: typeof MAP_TEMPLATES[0], px: number, py: number) => {
+    pushUndo(state.tiles)
+    const tiles = [...state.tiles]
+    const generated = tmpl.gen(state.brush, state.brush > 0 ? state.brush - 1 : 0)
+    for (let dy = 0; dy < tmpl.h; dy++) {
+      for (let dx = 0; dx < tmpl.w; dx++) {
+        const tx = px + dx, ty = py + dy
+        if (tx < map.width && ty < map.height) {
+          tiles[ty * map.width + tx] = generated[dy * tmpl.w + dx]
+        }
+      }
+    }
+    set({ tiles })
+  }
+
+  // Keyboard shortcuts (undo/redo, copy/paste)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey) { e.preventDefault(); redo() }
       if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); redo() }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') { e.preventDefault(); copySelection() }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v' && state.clipboard) {
+        e.preventDefault()
+        if (hoveredCell) pasteClipboard(hoveredCell.x, hoveredCell.y)
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -561,6 +670,13 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
 
         <div className="ml-auto flex items-center gap-2">
           {saveMsg && <span className="text-xs font-medium">{saveMsg}</span>}
+          <Button size="sm" variant="outline" onClick={() => {
+            // Test play: open game in new tab, teleport player to this map
+            const gameUrl = process.env.NEXT_PUBLIC_GAME_URL || window.location.origin
+            window.open(`${gameUrl}?testmap=${map.id}`, '_blank')
+          }} title="Test play this map in a new tab">
+            ▶️ Test
+          </Button>
           <Button size="sm" onClick={save} disabled={saving}>
             <Save className="w-3.5 h-3.5 mr-1" />{saving ? 'Saving…' : 'Save'}
           </Button>
@@ -682,7 +798,39 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
           {state.rectStart && <span className="text-[10px] text-yellow-400 ml-1">📐 Click end...</span>}
           {state.tileTool === 'EYEDROP' && <span className="text-[10px] text-cyan-400 ml-1">💉 Click to pick tile</span>}
           {state.tileTool === 'PASSABILITY' && <span className="text-[10px] text-red-400 ml-1">🚧 Click: walk→block→trigger</span>}
-          {state.tileTool === 'AUTOTILE' && <span className="text-[10px] text-green-400 ml-1">🧩 Smart borders auto-calculated</span>}
+          {state.tileTool === 'AUTOTILE' && <span className="text-[10px] text-green-400 ml-1">🧩 Smart borders</span>}
+        </div>
+      )}
+
+      {/* Second toolbar: Templates + Copy/Paste (TILES layer) */}
+      {state.layer === 'TILES' && (
+        <div className="flex items-center gap-1 px-4 py-1 bg-[#0d0d0d] border-b border-border/50 shrink-0 flex-wrap">
+          <span className="text-muted-foreground text-[10px] shrink-0">STAMP:</span>
+          {MAP_TEMPLATES.map((tmpl, i) => (
+            <button key={i} onClick={() => {
+              if (hoveredCell) stampTemplate(tmpl, hoveredCell.x, hoveredCell.y)
+              else alert('Hover over a tile first, then click a stamp')
+            }}
+              className="px-1.5 py-0.5 rounded text-[10px] bg-[#222] border border-[#444] text-muted-foreground hover:text-foreground hover:bg-[#333]"
+              title={`${tmpl.name} (${tmpl.w}x${tmpl.h}) — stamps at hovered position`}>
+              {tmpl.name}
+            </button>
+          ))}
+          <span className="text-[#333] mx-1">|</span>
+          <button onClick={copySelection} disabled={!state.selStart || !state.selEnd}
+            className="px-1.5 py-0.5 rounded text-[10px] bg-[#222] border border-[#444] text-muted-foreground hover:text-foreground disabled:opacity-30"
+            title="Copy selected region (Ctrl+C)">
+            📋 Copy
+          </button>
+          <button onClick={() => { if (hoveredCell && state.clipboard) pasteClipboard(hoveredCell.x, hoveredCell.y) }}
+            disabled={!state.clipboard}
+            className="px-1.5 py-0.5 rounded text-[10px] bg-[#222] border border-[#444] text-muted-foreground hover:text-foreground disabled:opacity-30"
+            title="Paste at hover position (Ctrl+V)">
+            📌 Paste {state.clipboard ? `(${state.clipboard.width}x${state.clipboard.height})` : ''}
+          </button>
+          {state.clipboard && (
+            <span className="text-[9px] text-cyan-400">✂️ Clipboard: {state.clipboard.width}x{state.clipboard.height}</span>
+          )}
         </div>
       )}
 
