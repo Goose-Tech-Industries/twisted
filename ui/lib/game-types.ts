@@ -212,6 +212,7 @@ export interface BattleSettings {
   // Session 23
   // Session 24
   // Final 8
+  enableStaggerSystem?: boolean
   enableBreakShield?: boolean
   enableOneMore?: boolean
   enableTurnManipulation?: boolean
@@ -333,6 +334,12 @@ export interface BattleCombatant {
 
   // Session 15: Summon
   // Session 24
+  // Stagger (FF7R)
+  staggerGauge?: number
+  staggerThreshold?: number
+  isStaggered?: boolean
+  staggerMult?: number | null
+
   // Final 8
   shieldPoints?: number | null
   maxShieldPoints?: number | null

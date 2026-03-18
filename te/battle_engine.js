@@ -122,6 +122,9 @@ async function loadBattleSettings(db) {
         // Session 24
         // Combo + Action Commands
         // Final 8
+        enable_stagger_system: true,
+        stagger_decay_per_turn: 10,
+        stagger_base_increase: 5,
         enable_break_shield: true,
         break_stun_turns: 1,
         break_damage_bonus: 0.50,
@@ -830,6 +833,51 @@ function tickBreakState(combatant) {
 function getBreakDamageBonus(target, settings) {
     if (!target._isBroken) return 1.0;
     return 1.0 + (parseFloat(settings?.break_damage_bonus) || 0.50);
+}
+
+// 1b. STAGGER GAUGE (FF7 Remake) — pressure builds from all damage, stagger = bonus window
+function applyStaggerPressure(battle, target, damage, result) {
+    if (!battle._settings?.enable_stagger_system) return 1.0;
+    if (!target._staggerThreshold || target._staggerThreshold <= 0) return 1.0;
+
+    let mult = 1.0;
+
+    if (target._isStaggered) {
+        // During stagger: damage multiplier increases with each hit
+        target._staggerMult = Math.min(3.0, (target._staggerMult || target._staggerBaseMult || 1.50) + 0.10);
+        mult = target._staggerMult;
+        result.log.push(`💫 STAGGERED! Damage x${target._staggerMult.toFixed(1)}!`);
+        result.actions.push({ type: 'stagger_hit', target: target.name, mult: target._staggerMult });
+    } else {
+        // Build pressure
+        const increase = (parseFloat(battle._settings.stagger_base_increase) || 5) + Math.floor(damage / 10);
+        target._staggerGauge = (target._staggerGauge || 0) + increase;
+        if (target._staggerGauge >= target._staggerThreshold) {
+            // STAGGERED!
+            target._isStaggered = true;
+            target._staggerTurnsLeft = target._staggerDuration || 3;
+            target._staggerMult = target._staggerBaseMult || 1.50;
+            target._staggerGauge = 0;
+            result.log.push(`💥 ${target.name} is STAGGERED!`);
+            result.actions.push({ type: 'stagger', target: target.name, duration: target._staggerTurnsLeft });
+        }
+    }
+    return mult;
+}
+
+function tickStagger(combatant, settings) {
+    if (combatant._isStaggered) {
+        combatant._staggerTurnsLeft--;
+        if (combatant._staggerTurnsLeft <= 0) {
+            combatant._isStaggered = false;
+            combatant._staggerMult = null;
+            combatant._staggerGauge = 0;
+        }
+    } else if (combatant._staggerGauge > 0) {
+        // Decay pressure when not being hit
+        const decay = parseFloat(settings?.stagger_decay_per_turn) || 10;
+        combatant._staggerGauge = Math.max(0, combatant._staggerGauge - decay);
+    }
 }
 
 // 2. ONE MORE + BATON PASS (Persona)
@@ -3623,6 +3671,19 @@ class BattleState {
     // Final 8 mechanics init
     async initFinal8(db) {
         for (const c of Object.values(this.combatants)) {
+            // Stagger (FF7R)
+            if (this._settings?.enable_stagger_system && c.isAI) {
+                try {
+                    const [npc] = await db.query('SELECT stagger_threshold, stagger_duration, stagger_damage_mult FROM game_npcs WHERE char_id=?', [c.charId]);
+                    if (npc.length && npc[0].stagger_threshold > 0) {
+                        c._staggerThreshold = npc[0].stagger_threshold;
+                        c._staggerDuration = npc[0].stagger_duration || 3;
+                        c._staggerBaseMult = parseFloat(npc[0].stagger_damage_mult) || 1.50;
+                        c._staggerGauge = 0;
+                        c._isStaggered = false;
+                    }
+                } catch {}
+            }
             // Break/Shield
             if (this._settings?.enable_break_shield && c.isAI) {
                 try {
@@ -4492,6 +4553,11 @@ class BattleState {
             intimidated: c._intimidated ? { turnsLeft: c._intimidated.turnsLeft } : null,
             rallied: c._rallied ? { turnsLeft: c._rallied.turnsLeft, atkBonus: c._rallied.atkBonus } : null,
             tauntBonus: c._tauntBonus ? { turnsLeft: c._tauntBonus.turnsLeft } : null,
+            // Stagger (FF7R)
+            staggerGauge: c._staggerGauge || 0,
+            staggerThreshold: c._staggerThreshold || 0,
+            isStaggered: c._isStaggered || false,
+            staggerMult: c._staggerMult || null,
             // Final 8
             shieldPoints: c._shieldPoints ?? null,
             maxShieldPoints: c._maxShieldPoints ?? null,
@@ -4636,6 +4702,7 @@ class BattleState {
                 // Session 23
                 // Session 24
                 // Final 8
+                enableStaggerSystem:     this._settings.enable_stagger_system,
                 enableBreakShield:       this._settings.enable_break_shield,
                 enableOneMore:           this._settings.enable_one_more,
                 enableTurnManipulation:  this._settings.enable_turn_manipulation,
@@ -6459,6 +6526,10 @@ async function resolveDamage(db, battle, actor, target, effects, actionName, res
     // Break damage bonus
     damage = Math.floor(damage * getBreakDamageBonus(target, battle._settings));
 
+    // Stagger (FF7R) — pressure builds, staggered = bonus multiplier
+    const staggerMult = applyStaggerPressure(battle, target, damage, result);
+    if (staggerMult > 1.0) damage = Math.floor(damage * staggerMult);
+
     // Weapon Triangle (Fire Emblem)
     if (battle._settings?.enable_weapon_triangle && actor._weaponType && target._weaponType) {
         const triBonus = await getWeaponTriangleBonus(db, actor._weaponType, target._weaponType, battle._settings);
@@ -7509,6 +7580,13 @@ async function processStatusEffects(db, battle) {
     // Session 15: Summon duration ticks
     if (battle._settings?.enable_summons) {
         tickSummons(battle, tickResult);
+    }
+
+    // Stagger tick
+    if (battle._settings?.enable_stagger_system) {
+        for (const c of Object.values(battle.combatants)) {
+            if (c.currentHp > 0) tickStagger(c, battle._settings);
+        }
     }
 
     // Combo AP regen

@@ -1452,6 +1452,24 @@ function CombatantCard({ combatant, isActive, color, isTargeted, onSelect }: {
         </div>
       )}
 
+      {/* Stagger Gauge (FF7R) */}
+      {(combatant.staggerThreshold ?? 0) > 0 && (
+        <div className="flex items-center gap-1 text-[10px] mt-0.5">
+          <span className={combatant.isStaggered ? "text-[oklch(0.65_0.20_60)] animate-pulse" : "text-muted-foreground"}>💫</span>
+          <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className={cn("h-full transition-all", combatant.isStaggered ? "bg-[oklch(0.65_0.20_60)] animate-pulse" : "bg-[oklch(0.55_0.18_280)]")}
+              style={{ width: `${combatant.isStaggered ? 100 : Math.min(100, ((combatant.staggerGauge || 0) / (combatant.staggerThreshold || 1)) * 100)}%` }}
+            />
+          </div>
+          {combatant.isStaggered ? (
+            <span className="text-[oklch(0.65_0.20_60)] font-bold">x{combatant.staggerMult?.toFixed(1)}</span>
+          ) : (
+            <span className="tabular-nums text-muted-foreground">{combatant.staggerGauge || 0}/{combatant.staggerThreshold}</span>
+          )}
+        </div>
+      )}
+
       {/* Break/Shield (Octopath) */}
       {combatant.shieldPoints != null && combatant.maxShieldPoints != null && combatant.maxShieldPoints > 0 && (
         <div className="flex items-center gap-1 mt-0.5 text-[10px]">
