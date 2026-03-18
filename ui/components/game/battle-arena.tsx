@@ -60,6 +60,10 @@ export function BattleArena() {
   const [showLimbSelector, setShowLimbSelector] = useState(false)
   const [flavorText, setFlavorText] = useState('')
 
+  // Combo input state (Legaia-style)
+  const [comboInputs, setComboInputs] = useState<string[]>([])
+  const [showComboInput, setShowComboInput] = useState(false)
+
   // Session 11: Sig Tech Discovery modal state
   const [sigTechName, setSigTechName] = useState('')
   const [sigTechType, setSigTechType] = useState<'ki_attack' | 'physical' | 'ki_heal'>('ki_attack')
@@ -714,6 +718,60 @@ export function BattleArena() {
                   </button>
                 )
               })}
+            </div>
+          </div>
+        )}
+
+        {/* Combo Input System (Legaia-style) */}
+        {battle.settings?.enableComboInput && battle.isMyTurn && !selectedCommand && (
+          <div className="px-4 pt-2">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs font-medium">Combo Input</span>
+              <span className="text-[10px] text-muted-foreground">
+                AP: {me?.currentAp ?? 0}/{me?.maxAp ?? 6}
+              </span>
+              {comboInputs.length > 0 && (
+                <span className="text-xs text-primary">{comboInputs.map(i => ({H:'⬆️',L:'⬇️',R:'➡️',U:'⬆️'}[i] || i)).join(' ')}</span>
+              )}
+            </div>
+            <div className="flex gap-1 items-center">
+              {['H','L','R'].map(dir => (
+                <Button key={dir} variant="outline" size="sm"
+                  className="w-10 h-10 text-lg p-0"
+                  disabled={comboInputs.length >= (me?.maxAp ?? 6)}
+                  onClick={() => setComboInputs(prev => [...prev, dir])}
+                >
+                  {{H:'⬆️',L:'⬇️',R:'➡️'}[dir]}
+                </Button>
+              ))}
+              <Button variant="outline" size="sm" className="text-xs"
+                onClick={() => setComboInputs(prev => prev.slice(0, -1))}
+                disabled={comboInputs.length === 0}
+              >
+                Undo
+              </Button>
+              <Button size="sm" className="text-xs bg-primary"
+                disabled={comboInputs.length === 0 || isAnimating}
+                onClick={() => {
+                  if (socket && battle) {
+                    socket.emit('battle_action', {
+                      battleId: battle.battleId, comboInput: comboInputs.join(','),
+                      ...(selectedTarget != null && { targetId: selectedTarget }),
+                      ...(targetLimb != null && { targetLimb }),
+                    })
+                    setComboInputs([])
+                    setIsAnimating(true)
+                    setTimeout(() => setIsAnimating(false), 800)
+                  }
+                }}
+              >
+                Execute! ({comboInputs.length} hits)
+              </Button>
+              <Button variant="ghost" size="sm" className="text-xs text-muted-foreground"
+                onClick={() => setComboInputs([])}
+              >
+                Clear
+              </Button>
             </div>
           </div>
         )}
@@ -1391,6 +1449,21 @@ function CombatantCard({ combatant, isActive, color, isTargeted, onSelect }: {
           {combatant.tauntBonus && (
             <span className="text-[9px] px-1 py-0 bg-[oklch(0.65_0.20_60)]/20 text-[oklch(0.65_0.20_60)] rounded">⚔️ Empowered</span>
           )}
+        </div>
+      )}
+
+      {/* Combo AP bar */}
+      {combatant.currentAp != null && combatant.maxAp != null && combatant.maxAp > 0 && (
+        <div className="flex items-center gap-1 text-[10px] mt-0.5">
+          <span className="text-[oklch(0.65_0.20_60)]">🎮</span>
+          <div className="flex gap-0.5">
+            {Array.from({ length: combatant.maxAp }, (_, i) => (
+              <span key={i} className={cn("w-1.5 h-3 rounded-sm",
+                i < (combatant.currentAp || 0) ? "bg-[oklch(0.65_0.20_60)]" : "bg-muted"
+              )} />
+            ))}
+          </div>
+          <span className="text-muted-foreground tabular-nums">{combatant.currentAp}/{combatant.maxAp}</span>
         </div>
       )}
 

@@ -9,6 +9,7 @@ import { BattleArena } from "./battle-arena"
 import { MapPanel } from "./map-panel"
 import { OghamsPanel } from "./oghams-panel"
 import { PartyPanel } from "./party-panel"
+import { CompanionPanel } from "./companion-panel"
 import { GuildPanel } from "./guild-panel"
 import { DialogueOverlay } from "./dialogue-overlay"
 import { NotificationToast } from "./notification-toast"
@@ -51,6 +52,8 @@ export function GameLayout() {
         return <OghamsPanel />
       case 'party':
         return <PartyPanel />
+      case 'companions':
+        return <CompanionPanel />
       case 'guild':
         return <GuildPanel />
       case 'bestiary':

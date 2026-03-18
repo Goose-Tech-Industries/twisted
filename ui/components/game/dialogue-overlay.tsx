@@ -40,10 +40,25 @@ export function DialogueOverlay() {
     const choice = dialogue.choices?.find(c => c.id === choiceId)
     if (!choice || !socket) return
 
+    // If this choice has an original server choiceId, send it as npc_menu_choice
+    if (choice.choiceId) {
+      // For 'talk', keep the dialogue open for free-form chat
+      if (choice.choiceId === 'talk') {
+        setConversationHistory(prev => [...prev, { role: 'player', text: choice.label }])
+        setIsTyping(true)
+      }
+      socket.emit('npc_menu_choice', { choiceId: choice.choiceId })
+      // Close dialogue for choices that don't need follow-up conversation
+      if (choice.choiceId !== 'talk') {
+        dispatch({ type: 'SET_DIALOGUE', payload: null })
+        setConversationHistory([])
+      }
+      return
+    }
+
+    // Legacy fallback: send as NPC talk
     setConversationHistory(prev => [...prev, { role: 'player', text: choice.label }])
     setIsTyping(true)
-
-    // Send to server as NPC talk
     const character = state.character
     if (character) {
       socket.emit('npc_talk', { x: character.x, y: character.y, message: choice.label })

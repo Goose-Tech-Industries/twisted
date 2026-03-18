@@ -688,11 +688,18 @@ router.post('/scheduler/run-now', requireStaff, async (req, res) => {
 // returns the reply + metadata so the admin can verify it works.
 router.post('/admin/test-ai', requireStaff, async (req, res) => {
     try {
-        const [rows] = await db.query(
-            "SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'ai_%'"
-        );
+        // Check both system_settings (legacy) and game_settings (admin panel)
         const c = {};
-        for (const r of rows) c[r.setting_key] = r.setting_value;
+        try {
+            const [sysRows] = await db.query(
+                "SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'ai_%'");
+            for (const r of sysRows) c[r.setting_key] = r.setting_value;
+        } catch {}
+        try {
+            const [gameRows] = await db.query(
+                "SELECT setting_key, setting_value FROM game_settings WHERE setting_key LIKE 'ai_%'");
+            for (const r of gameRows) c[r.setting_key] = r.setting_value;
+        } catch {}
 
         const provider    = c.ai_provider    || 'disabled';
         const apiKey      = c.ai_api_key     || '';

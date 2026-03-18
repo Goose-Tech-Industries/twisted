@@ -25,7 +25,7 @@ interface GameMap {
   tiles_json: string; collisions_json: string; objects_json: string; anims_json: string
 }
 interface MapEvent  { x: number; y: number; type: string; data?: string | number; terrain?: string; trigger?: string; conditions?: unknown[]; actions?: unknown[] }
-interface MapObject { x: number; y: number; preset: string; icon: string; label: string; type: string; blocking: boolean; light?: { radius: number; color: string; flicker: boolean } | null; flagKey?: string | null; sprite_url?: string | null; sprite_w?: number; sprite_h?: number; anim_frames?: string[] | null; anim_fps?: number }
+interface MapObject { x: number; y: number; preset: string; icon: string; label: string; type: string; blocking: boolean; light?: { radius: number; color: string; flicker: boolean } | null; flagKey?: string | null; sprite_url?: string | null; sprite_w?: number; sprite_h?: number; anim_frames?: string[] | null; anim_fps?: number; battle_hp?: number | null; battle_destroy_type?: string | null; battle_destroy_damage?: number | null; battle_destroy_radius?: number | null; battle_cover_value?: number | null }
 interface MapAnim   { trigger: number; frames: number[]; fps: number }
 interface NPC       { id: number; name: string; icon: string; is_enemy: boolean }
 interface Shop      { id: number; name: string }
@@ -605,9 +605,9 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
 
       {modal.type === 'object-flags' && modal.oi >= 0 && (
         <ObjectFlagsModal obj={state.objects[modal.oi]} x={modal.x} y={modal.y}
-          onSave={(flagKey, lightRadius) => {
+          onSave={(flagKey, lightRadius, battleProps) => {
             const objs = [...state.objects]
-            objs[modal.oi] = { ...objs[modal.oi], flagKey }
+            objs[modal.oi] = { ...objs[modal.oi], flagKey, ...battleProps }
             if (objs[modal.oi].light && lightRadius !== undefined) objs[modal.oi].light!.radius = lightRadius
             set({ objects: objs })
             setModal({type:null,x:0,y:0,ei:-1,oi:-1})
@@ -671,23 +671,83 @@ function TerrainModal({ modal, existing, onPlace, onRemove, onClose }: { modal:M
 }
 
 // ── Object Flags Modal ────────────────────────────────────────────
-function ObjectFlagsModal({ obj, x, y, onSave, onClose }: { obj:MapObject; x:number; y:number; onSave:(flagKey:string|null,r?:number)=>void; onClose:()=>void }) {
+const BATTLE_DESTROY_TYPES = [
+  { value: '', label: 'None (not destructible)' },
+  { value: 'fire_aoe', label: 'Fire AoE (explosion)' },
+  { value: 'crush', label: 'Crush (damage on tile)' },
+  { value: 'remove_cover', label: 'Remove Cover (just breaks)' },
+]
+
+function ObjectFlagsModal({ obj, x, y, onSave, onClose }: { obj:MapObject; x:number; y:number; onSave:(flagKey:string|null,r?:number,battleProps?:Partial<MapObject>)=>void; onClose:()=>void }) {
   const [flagKey, setFlagKey]   = useState(obj.flagKey || '')
   const [radius, setRadius]     = useState(obj.light?.radius || 3)
   const isLight = obj.type === 'LIGHT'
+  const isDestructible = ['BARREL','CRATE','CHANDELIER','POT','TORCH','BOULDER'].includes(obj.preset?.toUpperCase() || '')
+
+  const [battleHp, setBattleHp] = useState(obj.battle_hp ?? '')
+  const [destroyType, setDestroyType] = useState(obj.battle_destroy_type || '')
+  const [destroyDmg, setDestroyDmg] = useState(obj.battle_destroy_damage ?? '')
+  const [destroyRadius, setDestroyRadius] = useState(obj.battle_destroy_radius ?? '')
+  const [coverValue, setCoverValue] = useState(obj.battle_cover_value ?? '')
+
   return (
     <Modal title={`${obj.icon} ${obj.label} at (${x}, ${y})`} onClose={onClose}>
       <p className="text-xs text-muted-foreground mb-3">Edit this object's world flag link{isLight?' and light settings':''}.</p>
       <label className="text-xs text-muted-foreground block mb-1">Flag Key <span className="text-muted-foreground/60">(leave blank = always visible)</span></label>
       <Input value={flagKey} onChange={e=>setFlagKey(e.target.value)} placeholder={`e.g. lantern_${x}_${y}`} className="mb-1" />
-      <p className="text-[10px] text-muted-foreground mb-3">To toggle: add a SCRIPT event → SET_MAP_FLAG {"{"} key: "{flagKey||`lantern_${x}_${y}`}", value: false {"}"}</p>
+      <p className="text-[10px] text-muted-foreground mb-3">To toggle: add a SCRIPT event → SET_MAP_FLAG {"{"} key: &quot;{flagKey||`lantern_${x}_${y}`}&quot;, value: false {"}"}</p>
       {isLight && (
         <div className="mb-3"><label className="text-xs text-muted-foreground block mb-1">Light Radius (tiles)</label>
         <Input type="number" value={radius} step={0.5} min={0.5} max={20} onChange={e=>setRadius(parseFloat(e.target.value)||3)} className="w-24" /></div>
       )}
-      <div className="flex gap-2 justify-end">
+
+      {/* Battle Object Properties */}
+      {(isDestructible || obj.blocking) && (
+        <div className="border-t border-border pt-3 mt-3">
+          <p className="text-xs font-medium mb-2">Battle Grid Properties</p>
+          <p className="text-[10px] text-muted-foreground mb-2">Custom overrides for when this object appears on a battle grid. Leave blank to use defaults.</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-muted-foreground block mb-0.5">Battle HP</label>
+              <Input type="number" value={battleHp} min={1} max={999} onChange={e=>setBattleHp(e.target.value ? parseInt(e.target.value) : '')} placeholder="Default" className="h-7 text-xs" />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground block mb-0.5">Cover Value %</label>
+              <Input type="number" value={coverValue} min={0} max={100} onChange={e=>setCoverValue(e.target.value ? parseInt(e.target.value) : '')} placeholder="Default" className="h-7 text-xs" />
+            </div>
+            <div className="col-span-2">
+              <label className="text-[10px] text-muted-foreground block mb-0.5">On Destroy Effect</label>
+              <select value={destroyType} onChange={e=>setDestroyType(e.target.value)} className="w-full h-7 text-xs rounded border border-border bg-background px-2">
+                {BATTLE_DESTROY_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+            </div>
+            {(destroyType === 'fire_aoe' || destroyType === 'crush') && (
+              <>
+                <div>
+                  <label className="text-[10px] text-muted-foreground block mb-0.5">Destroy Damage</label>
+                  <Input type="number" value={destroyDmg} min={0} max={999} onChange={e=>setDestroyDmg(e.target.value ? parseInt(e.target.value) : '')} placeholder="Default" className="h-7 text-xs" />
+                </div>
+                {destroyType === 'fire_aoe' && (
+                  <div>
+                    <label className="text-[10px] text-muted-foreground block mb-0.5">AoE Radius</label>
+                    <Input type="number" value={destroyRadius} min={0} max={5} onChange={e=>setDestroyRadius(e.target.value ? parseInt(e.target.value) : '')} placeholder="Default" className="h-7 text-xs" />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2 justify-end mt-3">
         <Button variant="outline" onClick={onClose}>Cancel</Button>
-        <Button onClick={() => onSave(flagKey||null, isLight?radius:undefined)}>Save</Button>
+        <Button onClick={() => onSave(flagKey||null, isLight?radius:undefined, {
+          battle_hp: battleHp ? Number(battleHp) : null,
+          battle_destroy_type: destroyType || null,
+          battle_destroy_damage: destroyDmg ? Number(destroyDmg) : null,
+          battle_destroy_radius: destroyRadius ? Number(destroyRadius) : null,
+          battle_cover_value: coverValue ? Number(coverValue) : null,
+        })}>Save</Button>
       </div>
     </Modal>
   )

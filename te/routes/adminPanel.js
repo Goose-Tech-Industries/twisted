@@ -729,6 +729,26 @@ router.get('/character-appearance/:charId', requireStaff, async (req, res) => {
     } catch(e) { res.json({ success: false, message: e.message }); }
 });
 // =================================================================
+// TEMPLATE INSTALLER
+// =================================================================
+router.get('/templates', requireStaff, async (req, res) => {
+    try {
+        const TemplateInstaller = require('../template_installer');
+        const templates = await TemplateInstaller.list(db);
+        const active = await TemplateInstaller.getActive(db);
+        res.json({ success: true, templates, active });
+    } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+});
+
+router.post('/templates/:id/install', requireStaff, async (req, res) => {
+    try {
+        const TemplateInstaller = require('../template_installer');
+        const result = await TemplateInstaller.install(db, parseInt(req.params.id));
+        res.json(result);
+    } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+});
+
+// =================================================================
 // BATTLE CONFIG MEGA-PANEL — All settings + terminology in one call
 // =================================================================
 router.get('/battle-config', requireStaff, async (req, res) => {
@@ -878,7 +898,45 @@ router.get('/battle-config', requireStaff, async (req, res) => {
             }
         }
 
-        res.json({ success: true, categories, terminology: terms, allSettings: settingsMap });
+        // Load entity data for sub-panels
+        const entities = {};
+        const entityQueries = {
+            body_types: 'SELECT id, name, label, icon FROM game_body_types ORDER BY id',
+            limb_zones: 'SELECT id, body_type_id, zone_key, label, icon, hp_pct, called_shot_penalty FROM game_limb_zones ORDER BY body_type_id, sort_order',
+            bleed_tiers: 'SELECT * FROM game_bleed_tiers ORDER BY id',
+            fighting_styles: 'SELECT id, name, label, icon, style_type, max_rank FROM game_fighting_styles ORDER BY id',
+            style_ranks: 'SELECT style_id, rank_num, label, icon, wins_required FROM game_fighting_style_ranks ORDER BY style_id, rank_num',
+            weather_effects: 'SELECT id, name, label, icon, visibility FROM game_weather_effects WHERE active=1 ORDER BY id',
+            elemental_reactions: 'SELECT id, element_a, element_b, reaction_name, icon, damage_bonus FROM game_elemental_reactions WHERE active=1',
+            status_combos: 'SELECT id, status_a, status_b, combo_name, icon, effect_type FROM game_status_combos WHERE active=1',
+            alignment_tiers: 'SELECT id, name, label, icon, min_value, max_value, color FROM game_alignment_tiers ORDER BY min_value DESC',
+            alignment_actions: 'SELECT id, action_key, label, shift_amount FROM game_alignment_actions WHERE active=1 ORDER BY shift_amount DESC',
+            battle_rules: 'SELECT id, name, trigger_event, target_filter, enabled, priority FROM game_battle_rules ORDER BY priority DESC',
+            win_conditions: 'SELECT id, name, condition_type, icon, description FROM game_win_conditions ORDER BY id',
+            afterlife_worlds: 'SELECT id, name, label, icon, type, stay_duration_days FROM game_afterlife_worlds WHERE active=1',
+            transformations: 'SELECT id, name, icon, trigger_type, duration, level_required FROM game_transformations WHERE active=1',
+            traps: 'SELECT id, name, icon, trigger_type, damage_formula FROM game_battle_traps WHERE active=1',
+            narrations: 'SELECT id, action_type, weapon_type, element, SUBSTRING(text_template,1,60) AS preview FROM game_battle_narrations WHERE active=1 ORDER BY action_type',
+            training_config: 'SELECT id, name, label, training_type, daily_limit, allowed_race_ids, allowed_class_ids FROM game_training_config WHERE active=1',
+            sig_levels: 'SELECT level, damage_pct, cost_pct, ability_slots, xp_required FROM game_signature_levels ORDER BY level',
+            sig_abilities: 'SELECT id, name, label, icon, category, min_level FROM game_signature_abilities ORDER BY min_level',
+            flavor_texts: 'SELECT id, category, SUBSTRING(text,1,50) AS preview, bonus_pct, is_template FROM game_flavor_texts WHERE active=1 LIMIT 20',
+            flavor_keywords: 'SELECT id, keyword, bonus_pct, category, terrain_match FROM game_flavor_keywords WHERE active=1',
+            tournaments: 'SELECT id, name, status, type, max_participants FROM game_tournaments ORDER BY created_at DESC LIMIT 10',
+        };
+        for (const [key, query] of Object.entries(entityQueries)) {
+            try { const [rows] = await db.query(query); entities[key] = rows; } catch { entities[key] = []; }
+        }
+
+        // NPC masters
+        try {
+            const [masters] = await db.query(
+                `SELECT id, name, icon, teaches_style_id, teaches_sig_tech_id, unlocks_sig_tech_creation, training_gain_pct
+                 FROM game_npcs WHERE is_master=1 ORDER BY name`);
+            entities.masters = masters;
+        } catch { entities.masters = []; }
+
+        res.json({ success: true, categories, terminology: terms, allSettings: settingsMap, entities });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
     }
@@ -962,6 +1020,7 @@ const ENTITY_TABLE_MAP = {
     // ── Session 23: Final Systems ─────────────────────────────────
     // ── Session 24: Alignment + Battle Rules ──────────────────────
     // ── Session 25: Training ──────────────────────────────────────
+    template:       'game_templates',                // TemplatePanel
     terminology:    'game_terminology',             // TerminologyPanel
     training_config:'game_training_config',       // TrainingConfigPanel
     alignment_tier: 'game_alignment_tiers',      // AlignmentTierPanel
@@ -1006,7 +1065,7 @@ function getTable(type) {
 function getPk(type) { return ENTITY_PK_MAP[type] || 'id'; }
 
 // ── type union used by the three generic CRUD routes below ────────
-const ENTITY_TYPES = 'item|skill|npc|map|quest|class|race|ogham|ogham_family|shop|arena|artifact|status|feat|loot_table|spawn|battle_cmd|background|stat|shop_supply|artifact_power|quest_board|region|faction|scheduled_task|craft_recipe|auction_listing|limit|body_type|limb_zone|battle_knockout|flavor_text|flavor_keyword|bleed_tier|sig_level|sig_ability|sig_tech|narration|premade_sig|training_log|fighting_style|style_rank|char_style|tournament|tourney_match|tourney_history|terminology|training_config|alignment_tier|alignment_action|battle_rule|elem_reaction|status_combo|afterlife|death_penalty|transformation|link_attack|trap|weather|boss_phase|win_condition|quest_battle_override';
+const ENTITY_TYPES = 'item|skill|npc|map|quest|class|race|ogham|ogham_family|shop|arena|artifact|status|feat|loot_table|spawn|battle_cmd|background|stat|shop_supply|artifact_power|quest_board|region|faction|scheduled_task|craft_recipe|auction_listing|limit|body_type|limb_zone|battle_knockout|flavor_text|flavor_keyword|bleed_tier|sig_level|sig_ability|sig_tech|narration|premade_sig|training_log|fighting_style|style_rank|char_style|tournament|tourney_match|tourney_history|template|terminology|training_config|alignment_tier|alignment_action|battle_rule|elem_reaction|status_combo|afterlife|death_penalty|transformation|link_attack|trap|weather|boss_phase|win_condition|quest_battle_override';
 
 // GET /admin-panel/:type — list all entities of a type
 router.get(`/:type(${ENTITY_TYPES})`, requireStaff, async (req, res) => {

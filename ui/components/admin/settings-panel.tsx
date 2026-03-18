@@ -176,11 +176,31 @@ function SettingCard({ row, data, onSave }: {
 // ── AI Brain tab ───────────────────────────────────────────────────
 function AiTab({ data, onSave }: { data: Record<string, string>; onSave: (k: string, v: string) => Promise<void> }) {
   const get = (k: string, def = '') => data[k] !== undefined ? String(data[k]) : def
-  const provider = get('ai_provider', 'disabled')
+  const [provider, setProvider] = useState(get('ai_provider', 'disabled'))
+  const [apiKey, setApiKey] = useState(get('ai_api_key'))
+  const [model, setModel] = useState(get('ai_model'))
+  const [baseUrl, setBaseUrl] = useState(get('ai_base_url'))
+  const [maxTokens, setMaxTokens] = useState(get('ai_max_tokens', '256'))
+  const [systemPrompt, setSystemPrompt] = useState(get('ai_system_prompt'))
   const [testing, setTesting] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
   const [testResult, setTestResult] = useState<null | { success: boolean; reply?: string; provider?: string; model?: string; ms?: number; message?: string }>(null)
   const [temp, setTemp] = useState(get('ai_temperature', '0.85'))
   const [showKey, setShowKey] = useState(false)
+
+  const saveAll = async () => {
+    setSaving(true); setSaved(false)
+    await onSave('ai_provider', provider)
+    await onSave('ai_api_key', apiKey)
+    await onSave('ai_model', model)
+    await onSave('ai_base_url', baseUrl)
+    await onSave('ai_temperature', temp)
+    await onSave('ai_max_tokens', maxTokens)
+    if (systemPrompt) await onSave('ai_system_prompt', systemPrompt)
+    setSaving(false); setSaved(true)
+    setTimeout(() => setSaved(false), 3000)
+  }
 
   const providerHints: Record<string, string> = {
     disabled:  'No AI — NPCs use smart rule-based replies. Always works, no cost.',
@@ -218,7 +238,7 @@ function AiTab({ data, onSave }: { data: Record<string, string>; onSave: (k: str
       <div className="p-4 bg-card border border-border rounded-lg">
         <label className="text-sm font-semibold block mb-1">AI Provider</label>
         <p className="text-xs text-muted-foreground mb-2">{providerHints[provider] || ''}</p>
-        <select value={provider} onChange={e => onSave('ai_provider', e.target.value)}
+        <select value={provider} onChange={e => setProvider(e.target.value)}
           className="w-full px-3 py-2 bg-input border border-border rounded-md text-sm">
           <option value="disabled">🚫 Disabled (rule-based only)</option>
           <option value="gemini">✨ Gemini (Google — free tier)</option>
@@ -233,8 +253,8 @@ function AiTab({ data, onSave }: { data: Record<string, string>; onSave: (k: str
         <div className={`p-4 bg-card border border-border rounded-lg transition-opacity ${!needsKey ? 'opacity-40 pointer-events-none' : ''}`}>
           <label className="text-sm font-semibold block mb-1">API Key</label>
           <p className="text-xs text-muted-foreground mb-2">Stored in the database. Never shown to players.</p>
-          <Input type={showKey ? 'text' : 'password'} defaultValue={get('ai_api_key')}
-            onBlur={e => onSave('ai_api_key', e.target.value)}
+          <Input type={showKey ? 'text' : 'password'} value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
             placeholder="Paste your API key here…" className="text-sm mb-2" />
           <label className="flex items-center gap-1.5 cursor-pointer text-xs text-muted-foreground">
             <input type="checkbox" checked={showKey} onChange={e => setShowKey(e.target.checked)} className="w-3.5 h-3.5" />
@@ -246,7 +266,7 @@ function AiTab({ data, onSave }: { data: Record<string, string>; onSave: (k: str
         <div className="p-4 bg-card border border-border rounded-lg">
           <label className="text-sm font-semibold block mb-1">Model</label>
           <p className="text-xs text-muted-foreground mb-2">Leave blank to use the default for your provider.</p>
-          <Input defaultValue={get('ai_model')} onBlur={e => onSave('ai_model', e.target.value)}
+          <Input value={model} onChange={e => setModel(e.target.value)}
             placeholder={defaultModels[provider] || 'e.g. llama3'} className="text-sm" />
         </div>
 
@@ -254,7 +274,7 @@ function AiTab({ data, onSave }: { data: Record<string, string>; onSave: (k: str
         <div className={`p-4 bg-card border border-border rounded-lg col-span-2 transition-opacity ${!needsUrl ? 'opacity-40 pointer-events-none' : ''}`}>
           <label className="text-sm font-semibold block mb-1">Base URL <span className="text-muted-foreground font-normal">(Ollama / OpenAI-compatible only)</span></label>
           <p className="text-xs text-muted-foreground mb-2">e.g. http://localhost:11434/api/generate for Ollama, or http://localhost:1234/v1 for LM Studio</p>
-          <Input defaultValue={get('ai_base_url')} onBlur={e => onSave('ai_base_url', e.target.value)}
+          <Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
             placeholder="http://localhost:11434/api/generate" className="text-sm" />
         </div>
 
@@ -266,8 +286,6 @@ function AiTab({ data, onSave }: { data: Record<string, string>; onSave: (k: str
           <p className="text-xs text-muted-foreground mb-2">0.0 = robotic. 1.0 = very creative. 0.85 is the sweet spot for NPCs.</p>
           <input type="range" min="0" max="1" step="0.05" value={temp}
             onChange={e => setTemp(e.target.value)}
-            onMouseUp={e => onSave('ai_temperature', (e.target as HTMLInputElement).value)}
-            onTouchEnd={e => onSave('ai_temperature', (e.target as HTMLInputElement).value)}
             className="w-full accent-primary" />
         </div>
 
@@ -275,8 +293,8 @@ function AiTab({ data, onSave }: { data: Record<string, string>; onSave: (k: str
         <div className="p-4 bg-card border border-border rounded-lg">
           <label className="text-sm font-semibold block mb-1">Max Tokens</label>
           <p className="text-xs text-muted-foreground mb-2">Max reply length. 256 = 1–3 sentences. Higher = more expensive.</p>
-          <Input type="number" min={64} max={1024} step={32} defaultValue={get('ai_max_tokens', '256')}
-            onBlur={e => onSave('ai_max_tokens', e.target.value)} className="text-sm" />
+          <Input type="number" min={64} max={1024} step={32} value={maxTokens}
+            onChange={e => setMaxTokens(e.target.value)} className="text-sm" />
         </div>
 
         {/* System Prompt */}
@@ -286,20 +304,24 @@ function AiTab({ data, onSave }: { data: Record<string, string>; onSave: (k: str
             Injected into every NPC prompt as world context. Set the tone, lore, and language style for your world.
             Leave blank for the built-in Celtic dark fantasy default.
           </p>
-          <textarea rows={5} defaultValue={get('ai_system_prompt')}
-            onBlur={e => onSave('ai_system_prompt', e.target.value)}
+          <textarea rows={5} value={systemPrompt}
+            onChange={e => setSystemPrompt(e.target.value)}
             placeholder="e.g. a dark Celtic fantasy world where the dead do not always stay dead, and every oath has a price. Dialogue should be weary, grounded, and tinged with dread."
             className="w-full px-3 py-2 bg-input border border-border rounded-md text-xs font-mono resize-y" />
         </div>
       </div>
 
-      {/* Test */}
+      {/* Save + Test */}
       <div className="flex items-center gap-4 flex-wrap">
+        <Button onClick={saveAll} disabled={saving}>
+          {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+          {saved ? '✓ Saved!' : saving ? 'Saving...' : 'Save AI Settings'}
+        </Button>
         <Button onClick={testAi} disabled={testing || provider === 'disabled'} variant="outline">
           {testing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FlaskConical className="w-4 h-4 mr-2" />}
           Test Connection
         </Button>
-        <span className="text-xs text-muted-foreground">Sends a live test message to your configured AI. Takes a few seconds.</span>
+        <span className="text-xs text-muted-foreground">Save first, then test. Takes a few seconds.</span>
       </div>
       {testResult && (
         <div className={`p-4 rounded-lg border text-sm ${testResult.success ? 'bg-green-950/30 border-green-800' : 'bg-red-950/30 border-red-800'}`}>

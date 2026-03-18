@@ -120,6 +120,11 @@ async function loadBattleSettings(db) {
         initiative_type: 'speed',
         enable_afterlife: true,
         // Session 24
+        // Combo + Action Commands
+        enable_combo_input: true,
+        combo_ap_regen_per_turn: 3,
+        combo_individual_hit_damage: 0.5,
+        enable_action_commands: true,
         enable_alignment_system: true,
         alignment_affects_stats: true,
         alignment_affects_skills: true,
@@ -771,6 +776,156 @@ async function checkTechDiscovery(db, charId, settings) {
         dominantKeywords: dominant.map(([kw, count]) => ({ keyword: kw, count })),
         originKeywords: dominant.map(([kw]) => kw)
     };
+}
+
+// =================================================================
+// COMBO INPUT SYSTEM (Legend of Legaia) + ACTION COMMANDS (Mario RPG)
+// =================================================================
+
+// Load combo arts for a class (+ universal arts)
+async function loadComboArts(db, classId, level) {
+    try {
+        const [rows] = await db.query(
+            `SELECT * FROM game_combo_arts WHERE active=1
+             AND (class_id IS NULL OR class_id=?) AND level_required<=?
+             ORDER BY ap_cost`, [classId, level]);
+        return rows.map(r => ({
+            id: r.id, name: r.name, icon: r.icon,
+            sequence: r.input_sequence.split(',').map(s => s.trim()),
+            sequenceStr: r.input_sequence,
+            apCost: r.ap_cost, damageFormula: r.damage_formula,
+            element: r.element, statusApply: r.status_apply,
+            battleText: r.battle_text, isHidden: r.is_hidden
+        }));
+    } catch { return []; }
+}
+
+// Resolve a combo input sequence
+async function resolveComboInput(db, battle, actor, target, inputSequence, result) {
+    const settings = battle._settings || {};
+    if (!settings.enable_combo_input) return result;
+
+    const inputs = Array.isArray(inputSequence) ? inputSequence : (inputSequence || '').split(',').map(s => s.trim());
+    if (!inputs.length) { result.log.push(`${actor.name} hesitates...`); return result; }
+
+    // Check AP
+    const apCost = inputs.length;
+    const currentAp = actor._currentAp || actor.maxAp || 6;
+    if (apCost > currentAp) {
+        result.log.push(`Not enough AP! Need ${apCost}, have ${currentAp}.`);
+        return result;
+    }
+    actor._currentAp = currentAp - apCost;
+
+    // Display the input sequence
+    const inputIcons = { H: '⬆️', L: '⬇️', R: '➡️', U: '⬆️' };
+    const inputDisplay = inputs.map(i => inputIcons[i] || i).join(' ');
+    result.log.push(`🎮 ${actor.name}: ${inputDisplay}`);
+    result.actions.push({ type: 'combo_input', actor: actor.name, inputs, display: inputDisplay });
+
+    // Check if this sequence matches a known Art
+    const allArts = actor._comboArts || [];
+    const inputStr = inputs.join(',');
+    const matchedArt = allArts.find(a => a.sequenceStr === inputStr);
+
+    if (matchedArt) {
+        // ART TRIGGERED!
+        const text = (matchedArt.battleText || '{name} uses {skill}!')
+            .replace('{name}', actor.name).replace('{skill}', matchedArt.name);
+        result.log.push(`⚡ ART DISCOVERED: ${matchedArt.name}!`);
+        result.log.push(text);
+        result.actions.push({ type: 'combo_art', name: matchedArt.name, icon: matchedArt.icon, actor: actor.name });
+
+        // Calculate Art damage
+        const vars = buildFormulaVars(actor, target);
+        let damage = Math.max(1, Math.floor(safeEval(matchedArt.damageFormula || 'ATK*3', vars)));
+
+        // Apply element
+        if (matchedArt.element) {
+            damage = await checkElementalReaction(db, battle, target, matchedArt.element, damage, result);
+        }
+
+        target.currentHp = Math.max(0, target.currentHp - damage);
+        result.log.push(`${target.name} takes ${damage} damage!`);
+        result.actions.push({ type: 'combo_art_damage', target: target.name, amount: damage, art: matchedArt.name });
+
+        // Apply status
+        if (matchedArt.statusApply) {
+            await applyStatus(db, target, matchedArt.statusApply, 2, result);
+        }
+
+        // Track discovery
+        try {
+            await db.query(
+                `INSERT INTO character_discovered_arts (character_id, art_id, times_used)
+                 VALUES (?,?,1) ON DUPLICATE KEY UPDATE times_used=times_used+1`,
+                [actor.charId, matchedArt.id]);
+        } catch {}
+
+        battle.addLog({ actor: actor.name, action: matchedArt.name, damage, target: target.name });
+    } else {
+        // No Art matched — each input does individual weak hits
+        const hitDmg = parseFloat(settings.combo_individual_hit_damage) || 0.5;
+        let totalDmg = 0;
+        for (let i = 0; i < inputs.length; i++) {
+            const dmg = Math.max(1, Math.floor(actor.atk * hitDmg));
+            target.currentHp = Math.max(0, target.currentHp - dmg);
+            totalDmg += dmg;
+            const dirName = { H: 'High', L: 'Low', R: 'Right', U: 'Up' }[inputs[i]] || inputs[i];
+            result.log.push(`  ${dirName} strike: ${dmg} damage!`);
+            if (target.currentHp <= 0) break;
+        }
+        result.actions.push({ type: 'combo_hits', target: target.name, amount: totalDmg, hits: inputs.length });
+        battle.addLog({ actor: actor.name, action: 'Combo', damage: totalDmg, target: target.name });
+    }
+
+    // Death check
+    if (target.currentHp <= 0) {
+        checkDeathOrKnockout(battle, actor, target, result);
+    }
+
+    return result;
+}
+
+// Load action command configs
+async function loadActionCommands(db) {
+    try {
+        const [rows] = await db.query('SELECT * FROM game_action_commands WHERE active=1');
+        return rows;
+    } catch { return []; }
+}
+
+// Resolve an action command timing result
+// timingResult: { type: 'perfect'|'good'|'miss', responseMs }
+function applyActionCommandBonus(damage, timingResult, actionCommand) {
+    if (!actionCommand || !timingResult) return { damage, bonus: 0, rating: 'none' };
+
+    switch (timingResult.type) {
+        case 'perfect':
+            return {
+                damage: Math.floor(damage * (1 + (actionCommand.perfect_bonus_pct || 0.50))),
+                bonus: actionCommand.perfect_bonus_pct || 0.50,
+                rating: 'perfect'
+            };
+        case 'good':
+            return {
+                damage: Math.floor(damage * (1 + (actionCommand.bonus_damage_pct || 0.25))),
+                bonus: actionCommand.bonus_damage_pct || 0.25,
+                rating: 'good'
+            };
+        default: // miss
+            return { damage, bonus: 0, rating: 'miss' };
+    }
+}
+
+// Resolve defense action command (reduces incoming damage)
+function applyDefenseActionCommand(damage, timingResult, actionCommand) {
+    if (!actionCommand || !timingResult) return damage;
+    if (timingResult.type === 'perfect' || timingResult.type === 'good') {
+        const reduction = actionCommand.defense_reduction || 0.25;
+        return Math.floor(damage * (1 - reduction));
+    }
+    return damage;
 }
 
 // =================================================================
@@ -3273,6 +3428,28 @@ class BattleState {
         }
     }
 
+    // Combo Input + Action Commands init
+    async initComboSystem(db) {
+        if (this._settings?.enable_combo_input) {
+            for (const c of Object.values(this.combatants)) {
+                c._comboArts = await loadComboArts(db, c.classId, c.level || 1);
+                c._currentAp = c.maxAp || 6;
+                c._maxAp = c.maxAp || 6;
+                // Load discovered arts
+                if (!c.isAI) {
+                    try {
+                        const [disc] = await db.query(
+                            'SELECT art_id FROM character_discovered_arts WHERE character_id=?', [c.charId]);
+                        c._discoveredArtIds = new Set(disc.map(r => r.art_id));
+                    } catch { c._discoveredArtIds = new Set(); }
+                }
+            }
+        }
+        if (this._settings?.enable_action_commands) {
+            this._actionCommands = await loadActionCommands(db);
+        }
+    }
+
     // Session 24: Load alignment + battle rules
     async initSession24(db) {
         // Alignment bonuses
@@ -4082,6 +4259,10 @@ class BattleState {
             intimidated: c._intimidated ? { turnsLeft: c._intimidated.turnsLeft } : null,
             rallied: c._rallied ? { turnsLeft: c._rallied.turnsLeft, atkBonus: c._rallied.atkBonus } : null,
             tauntBonus: c._tauntBonus ? { turnsLeft: c._tauntBonus.turnsLeft } : null,
+            // Combo/Action
+            currentAp: c._currentAp ?? null,
+            maxAp: c._maxAp ?? null,
+            discoveredArts: c._discoveredArtIds ? c._discoveredArtIds.size : 0,
             // Session 24
             alignment: c.alignment || 0,
             alignmentTier: c._alignmentTier ? { name: c._alignmentTier.label, icon: c._alignmentTier.icon, color: c._alignmentTier.color } : null,
@@ -4213,6 +4394,8 @@ class BattleState {
                 enableFightingStyles:    this._settings.enable_fighting_styles,
                 // Session 23
                 // Session 24
+                enableComboInput:        this._settings.enable_combo_input,
+                enableActionCommands:    this._settings.enable_action_commands,
                 enableAlignmentSystem:   this._settings.enable_alignment_system,
                 enableBattleRules:       this._settings.enable_battle_rules,
                 enableElementalReactions: this._settings.enable_elemental_reactions,
@@ -4377,6 +4560,7 @@ const BattleManager = {
         await battle.initCombatExtras(db);
         await battle.initSession23(db);
         await battle.initSession24(db);
+        await battle.initComboSystem(db);
 
         // Register battle location on the map for mid-battle join visibility
         try {
@@ -4512,6 +4696,7 @@ const BattleManager = {
         await battle.initCombatExtras(db);
         await battle.initSession23(db);
         await battle.initSession24(db);
+        await battle.initComboSystem(db);
 
         // Register battle location + load terrain & objects
         try {
@@ -4611,6 +4796,7 @@ const BattleManager = {
         await battle.initCombatExtras(db);
         await battle.initSession23(db);
         await battle.initSession24(db);
+        await battle.initComboSystem(db);
 
         // Register location + load terrain & objects
         try {
@@ -4666,7 +4852,7 @@ const BattleManager = {
     getAvailableCommands,
 
     // --- PROCESS PLAYER ACTION ---
-    processAction: async (db, io, socket, { battleId, commandId, skillId, itemId, limitId, targetId, targetObjectKey, targetLimb, flavorText, sigTechId }) => {
+    processAction: async (db, io, socket, { battleId, commandId, skillId, itemId, limitId, targetId, targetObjectKey, targetLimb, flavorText, sigTechId, comboInput, actionTiming }) => {
         const battle = activeBattles[battleId];
         if (!battle || battle.status !== 'ACTIVE') {
             socket.emit('battle_error', 'No active battle.');
@@ -4774,7 +4960,7 @@ const BattleManager = {
         }
 
         // Execute the action
-        const result = await executeBattleAction(db, battle, actor, target, { commandId, skillId, itemId, limitId, targetLimb, flavorText, sigTechId });
+        const result = await executeBattleAction(db, battle, actor, target, { commandId, skillId, itemId, limitId, targetLimb, flavorText, sigTechId, comboInput, actionTiming });
 
         // Send result to both players
         await broadcastBattleUpdate(io, battle, result, db);
@@ -5442,7 +5628,7 @@ const BattleManager = {
 // =================================================================
 // EXECUTE BATTLE ACTION — The core resolver
 // =================================================================
-async function executeBattleAction(db, battle, actor, target, { commandId, skillId, itemId, limitId, targetLimb, flavorText, sigTechId }) {
+async function executeBattleAction(db, battle, actor, target, { commandId, skillId, itemId, limitId, targetLimb, flavorText, sigTechId, comboInput, actionTiming }) {
     const result = { actor: actor.name, actions: [], log: [] };
 
     // Check actor status effects that prevent / impair action
@@ -5471,6 +5657,12 @@ async function executeBattleAction(db, battle, actor, target, { commandId, skill
         if (fx.miss_chance) {
             actor._missChance = (actor._missChance || 0) + fx.miss_chance;
         }
+    }
+
+    // --- COMBO INPUT (Legaia-style) ---
+    // If the player submitted a directional combo sequence, resolve it instead of normal action
+    if (comboInput && battle._settings?.enable_combo_input) {
+        return await resolveComboInput(db, battle, actor, target, comboInput, result);
     }
 
     // --- STANCE COMMAND ---
@@ -5937,6 +6129,22 @@ async function resolveDamage(db, battle, actor, target, effects, actionName, res
         if (defenseResult.reduction > 0) {
             damage = Math.floor(damage * (1 - defenseResult.reduction));
             result.actions.push({ type: 'block', target: target.name, reduction: defenseResult.reduction, success: true });
+        }
+    }
+
+    // ── Action Command timing bonus (Mario RPG style) ─────────
+    if (actionTiming && battle._settings?.enable_action_commands && battle._actionCommands) {
+        const cmd = battle._actionCommands.find(c => c.trigger_on === 'attack');
+        if (cmd) {
+            const acResult = applyActionCommandBonus(damage, actionTiming, cmd);
+            damage = acResult.damage;
+            if (acResult.rating === 'perfect') {
+                result.log.push(`⭐ PERFECT timing! +${Math.round(acResult.bonus * 100)}% damage!`);
+                result.actions.push({ type: 'action_command', rating: 'perfect', bonus: acResult.bonus });
+            } else if (acResult.rating === 'good') {
+                result.log.push(`✨ Good timing! +${Math.round(acResult.bonus * 100)}% damage!`);
+                result.actions.push({ type: 'action_command', rating: 'good', bonus: acResult.bonus });
+            }
         }
     }
 
@@ -7004,6 +7212,16 @@ async function processStatusEffects(db, battle) {
     // Session 15: Summon duration ticks
     if (battle._settings?.enable_summons) {
         tickSummons(battle, tickResult);
+    }
+
+    // Combo AP regen
+    if (battle._settings?.enable_combo_input) {
+        const apRegen = parseInt(battle._settings.combo_ap_regen_per_turn) || 3;
+        for (const c of Object.values(battle.combatants)) {
+            if (c.currentHp > 0 && !c._knockedOut && c._currentAp !== undefined) {
+                c._currentAp = Math.min(c._maxAp || 6, c._currentAp + apRegen);
+            }
+        }
     }
 
     // Session 20: Transform duration ticks

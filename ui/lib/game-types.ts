@@ -211,6 +211,8 @@ export interface BattleSettings {
   enableSpectatorMode?: boolean
   // Session 23
   // Session 24
+  enableComboInput?: boolean
+  enableActionCommands?: boolean
   enableAlignmentSystem?: boolean
   enableBattleRules?: boolean
   enableElementalReactions?: boolean
@@ -322,6 +324,11 @@ export interface BattleCombatant {
 
   // Session 15: Summon
   // Session 24
+  // Combo/Action
+  currentAp?: number | null
+  maxAp?: number | null
+  discoveredArts?: number
+
   alignment?: number
   alignmentTier?: { name: string; icon: string; color?: string } | null
 

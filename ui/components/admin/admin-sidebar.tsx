@@ -12,7 +12,7 @@ import {
 } from "lucide-react"
 
 export type AdminSection =
-  | 'dashboard' | 'players' | 'economy' | 'gm_tools'
+  | 'dashboard' | 'templates' | 'quest_builder' | 'dialogue_builder' | 'players' | 'economy' | 'gm_tools'
   | 'world_forge' | 'world' | 'maps' | 'regions' | 'spawns' | 'map_connections' | 'scheduler'
   | 'items' | 'npcs' | 'quests' | 'questboard' | 'shop_supply' | 'loot_tables' | 'crafting' | 'auction'
   | 'classes' | 'races' | 'feats' | 'stat' | 'class_skill' | 'character_creator'
@@ -27,6 +27,7 @@ interface NavGroup { title: string; items: NavItem[] }
 const NAV_GROUPS: NavGroup[] = [
   { title: 'Overview', items: [
     { id: 'dashboard',        label: 'Dashboard',         icon: LayoutDashboard },
+    { id: 'templates',         label: 'Game Templates',    icon: Layers },
     { id: 'players',          label: 'Players',           icon: Users },
     { id: 'economy',          label: 'Economy',           icon: BarChart3 },
   ]},
@@ -43,6 +44,8 @@ const NAV_GROUPS: NavGroup[] = [
     { id: 'items',            label: 'Items',             icon: Package },
     { id: 'npcs',             label: 'NPCs & Enemies',    icon: Skull },
     { id: 'quests',           label: 'Quests',            icon: ScrollText },
+    { id: 'quest_builder',    label: 'Quest Builder',     icon: GitBranch },
+    { id: 'dialogue_builder', label: 'Dialogue Builder',  icon: Network },
     { id: 'questboard',       label: 'Quest Board',       icon: ClipboardList },
     { id: 'shop_supply',      label: 'Shops',             icon: Store },
     { id: 'loot_tables',      label: 'Loot Tables',       icon: Layers },

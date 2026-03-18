@@ -21,10 +21,25 @@ function requireStaff(req, res, next) {
 // GEMINI CALLER  (falls back to Ollama if no Gemini key)
 // ---------------------------------------------------------------
 async function callAI(prompt) {
+    // Check DB for API key (admin panel saves to game_settings)
+    let dbApiKey = '', dbModel = '', dbProvider = '';
+    if (db) {
+        try {
+            const [rows] = await db.query(
+                "SELECT setting_key, setting_value FROM game_settings WHERE setting_key IN ('ai_provider','ai_api_key','ai_model')");
+            for (const r of rows) {
+                if (r.setting_key === 'ai_api_key') dbApiKey = r.setting_value;
+                if (r.setting_key === 'ai_model') dbModel = r.setting_value;
+                if (r.setting_key === 'ai_provider') dbProvider = r.setting_value;
+            }
+        } catch {}
+    }
+
+    const geminiKey = dbApiKey || process.env.GEMINI_API_KEY;
     // Try Gemini first
-    if (process.env.GEMINI_API_KEY) {
-        const model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-        const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    if (geminiKey && (dbProvider === 'gemini' || dbProvider === '' || !dbProvider || process.env.GEMINI_API_KEY)) {
+        const model = dbModel || process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+        const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
         const res   = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

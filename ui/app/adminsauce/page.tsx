@@ -50,6 +50,9 @@ import { ClassSkillPanel }       from "@/components/admin/class-skill-panel"
 import { LimitBreakPanel }       from "@/components/admin/limit-battle-panels"
 import { BattleCmdPanel }        from "@/components/admin/limit-battle-panels"
 import { BattleConfigPanel }     from "@/components/admin/battle-config-panel"
+import { TemplatePickerPanel }   from "@/components/admin/template-picker-panel"
+import { QuestBuilderPanel }     from "@/components/admin/quest-builder-panel"
+import { DialogueBuilderPanel }  from "@/components/admin/dialogue-builder-panel"
 
 // ── Magic ─────────────────────────────────────────────────────────
 import { OghamPanel }            from "@/components/admin/ogham-panel"
@@ -103,6 +106,8 @@ function SectionContent({ section }: { section: AdminSection }) {
     case 'items':             return <EntityManager section="items" />
     case 'npcs':              return <NpcEditorPanel />
     case 'quests':            return <EntityManager section="quests" />
+    case 'quest_builder':     return <QuestBuilderPanel />
+    case 'dialogue_builder':  return <DialogueBuilderPanel />
     case 'questboard':        return <QuestBoardPanel />
     case 'shop_supply':       return <ShopSupplyPanel />
     case 'loot_tables':       return <LootTablePanel />
@@ -116,6 +121,9 @@ function SectionContent({ section }: { section: AdminSection }) {
     case 'stat':              return <StatEnginePanel />
     case 'class_skill':       return <ClassSkillPanel />
     case 'character_creator': return <CharacterCreatorPanel />
+
+    // Templates
+    case 'templates':         return <TemplatePickerPanel />
 
     // Combat
     case 'battle_config':     return <BattleConfigPanel />

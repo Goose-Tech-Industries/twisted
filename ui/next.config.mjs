@@ -30,24 +30,8 @@ const nextConfig = {
       { source: '/logout',              destination: `${backend}/logout` },
       { source: '/verify-email',        destination: `${backend}/verify-email` },
 
-      // Game API routes
-      { source: '/my-characters',       destination: `${backend}/my-characters` },
-      { source: '/get-char-full',       destination: `${backend}/get-char-full` },
-      { source: '/create-character',    destination: `${backend}/create-character` },
-      { source: '/creation-data',       destination: `${backend}/creation-data` },
-      { source: '/get-map',             destination: `${backend}/get-map` },
-      { source: '/get-all-maps',        destination: `${backend}/get-all-maps` },
-      { source: '/save-state',          destination: `${backend}/save-state` },
-      { source: '/load-state',          destination: `${backend}/load-state` },
-      { source: '/equip-item',          destination: `${backend}/equip-item` },
-      { source: '/unequip-item',        destination: `${backend}/unequip-item` },
-      { source: '/use-item',            destination: `${backend}/use-item` },
-      { source: '/get-shop',            destination: `${backend}/get-shop` },
-      { source: '/buy-item',            destination: `${backend}/buy-item` },
-      { source: '/sell-item',           destination: `${backend}/sell-item` },
-      { source: '/my-oghams',           destination: `${backend}/my-oghams` },
-      { source: '/get-char-by-name',    destination: `${backend}/get-char-by-name` },
-      { source: '/fast-travel-points',  destination: `${backend}/fast-travel-points` },
+      // Game API routes (all under /game/ prefix on the backend)
+      { source: '/game/:path*',         destination: `${backend}/game/:path*` },
 
       // Admin routes
       { source: '/admin/:path*',        destination: `${backend}/admin/:path*` },
