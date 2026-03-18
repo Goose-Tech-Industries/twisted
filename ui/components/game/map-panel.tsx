@@ -7,6 +7,7 @@ import { gameApi } from "@/lib/game-api"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { ParticleOverlay } from "./particle-overlay"
 import {
   MapPin,
   User,
@@ -64,6 +65,21 @@ export function MapPanel() {
   const interact = (game as unknown as Record<string, unknown>).interact as () => void
 
   const [selectedEntity, setSelectedEntity] = useState<SelectedEntity | null>(null)
+  const [mapParticles, setMapParticles] = useState<Array<{ preset: string; x: number; y: number; id: string }>>([])
+
+  // Listen for map particle events from server
+  useEffect(() => {
+    if (!socket) return
+    const handler = (data: { preset: string; x: number; y: number }) => {
+      const px = data.x * (TILE_SIZE + 1) + TILE_SIZE / 2
+      const py = data.y * (TILE_SIZE + 1) + TILE_SIZE / 2
+      const id = `map_${Date.now()}_${Math.random()}`
+      setMapParticles(prev => [...prev, { preset: data.preset, x: px, y: py, id }])
+      setTimeout(() => setMapParticles(prev => prev.filter(e => e.id !== id)), 3000)
+    }
+    socket.on('map_particle', handler)
+    return () => { socket.off('map_particle', handler) }
+  }, [socket])
   const [fetchedMap, setFetchedMap] = useState<typeof currentMap>(null)
 
   // Fetch map via API if socket hasn't provided it
@@ -406,6 +422,13 @@ export function MapPanel() {
                     </button>
                   )
                 })}
+
+                {/* Particle Effects Layer (map-wide: spell effects, combat, environmental) */}
+                <ParticleOverlay
+                  effects={mapParticles}
+                  width={(currentMap?.width || 20) * (TILE_SIZE + 1)}
+                  height={(currentMap?.height || 20) * (TILE_SIZE + 1)}
+                />
 
                 {/* Active Battle Indicators */}
                 {(mapBattles || []).map(b => (
