@@ -346,7 +346,7 @@ router.get('/invite-code', async (req, res) => {
 router.get('/me', async (req, res) => {
     try {
         if (!req.session || !req.session.userId) return res.json({ success: false });
-        const [rows] = await db.query('SELECT role FROM users WHERE id = ? LIMIT 1', [req.session.userId]);
+        const [rows] = await db.query('SELECT role, chat_color FROM users WHERE id = ? LIMIT 1', [req.session.userId]);
         if (!rows || !rows.length) return res.json({ success: false });
         const role = rows[0].role;
         req.session.role = role;
@@ -360,7 +360,7 @@ router.get('/me', async (req, res) => {
         );
         const charId = charRow ? charRow.id : null;
 
-        res.json({ success: true, username: req.session.username, role, charId });
+        res.json({ success: true, username: req.session.username, role, chatColor: rows[0].chat_color || null, charId });
     } catch (err) {
         console.error('/me error:', err);
         res.json({ success: false });

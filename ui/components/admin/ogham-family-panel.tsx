@@ -1,4 +1,5 @@
 "use client"
+import { toast } from "@/hooks/use-toast"
 import { useState, useEffect, useCallback } from "react"
 import adminApi from "@/lib/admin-api"
 import { Button } from "@/components/ui/button"
@@ -43,7 +44,7 @@ export function OghamFamilyPanel() {
   }
 
   const save = async () => {
-    if (!editing?.name?.trim()) { alert('Name is required'); return }
+    if (!editing?.name?.trim()) { toast({ title: 'Name is required', variant: 'destructive' }); return }
     const setBonusObj: SetBonus = { min_count: sb.min_count || 2 }
     const statBonus: Record<string, number> = {}
     STATS.forEach((s: string) => { if ((sb.stat_bonus?.[s] || 0) !== 0) statBonus[s] = sb.stat_bonus![s] })
@@ -53,7 +54,7 @@ export function OghamFamilyPanel() {
     if (sb.label) setBonusObj.label = sb.label
     const payload = { ...editing, set_bonus_json: JSON.stringify(setBonusObj) }
     const res = await adminApi.entity.save('ogham_family', payload as Record<string, unknown>, editing.id)
-    if (res.success) { load(); setEditing(null) } else alert(String(res.message || 'Save failed'))
+    if (res.success) { load(); setEditing(null) } else toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
   }
 
   const del = async (id: number, name: string) => {

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Info, Lock, Trash2, Plus, AlertTriangle } from "lucide-react"
+import { toast } from "@/hooks/use-toast"
 
 interface StatDef {
   id?: number
@@ -82,20 +83,29 @@ export function StatEnginePanel() {
 
   const rename = async (key: string, newDisplayName: string) => {
     if (!newDisplayName.trim()) return
-    await adminApi.entity.save('stat', { display_name: newDisplayName.trim(), name: newDisplayName.trim() } as Record<string,unknown>)
+    const stat = stats.find(s => s.key_name === key)
+    if (stat?.id) {
+      await adminApi.entity.save('stat', { display_name: newDisplayName.trim(), name: newDisplayName.trim() } as Record<string,unknown>, stat.id)
+    }
     setStats(prev => prev.map(s => s.key_name === key ? { ...s, display_name: newDisplayName, name: newDisplayName } : s))
   }
 
   const setType = async (statId: number | undefined, key: string, type: string) => {
     if (statId) await adminApi.entity.save('stat', { type } as Record<string,unknown>, statId)
+    else {
+      const stat = stats.find(s => s.key_name === key)
+      if (stat?.id) await adminApi.entity.save('stat', { type } as Record<string,unknown>, stat.id)
+    }
     setStats(prev => prev.map(s => s.key_name === key ? { ...s, type: type as 'CORE'|'HIDDEN'|'META' } : s))
   }
 
   const del = async (key: string, id?: number) => {
-    if (LOCKED.has(key)) { alert('This stat is locked — it powers core game systems and cannot be deleted.'); return }
-    if (!confirm(`Delete stat "${key}"?\n\n⚠️ This removes the definition but does NOT remove existing character_stats rows. Existing characters keep their recorded values until you clean up manually.\n\nProceed?`)) return
-    if (id) await adminApi.entity.delete('stat', id)
+    if (LOCKED.has(key)) { toast({ title: 'This stat is locked — it powers core game systems.', variant: 'destructive' }); return }
+    if (!confirm(`Delete stat "${key}"? This removes the definition but existing character values are kept.`)) return
+    const statId = id || stats.find(s => s.key_name === key)?.id
+    if (statId) await adminApi.entity.delete('stat', statId)
     setStats(prev => prev.filter(s => s.key_name !== key))
+    toast({ title: `Stat "${key}" deleted` })
   }
 
   const cores   = stats.filter(s => (s.type || 'CORE') === 'CORE')

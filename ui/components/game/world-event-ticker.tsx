@@ -101,7 +101,7 @@ export function WorldEventTicker() {
 
   return (
     <div
-      className="fixed top-0 left-0 right-0 h-8 bg-card/90 border-b border-border z-40 overflow-hidden"
+      className="h-8 bg-card/90 border-b border-border overflow-hidden shrink-0"
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
     >
@@ -177,16 +177,15 @@ export function EventFeed({ maxEvents = 10 }: { maxEvents?: number }) {
     return `${Math.floor(diff / 3600)}h`
   }
 
-  if (events.length === 0) {
-    return (
-      <div className="text-center py-4 text-xs text-muted-foreground">
-        No world events yet
-      </div>
-    )
-  }
-
   return (
-    <div className="space-y-1">
+    <div className="p-2">
+      <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground px-1 mb-1 flex items-center gap-1">
+        <Sparkles className="w-3 h-3" /> World Events
+      </p>
+      {events.length === 0 ? (
+        <p className="text-[10px] text-muted-foreground/50 text-center py-2">Awaiting events...</p>
+      ) : (
+      <div className="space-y-1 max-h-32 overflow-y-auto">
       {events.map(event => {
         const Icon = EVENT_ICONS[event.type as WorldEvent['type']]
         const color = EVENT_COLORS[event.type as WorldEvent['type']]
@@ -208,6 +207,8 @@ export function EventFeed({ maxEvents = 10 }: { maxEvents?: number }) {
           </div>
         )
       })}
+    </div>
+      )}
     </div>
   )
 }

@@ -6,6 +6,7 @@ import { partyApi, type PartyMember as ApiPartyMember, type Party } from "@/lib/
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { getNameColor, getNameEffect } from "@/lib/name-colors"
 import {
   Users,
   Crown,
@@ -134,7 +135,8 @@ export function PartyPanel() {
                         {/* Info */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <h3 className="font-medium truncate">
+                            <h3 className={cn("font-medium truncate", getNameEffect((member as unknown as Record<string,unknown>).role as string))}
+                              style={{ color: getNameColor((member as unknown as Record<string,unknown>).role as string, (member as unknown as Record<string,unknown>).chatColor as string) || undefined }}>
                               {member.name}{isMe ? ' (You)' : ''}
                             </h3>
                           </div>
@@ -183,7 +185,8 @@ export function PartyPanel() {
                       {(player as unknown as Record<string, unknown>).level as number || '?'}
                     </div>
                     <div>
-                      <p className="font-medium">{player.name}</p>
+                      <p className={cn("font-medium", getNameEffect(player.role))}
+                        style={{ color: getNameColor(player.role, player.chatColor) || undefined }}>{player.name}</p>
                       <p className="text-xs text-muted-foreground">
                         {(player as unknown as Record<string, unknown>).class_name as string || 'Adventurer'}
                       </p>

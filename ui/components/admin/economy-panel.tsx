@@ -2,14 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Coins, TrendingUp, Users, Package, BarChart2 } from "lucide-react"
+import { Coins, TrendingUp, Users, BarChart2, RefreshCw, Activity } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import adminApi from "@/lib/admin-api"
 
 // ── Types matching GET /admin-panel/economy response ─────────────
-// Backend returns: { success, data: { totalGold, avgGold, maxGold,
-//   richest: [{id,username,gold,role,char_count}],
-//   distribution: {broke,poor,modest,comfortable,wealthy,rich,total_users},
-//   levelGoldTable, recentGoldEvents } }
 interface RichPlayer {
   id: number
   username: string
@@ -27,16 +24,25 @@ interface GoldDistribution {
   total_users:  number
 }
 
+interface GoldEvent {
+  event_type: string
+  actor_name?: string
+  target_name?: string
+  details?: string
+  created_at: string
+}
+
 interface EconomyData {
   totalGold:    number
   avgGold:      number
   maxGold:      number
   richest:      RichPlayer[]
   distribution: GoldDistribution | null
+  recentGoldEvents: GoldEvent[]
 }
 
 const EMPTY: EconomyData = {
-  totalGold: 0, avgGold: 0, maxGold: 0, richest: [], distribution: null
+  totalGold: 0, avgGold: 0, maxGold: 0, richest: [], distribution: null, recentGoldEvents: []
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -52,9 +58,12 @@ function toStr(v: unknown, fb = ""): string {
   if (v == null) return fb
   return String(v)
 }
+function safeDate(v: string): string {
+  try { const d = new Date(v); return isNaN(d.getTime()) ? '—' : d.toLocaleString() }
+  catch { return '—' }
+}
 
 function normalize(input: unknown): EconomyData {
-  // Unwrap { success, data: {...} }
   const src: Record<string, unknown> = isRecord(input) && isRecord((input as Record<string,unknown>).data)
     ? (input as Record<string,unknown>).data as Record<string,unknown>
     : isRecord(input)
@@ -64,7 +73,7 @@ function normalize(input: unknown): EconomyData {
   const richest: RichPlayer[] = Array.isArray(src.richest)
     ? (src.richest as unknown[]).filter(isRecord).map((r) => ({
         id:       toNum(r.id),
-        username: toStr(r.username, "Unknown"),
+        username: toStr(r.username || r.name, "Unknown"),
         gold:     toNum(r.gold ?? r.currency),
         role:     toStr(r.role, "PLAYER"),
       }))
@@ -84,12 +93,33 @@ function normalize(input: unknown): EconomyData {
     }
   }
 
+  const recentGoldEvents: GoldEvent[] = Array.isArray(src.recentGoldEvents)
+    ? (src.recentGoldEvents as unknown[]).filter(isRecord).map((e) => {
+        const details = e.details_json || e.details
+        let parsed = ''
+        if (typeof details === 'string') {
+          try { const j = JSON.parse(details); parsed = j.amount ? `${j.amount > 0 ? '+' : ''}${j.amount}g` : details } catch { parsed = details }
+        } else if (isRecord(details) && details.amount != null) {
+          const amt = toNum(details.amount)
+          parsed = `${amt > 0 ? '+' : ''}${amt}g`
+        }
+        return {
+          event_type: toStr(e.event_type),
+          actor_name: toStr(e.actor_name),
+          target_name: toStr(e.target_name),
+          details: parsed,
+          created_at: toStr(e.created_at),
+        }
+      })
+    : []
+
   return {
     totalGold:    toNum(src.totalGold),
-    avgGold:      toNum(src.avgGold),
+    avgGold:      toNum(src.avgGold ?? src.goldPerPlayer),
     maxGold:      toNum(src.maxGold),
     richest,
     distribution,
+    recentGoldEvents,
   }
 }
 
@@ -109,6 +139,14 @@ function Bar({ value, max, color, label }: { value: number; max: number; color: 
   )
 }
 
+const EVENT_LABELS: Record<string, string> = {
+  gm_give_gold: 'GM Grant',
+  battle_end: 'Battle Reward',
+  shop_buy: 'Shop Purchase',
+  shop_sell: 'Shop Sale',
+  trade: 'Trade',
+}
+
 // ── Component ─────────────────────────────────────────────────────
 export function EconomyPanel() {
   const [data,    setData]    = useState<EconomyData>(EMPTY)
@@ -120,9 +158,11 @@ export function EconomyPanel() {
     setError(null)
     try {
       const res = await adminApi.economy.getStats()
-      setData(normalize(res))
       if (isRecord(res) && res.success === false) {
         setError(toStr(res.message, "Could not load economy data."))
+        setData(EMPTY)
+      } else {
+        setData(normalize(res))
       }
     } catch {
       setData(EMPTY)
@@ -147,11 +187,11 @@ export function EconomyPanel() {
   const distBuckets = data.distribution
     ? [
         { label: "Broke (0g)",         value: data.distribution.broke,       color: "bg-red-600/60"    },
-        { label: "Poor (1–100g)",       value: data.distribution.poor,        color: "bg-orange-500/60" },
-        { label: "Modest (101–500g)",   value: data.distribution.modest,      color: "bg-yellow-500/60" },
-        { label: "Comfort (501–2k g)", value: data.distribution.comfortable, color: "bg-green-500/60"  },
-        { label: "Wealthy (2k–10k g)", value: data.distribution.wealthy,     color: "bg-blue-500/60"   },
-        { label: "Rich (10k+ g)",       value: data.distribution.rich,        color: "bg-purple-500/60" },
+        { label: "Poor (1-100g)",      value: data.distribution.poor,        color: "bg-orange-500/60" },
+        { label: "Modest (101-500g)",  value: data.distribution.modest,      color: "bg-yellow-500/60" },
+        { label: "Comfort (501-2k g)", value: data.distribution.comfortable, color: "bg-green-500/60"  },
+        { label: "Wealthy (2k-10k g)", value: data.distribution.wealthy,     color: "bg-blue-500/60"   },
+        { label: "Rich (10k+ g)",      value: data.distribution.rich,        color: "bg-purple-500/60" },
       ]
     : []
   const distMax = Math.max(...distBuckets.map((b) => b.value), 1)
@@ -159,9 +199,14 @@ export function EconomyPanel() {
   return (
     <div className="space-y-6">
 
-      <div>
-        <h2 className="text-2xl font-bold">Economy Dashboard</h2>
-        <p className="text-sm text-muted-foreground">Gold circulation and wealth distribution</p>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-2xl font-bold">Economy Dashboard</h2>
+          <p className="text-sm text-muted-foreground">Gold circulation and wealth distribution</p>
+        </div>
+        <Button variant="outline" onClick={() => void load()} className="gap-2">
+          <RefreshCw className="w-4 h-4" /> Refresh
+        </Button>
       </div>
 
       {error && (
@@ -170,7 +215,7 @@ export function EconomyPanel() {
         </div>
       )}
 
-      {/* ── Stat cards ── */}
+      {/* Stat cards */}
       <div className="grid sm:grid-cols-3 gap-4">
         <Card className="celtic-border">
           <CardContent className="p-4 text-center">
@@ -211,7 +256,7 @@ export function EconomyPanel() {
 
       <div className="grid md:grid-cols-2 gap-6">
 
-        {/* ── Richest players ── */}
+        {/* Richest players */}
         <Card className="celtic-border">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -244,7 +289,7 @@ export function EconomyPanel() {
           </CardContent>
         </Card>
 
-        {/* ── Distribution ── */}
+        {/* Distribution */}
         <Card className="celtic-border">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -269,6 +314,48 @@ export function EconomyPanel() {
         </Card>
 
       </div>
+
+      {/* Recent Gold Events */}
+      <Card className="celtic-border">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Activity className="w-4 h-4 text-yellow-400" />
+            Recent Gold Events
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {data.recentGoldEvents.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">No recent gold events.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left">
+                    {['Type', 'Actor', 'Target', 'Amount', 'When'].map(h => (
+                      <th key={h} className="pb-2 text-xs text-muted-foreground font-medium pr-4">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.recentGoldEvents.map((ev, i) => (
+                    <tr key={i} className="border-b border-border/50 last:border-0">
+                      <td className="py-2 pr-4">
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-secondary border border-border">
+                          {EVENT_LABELS[ev.event_type] || ev.event_type}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-4 text-xs">{ev.actor_name || '—'}</td>
+                      <td className="py-2 pr-4 text-xs">{ev.target_name || '—'}</td>
+                      <td className="py-2 pr-4 text-xs font-mono text-yellow-500">{ev.details || '—'}</td>
+                      <td className="py-2 text-xs text-muted-foreground">{ev.created_at ? safeDate(ev.created_at) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

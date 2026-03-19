@@ -78,6 +78,9 @@ export function GameLayout() {
       
       {/* Main Content Area */}
       <main className="flex-1 overflow-hidden flex flex-col">
+        {/* World Event Ticker — inline bar, pushes content down */}
+        <WorldEventTicker />
+
         {/* Top Bar */}
         <header className="h-12 border-b border-border bg-card/50 flex items-center px-4 justify-between shrink-0">
           <div className="flex items-center gap-4">
@@ -124,6 +127,9 @@ export function GameLayout() {
         <div className="flex-1 overflow-hidden">
           {renderContent()}
         </div>
+
+        {/* Quick Slots — static bottom bar */}
+        <QuickSlots />
       </main>
       
       {/* Overlays */}
@@ -135,15 +141,13 @@ export function GameLayout() {
       {/* Fixed UI Elements */}
       <ChatPanel />
       <Minimap />
-      <QuickSlots />
       <TouchControls />
       <CombatEffectsLayer />
       
       {/* Settings Modal */}
       <SettingsPanel isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
       
-      {/* World Event Ticker */}
-      <WorldEventTicker />
+      {/* World Event Ticker — now inline, not overlay */}
       
       {/* Duel Request Toast */}
       {incomingRequest && (

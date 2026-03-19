@@ -1,4 +1,5 @@
 "use client"
+import { toast } from "@/hooks/use-toast"
 import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -57,7 +58,7 @@ export function ModulesPanel() {
       setModules((prev: Module[]) => prev.map((m: Module) =>
         m.module_key === key ? { ...m, enabled: mod.enabled } : m
       ))
-      alert('Failed to save: ' + String(res.message || 'Unknown error'))
+      toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
     }
     setSaving((prev: Set<string>) => { const n = new Set(prev); n.delete(key); return n })
   }
@@ -66,7 +67,7 @@ export function ModulesPanel() {
     const key = mod.module_key
     setSaving((prev: Set<string>) => new Set([...prev, key]))
     try { JSON.parse(configJson) } catch {
-      alert('Invalid JSON')
+      toast({ title: 'Invalid JSON', variant: 'destructive' })
       setSaving((prev: Set<string>) => { const n = new Set(prev); n.delete(key); return n })
       return
     }
@@ -74,7 +75,7 @@ export function ModulesPanel() {
       key,
       data: { name: mod.name, description: mod.description, enabled: mod.enabled, config_json: configJson },
     })
-    if (!res.success) alert('Failed: ' + String(res.message || 'Unknown'))
+    if (!res.success) toast({ title: String(res.message || 'Failed'), variant: 'destructive' })
     setSaving((prev: Set<string>) => { const n = new Set(prev); n.delete(key); return n })
   }
 
@@ -82,11 +83,11 @@ export function ModulesPanel() {
     if (!confirm(`Delete module "${name}"? This cannot be undone.`)) return
     const res = await api('/admin/delete-module', { key })
     if (res.success) load()
-    else alert('Delete failed: ' + String(res.message))
+    else toast({ title: String(res.message || 'Delete failed'), variant: 'destructive' })
   }
 
   const createNew = async () => {
-    if (!newKey.trim() || !newName.trim()) { alert('Key and name are required'); return }
+    if (!newKey.trim() || !newName.trim()) { toast({ title: 'Key and name are required', variant: 'destructive' }); return }
     const key = newKey.trim().toLowerCase().replace(/\s+/g, '_')
     const res = await api('/admin/save-module', {
       key, data: { name: newName.trim(), description: newDesc.trim() || null, enabled: 1 },
@@ -94,7 +95,7 @@ export function ModulesPanel() {
     if (res.success) {
       setShowNew(false); setNewKey(''); setNewName(''); setNewDesc('')
       load()
-    } else alert('Failed: ' + String(res.message))
+    } else toast({ title: String(res.message || 'Failed'), variant: 'destructive' })
   }
 
   return (

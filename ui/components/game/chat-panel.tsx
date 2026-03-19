@@ -24,6 +24,8 @@ interface ChatMessage {
   channel: ChannelKey | 'system'
   from: string
   fromCharId?: number
+  role?: string
+  chatColor?: string | null
   text: string
   ts: number
   targetName?: string
@@ -281,20 +283,24 @@ export function ChatPanel() {
   )
 }
 
+import { getNameColor, getNameEffect } from "@/lib/name-colors"
+
 // Individual chat line component
-function ChatLine({ 
-  msg, 
-  myCharId, 
-  onDM 
-}: { 
+function ChatLine({
+  msg,
+  myCharId,
+  onDM
+}: {
   msg: ChatMessage
   myCharId?: number
   onDM: (charId: number, name: string) => void
 }) {
   const channel = msg.channel
   const channelConfig = CHANNELS.find(c => c.key === channel)
-  const color = channelConfig?.color || 'text-muted-foreground'
-  
+  const fallbackColor = channelConfig?.color || 'text-muted-foreground'
+  const nameColor = getNameColor(msg.role, msg.chatColor)
+  const nameEffect = getNameEffect(msg.role)
+
   const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   const canDM = msg.fromCharId && msg.fromCharId !== myCharId
 
@@ -308,8 +314,9 @@ function ChatLine({
   return (
     <div className="text-xs leading-relaxed break-words">
       <span className="text-muted-foreground/50">[{time}]</span>{' '}
-      <span 
-        className={cn(color, "font-semibold", canDM && "cursor-pointer hover:underline")}
+      <span
+        className={cn(!nameColor && fallbackColor, "font-semibold", nameEffect, canDM && "cursor-pointer hover:underline")}
+        style={nameColor ? { color: nameColor } : undefined}
         onClick={() => canDM && onDM(msg.fromCharId!, msg.from)}
         title={canDM ? `DM ${msg.from}` : undefined}
       >

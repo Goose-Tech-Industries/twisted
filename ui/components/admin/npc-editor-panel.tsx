@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Plus, Pencil, Trash2, Info, ChevronLeft, Skull, MessageSquare, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { toast } from "@/hooks/use-toast"
 
 interface NPC {
   id: number; name: string; icon: string; description: string
@@ -44,13 +45,13 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 const BLANK: Partial<NPC> = {
-  name: '', icon: '💬', description: '', is_enemy: false,
+  name: '', icon: '💬', description: '', is_enemy: false as boolean,
   persona: '', ai_mood: 'neutral', move_type: 'STATIONARY', wander_radius: 3,
   level: 1, hp: 100, mp: 50, atk: 10, def: 5, mo: 5, md: 5, speed: 5, luck: 3,
   exp_reward: 20, gold_reward: 10, drop_table_json: '[]', quest_offers_json: '[]'
 }
 
-export function NpcEditorPanel() {
+export function NpcEditorPanel({ filterMode }: { filterMode?: 'friendly' | 'enemy' } = {}) {
   const [npcs, setNpcs] = useState<NPC[]>([])
   const [quests, setQuests] = useState<Quest[]>([])
   const [shops, setShops] = useState<Shop[]>([])
@@ -61,14 +62,16 @@ export function NpcEditorPanel() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [nr, qr, sr] = await Promise.all([
-      adminApi.entity.getAll('npc'),
-      adminApi.entity.getAll('quest'),
-      adminApi.entity.getAll('shop'),
-    ])
-    setNpcs((nr.data || []) as NPC[])
-    setQuests((qr.data || []) as Quest[])
-    setShops((sr.data || []) as Shop[])
+    try {
+      const [nr, qr, sr] = await Promise.all([
+        adminApi.entity.getAll('npc'),
+        adminApi.entity.getAll('quest'),
+        adminApi.entity.getAll('shop'),
+      ])
+      setNpcs((nr.data || []) as NPC[])
+      setQuests((qr.data || []) as Quest[])
+      setShops((sr.data || []) as Shop[])
+    } catch { toast({ title: 'Failed to load NPC data', variant: 'destructive' }) }
     setLoading(false)
   }, [])
 
@@ -76,21 +79,25 @@ export function NpcEditorPanel() {
 
   const save = async () => {
     if (!editing) return
-    if (!editing.name?.trim()) { alert('Name is required.'); return }
+    if (!editing.name?.trim()) { toast({ title: 'Name is required', variant: 'destructive' }); return }
     const res = await adminApi.entity.save('npc', editing as Record<string,unknown>, editing.id)
-    if (res.success) { load(); setEditing(null) }
-    else alert(res.message || 'Save failed')
+    if (res.success) { load(); setEditing(null); toast({ title: 'Saved' }) }
+    else toast({ title: res.message || 'Save failed', variant: 'destructive' })
   }
 
   const del = async (id: number, name: string) => {
     if (!confirm(`Delete NPC "${name}"?\n\nThis removes the NPC from all maps and spawn zones.`)) return
     const res = await adminApi.entity.delete('npc', id)
-    if (res.success) load()
+    if (res.success) { load(); toast({ title: `${name} deleted` }) }
+    else toast({ title: res.message || 'Delete failed', variant: 'destructive' })
   }
 
   const set = (k: string, v: unknown) => setEditing(prev => ({ ...prev, [k]: v }))
 
-  const filtered = npcs.filter(n =>
+  const preFiltered = filterMode === 'friendly' ? npcs.filter(n => !n.is_enemy)
+    : filterMode === 'enemy' ? npcs.filter(n => n.is_enemy)
+    : npcs
+  const filtered = preFiltered.filter(n =>
     n.name.toLowerCase().includes(search.toLowerCase()) ||
     (n.persona || '').toLowerCase().includes(search.toLowerCase())
   )
@@ -341,8 +348,8 @@ export function NpcEditorPanel() {
             {dialogues.length} dialogue NPC{dialogues.length !== 1 ? 's' : ''} · {enemies.length} enem{enemies.length !== 1 ? 'ies' : 'y'}
           </p>
         </div>
-        <Button onClick={() => { setEditing({ ...BLANK }); setTab('dialogue') }}>
-          <Plus className="w-4 h-4 mr-1" /> New NPC
+        <Button onClick={() => { setEditing({ ...BLANK, is_enemy: filterMode === 'enemy', icon: filterMode === 'enemy' ? '💀' : '💬' }); setTab(filterMode === 'enemy' ? 'combat' : 'dialogue') }}>
+          <Plus className="w-4 h-4 mr-1" /> {filterMode === 'enemy' ? 'New Enemy' : 'New NPC'}
         </Button>
       </div>
 

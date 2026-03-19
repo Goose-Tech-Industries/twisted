@@ -12,14 +12,28 @@ import {
 } from "lucide-react"
 
 export type AdminSection =
-  | 'dashboard' | 'templates' | 'assets' | 'quest_builder' | 'dialogue_builder' | 'players' | 'economy' | 'gm_tools'
-  | 'world_forge' | 'world' | 'maps' | 'regions' | 'spawns' | 'map_connections' | 'scheduler'
-  | 'items' | 'npcs' | 'quests' | 'questboard' | 'shop_supply' | 'loot_tables' | 'crafting' | 'auction'
-  | 'classes' | 'races' | 'feats' | 'stat' | 'class_skill' | 'character_creator'
+  // Overview
+  | 'dashboard' | 'players' | 'economy' | 'gm_tools'
+  // World
+  | 'world_forge' | 'world' | 'maps' | 'map_connections' | 'regions' | 'spawns'
+  | 'spawn_waves' | 'npc_patrols' | 'region_weather' | 'region_rep_gates'
+  | 'world_events' | 'scheduler'
+  // Content
+  | 'items' | 'item_sets' | 'npcs' | 'enemies' | 'quests' | 'quest_builder' | 'dialogue_builder' | 'questboard'
+  | 'shop_supply' | 'loot_tables' | 'crafting' | 'auction' | 'achievements'
+  | 'npc_schedules' | 'enemy_scaling' | 'subclass' | 'racial_ability' | 'backgrounds'
+  | 'artifact_rivalry'
+  // Character
+  | 'classes' | 'races' | 'feats' | 'skills' | 'ability_scores' | 'race_class_access'
+  | 'stat' | 'class_skill' | 'character_creator' | 'titles'
+  // Combat
   | 'battle_config' | 'battle_cmd' | 'limit' | 'status' | 'arenas'
-  | 'oghams' | 'ogham_family' | 'artifacts' | 'skills'
-  | 'gm_notes' | 'live_social' | 'reports' | 'referrals' | 'achievements' | 'event_log'
-  | 'settings' | 'modules'
+  // Magic
+  | 'oghams' | 'ogham_family' | 'artifacts'
+  // Staff
+  | 'gm_notes' | 'live_social' | 'reports' | 'referrals' | 'event_log' | 'moderation'
+  // Config
+  | 'settings' | 'modules' | 'templates' | 'assets'
 
 interface NavItem { id: AdminSection; label: string; icon: React.ElementType }
 interface NavGroup { title: string; items: NavItem[] }
@@ -27,65 +41,51 @@ interface NavGroup { title: string; items: NavItem[] }
 const NAV_GROUPS: NavGroup[] = [
   { title: 'Overview', items: [
     { id: 'dashboard',        label: 'Dashboard',         icon: LayoutDashboard },
-    { id: 'templates',         label: 'Game Templates',    icon: Layers },
-    { id: 'assets',             label: 'Asset Manager',     icon: Target },
     { id: 'players',          label: 'Players',           icon: Users },
     { id: 'economy',          label: 'Economy',           icon: BarChart3 },
+    { id: 'gm_tools',         label: 'GM Tools',          icon: Megaphone },
   ]},
   { title: 'World', items: [
-    { id: 'world_forge',      label: 'World Forge ✨',    icon: Flame },
-    { id: 'world',            label: 'World State',       icon: Globe },
-    { id: 'maps',             label: 'Map Editor',        icon: Map },
-    { id: 'regions',          label: 'Regions',           icon: Flag },
-    { id: 'spawns',           label: 'Spawns',            icon: Target },
-    { id: 'map_connections',  label: 'Map Links',         icon: Network },
+    { id: 'world',            label: 'World',             icon: Globe },
+    { id: 'maps',             label: 'Maps',              icon: Map },
+    { id: 'npc_patrols',      label: 'NPC Patrols',       icon: Activity },
     { id: 'scheduler',        label: 'Scheduler',         icon: Clock },
   ]},
   { title: 'Content', items: [
     { id: 'items',            label: 'Items',             icon: Package },
-    { id: 'npcs',             label: 'NPCs & Enemies',    icon: Skull },
+    { id: 'npcs',             label: 'NPCs',              icon: Users },
+    { id: 'enemies',          label: 'Enemies',           icon: Skull },
     { id: 'quests',           label: 'Quests',            icon: ScrollText },
-    { id: 'quest_builder',    label: 'Quest Builder',     icon: GitBranch },
     { id: 'dialogue_builder', label: 'Dialogue Builder',  icon: Network },
-    { id: 'questboard',       label: 'Quest Board',       icon: ClipboardList },
-    { id: 'shop_supply',      label: 'Shops',             icon: Store },
-    { id: 'loot_tables',      label: 'Loot Tables',       icon: Layers },
-    { id: 'crafting',         label: 'Crafting',          icon: Hammer },
-    { id: 'auction',          label: 'Auction House',     icon: Gavel },
+    { id: 'shop_supply',      label: 'Commerce',          icon: Store },
+    { id: 'achievements',     label: 'Achievements',      icon: Award },
   ]},
   { title: 'Character', items: [
     { id: 'classes',          label: 'Classes',           icon: Shield },
     { id: 'races',            label: 'Races',             icon: UserCog },
     { id: 'feats',            label: 'Feats',             icon: Trophy },
-    { id: 'stat',             label: 'Stat Engine',       icon: BarChart3 },
-    { id: 'class_skill',      label: 'Skill Assign',      icon: ListChecks },
+    { id: 'stat',             label: 'Stats & Abilities', icon: BarChart3 },
+    { id: 'titles',           label: 'Titles',            icon: Award },
     { id: 'character_creator',label: 'Creator Preview',   icon: Users2 },
   ]},
   { title: 'Combat', items: [
-    { id: 'battle_config',    label: 'Battle Config',     icon: Settings },
-    { id: 'battle_cmd',       label: 'Battle Commands',   icon: Swords },
-    { id: 'limit',            label: 'Limit Breaks',      icon: Zap },
+    { id: 'battle_config',    label: 'Battle System',     icon: Swords },
     { id: 'status',           label: 'Status Effects',    icon: Droplets },
-    { id: 'arenas',           label: 'Arenas',            icon: Swords },
+    { id: 'arenas',           label: 'Arenas & Tourneys', icon: Trophy },
   ]},
   { title: 'Magic', items: [
-    { id: 'oghams',           label: 'Blood Oghams',      icon: Wand2 },
-    { id: 'ogham_family',     label: 'Ogham Families',    icon: GitBranch },
+    { id: 'oghams',           label: 'Oghams',            icon: Wand2 },
     { id: 'artifacts',        label: 'Artifacts',         icon: Gem },
-    { id: 'skills',           label: 'Skills',            icon: Sparkles },
   ]},
   { title: 'Staff', items: [
-    { id: 'gm_tools',         label: 'GM Tools',          icon: Megaphone },
-    { id: 'gm_notes',         label: 'GM Notepad',        icon: PenTool },
+    { id: 'gm_notes',         label: 'GM Notes',          icon: PenTool },
+    { id: 'moderation',       label: 'Moderation',        icon: Shield },
     { id: 'live_social',      label: 'Live Social',       icon: Users2 },
-    { id: 'reports',          label: 'Reports',           icon: Flag },
     { id: 'referrals',        label: 'Referrals',         icon: Link },
-    { id: 'achievements',     label: 'Achievements',      icon: Award },
     { id: 'event_log',        label: 'Event Log',         icon: Activity },
   ]},
   { title: 'Config', items: [
-    { id: 'settings',         label: 'Settings & Labels', icon: Settings },
-    { id: 'modules',          label: 'Modules',           icon: ToggleLeft },
+    { id: 'settings',         label: 'Config',            icon: Settings },
   ]},
 ]
 

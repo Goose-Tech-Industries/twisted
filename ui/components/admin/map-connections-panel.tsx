@@ -22,14 +22,16 @@ async function req(method: string, url: string, data?: unknown): Promise<Record<
 
 async function getEvents(mapId: number): Promise<TeleportEvent[]> {
   if (eventCache[mapId]) return eventCache[mapId]
-  const r = await fetch('/admin-panel/map', { credentials: 'include' })
-  const d: Record<string, unknown> = await r.json()
-  if (d.success) {
-    for (const m of (d.data || []) as Array<{ id: number; collisions_json: string }>) {
-      try { eventCache[m.id] = JSON.parse(m.collisions_json || '[]') as TeleportEvent[] }
-      catch { eventCache[m.id] = [] }
+  try {
+    const r = await fetch(`/admin-panel/map/${mapId}`, { credentials: 'include' })
+    if (!r.ok) return []
+    const d: Record<string, unknown> = await r.json()
+    if (d.success && d.data) {
+      const map = d.data as { collisions_json?: string }
+      try { eventCache[mapId] = JSON.parse(map.collisions_json || '[]') as TeleportEvent[] }
+      catch { eventCache[mapId] = [] }
     }
-  }
+  } catch {}
   return eventCache[mapId] || []
 }
 
@@ -193,6 +195,60 @@ export function MapConnectionsPanel() {
           </Button>
         </div>
       </div>
+
+      {/* Visual Graph */}
+      {!loading && maps.length > 0 && (
+        <div className="mb-4 p-4 bg-card border border-border rounded-lg overflow-auto">
+          <p className="text-[10px] font-bold uppercase text-muted-foreground mb-2">Connection Map</p>
+          {(() => {
+            const cols = Math.ceil(Math.sqrt(maps.length))
+            const nodeW = 100, nodeH = 40, gapX = 140, gapY = 70, pad = 20
+            const positions: Record<number, { x: number; y: number }> = {}
+            maps.forEach((m: GameMap, i: number) => {
+              const col = i % cols, row = Math.floor(i / cols)
+              positions[m.id] = { x: pad + col * gapX + nodeW / 2, y: pad + row * gapY + nodeH / 2 }
+            })
+            const svgW = pad * 2 + cols * gapX
+            const svgH = pad * 2 + Math.ceil(maps.length / cols) * gapY
+            return (
+              <svg width={svgW} height={svgH} className="min-w-full">
+                {/* Edges */}
+                {conns.map((c: Connection, i: number) => {
+                  const from = positions[c.sourceMapId]
+                  const to = positions[c.destMapId]
+                  if (!from || !to) return null
+                  return <line key={i} x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+                    stroke="#4a6741" strokeWidth="1.5" markerEnd="url(#arrow)" opacity="0.6" />
+                })}
+                <defs>
+                  <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a6741" />
+                  </marker>
+                </defs>
+                {/* Nodes */}
+                {maps.map((m: GameMap) => {
+                  const p = positions[m.id]
+                  if (!p) return null
+                  const warpCount = (byMap[m.id] || []).length
+                  const hasNoExit = warpCount === 0
+                  return (
+                    <g key={m.id}>
+                      <rect x={p.x - nodeW / 2} y={p.y - nodeH / 2} width={nodeW} height={nodeH} rx={6}
+                        fill={hasNoExit ? '#3a1a1a' : '#1a2a1a'} stroke={hasNoExit ? '#f87171' : '#4a6741'} strokeWidth="1.5" />
+                      <text x={p.x} y={p.y - 2} textAnchor="middle" fill="#e0e0e0" fontSize="10" fontWeight="bold">
+                        {m.name.length > 12 ? m.name.slice(0, 11) + '…' : m.name}
+                      </text>
+                      <text x={p.x} y={p.y + 12} textAnchor="middle" fill="#888" fontSize="9">
+                        {warpCount} warp{warpCount !== 1 ? 's' : ''}{hasNoExit ? ' ⚠' : ''}
+                      </text>
+                    </g>
+                  )
+                })}
+              </svg>
+            )
+          })()}
+        </div>
+      )}
 
       <div className="grid grid-cols-[80px_80px_24px_1fr_80px_80px_72px] gap-2 px-3 pb-2 text-[10px] uppercase tracking-wider text-muted-foreground">
         <span>Src X</span><span>Src Y</span><span />

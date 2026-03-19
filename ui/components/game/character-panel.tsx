@@ -1,6 +1,8 @@
 "use client"
 
 import { useGame } from "@/lib/game-context"
+import { getNameColor, getNameEffect } from "@/lib/name-colors"
+import { cn } from "@/lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { 
@@ -27,6 +29,7 @@ const STAT_CONFIG = [
 
 export function CharacterPanel() {
   const gameContext = useGame()
+  const state = gameContext.state
   const char = gameContext.character
   const oghams = gameContext.oghams || []
   
@@ -58,7 +61,8 @@ export function CharacterPanel() {
               
               {/* Character Details */}
               <div className="flex-1">
-                <h2 className="text-2xl font-bold text-foreground blood-text">
+                <h2 className={cn("text-2xl font-bold blood-text", getNameEffect(state.role || undefined))}
+                  style={{ color: getNameColor(state.role || undefined, state.chatColor) || undefined }}>
                   {char.name}
                 </h2>
                 <p className="text-muted-foreground mt-1">

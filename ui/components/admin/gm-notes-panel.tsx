@@ -1,4 +1,5 @@
 "use client"
+import { toast } from "@/hooks/use-toast"
 import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { RefreshCw, Pin, Trash2 } from "lucide-react"
@@ -43,13 +44,13 @@ export function GmNotesPanel() {
 
   const post = async () => {
     if (!body.trim()) return
-    if (body.length > 2000) { alert('Note too long (max 2000 chars)'); return }
-    const targetMap = scope === 'map' ? mapId : null
+    if (body.length > 2000) { toast({ title: 'Note too long', variant: 'destructive' }); return }
+    const targetMap = scope === 'map' ? (mapId || maps[0]?.id || null) : null
     const r = await req('POST', '/admin-panel/notes', { body: body.trim(), mapId: targetMap, pinned: pinNew ? 1 : 0 })
     if (r.success) {
       setBody(''); setPinNew(false)
       setActiveTab(scope === 'map' ? mapId : 'global')
-    } else alert('Failed: ' + String(r.message))
+    } else toast({ title: String(r.message || 'Failed'), variant: 'destructive' })
   }
 
   const pin = async (id: number) => { await req('POST', `/admin-panel/notes/${id}/pin`); loadNotes() }

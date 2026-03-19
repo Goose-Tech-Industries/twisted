@@ -623,4 +623,6 @@ export interface NearbyPlayer {
   className?: string
   isOffline?: boolean
   presence?: string
+  role?: string
+  chatColor?: string | null
 }

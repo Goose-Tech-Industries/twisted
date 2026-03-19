@@ -70,12 +70,18 @@ export function RegionManagerPanel() {
       pvp_enabled: false, is_sanctuary: false, is_active: true,
       active_tags_json: '[]', auto_rules_json: '[]',
     })
-    try { setTags(JSON.parse(r?.active_tags_json || '[]') as string[]) } catch { setTags([]) }
-    try { setAutoRules(JSON.parse(r?.auto_rules_json || '[]') as unknown[]) } catch { setAutoRules([]) }
+    try {
+      const parsedTags = JSON.parse(r?.active_tags_json || '[]')
+      setTags(Array.isArray(parsedTags) ? parsedTags : [])
+    } catch { setTags([]); console.warn('[Region] Invalid tags JSON for region', r?.id) }
+    try {
+      const parsedRules = JSON.parse(r?.auto_rules_json || '[]')
+      setAutoRules(Array.isArray(parsedRules) ? parsedRules : [])
+    } catch { setAutoRules([]); console.warn('[Region] Invalid auto_rules JSON for region', r?.id) }
   }
 
   const save = async () => {
-    if (!editing?.name?.trim()) { alert('Name is required'); return }
+    if (!editing?.name?.trim()) return
     const payload = {
       ...editing,
       pvp_enabled:  editing.pvp_enabled  ? 1 : 0,
@@ -233,25 +239,82 @@ export function RegionManagerPanel() {
               <Plus className="w-3.5 h-3.5 mr-1" />Add
             </Button>
           </div>
-          {autoRules.length === 0 && <p className="text-xs text-muted-foreground">No auto-rules.</p>}
-          {autoRules.map((rule: unknown, i: number) => (
-            <div key={i} className="p-3 bg-secondary/30 border border-border rounded-lg mb-2">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold text-purple-400">Rule {i + 1}</span>
-                <Button size="sm" variant="ghost" className="text-destructive h-6 w-6 p-0"
-                  onClick={() => setAutoRules((p: unknown[]) => p.filter((_: unknown, j: number) => j !== i))}>
-                  <Trash2 className="w-3 h-3" />
+          {autoRules.length === 0 && <p className="text-xs text-muted-foreground">No auto-rules. Add one to make regions react to world flags.</p>}
+          {autoRules.map((rule: unknown, i: number) => {
+            const r = rule as Record<string, unknown>
+            const conditions = Array.isArray(r.conditions) ? r.conditions as Array<Record<string, string>> : []
+            const apply = (r.apply || {}) as Record<string, unknown>
+            const updateRule = (updated: Record<string, unknown>) => {
+              const p = [...autoRules]; p[i] = updated; setAutoRules(p)
+            }
+            const updateCondition = (ci: number, field: string, value: string) => {
+              const newConds = [...conditions]; newConds[ci] = { ...newConds[ci], [field]: value }
+              updateRule({ ...r, conditions: newConds })
+            }
+            const addCondition = () => updateRule({ ...r, conditions: [...conditions, { flag: '', op: '==', value: 'true' }] })
+            const removeCondition = (ci: number) => updateRule({ ...r, conditions: conditions.filter((_: unknown, j: number) => j !== ci) })
+            const setApplyField = (k: string, v: unknown) => updateRule({ ...r, apply: { ...apply, [k]: v } })
+
+            return (
+              <div key={i} className="p-3 bg-secondary/30 border border-border rounded-lg mb-2">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-purple-400">Rule {i + 1}</span>
+                  <Button size="sm" variant="ghost" className="text-destructive h-6 w-6 p-0"
+                    onClick={() => setAutoRules((p: unknown[]) => p.filter((_: unknown, j: number) => j !== i))}>
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
+                </div>
+
+                {/* Conditions */}
+                <p className="text-[10px] font-bold uppercase text-muted-foreground mb-1">When:</p>
+                {conditions.map((c, ci) => (
+                  <div key={ci} className="flex items-center gap-1 mb-1">
+                    <Input value={c.flag || ''} onChange={e => updateCondition(ci, 'flag', e.target.value)}
+                      placeholder="flag_key" className="h-7 text-[11px] flex-1" />
+                    <select value={c.op || '=='} onChange={e => updateCondition(ci, 'op', e.target.value)}
+                      className="h-7 text-[11px] bg-input border border-border rounded px-1">
+                      <option value="==">==</option><option value="!=">!=</option>
+                      <option value=">">&gt;</option><option value="<">&lt;</option>
+                      <option value=">=">&gt;=</option><option value="<=">&lt;=</option>
+                    </select>
+                    <Input value={c.value || ''} onChange={e => updateCondition(ci, 'value', e.target.value)}
+                      placeholder="value" className="h-7 text-[11px] w-20" />
+                    <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => removeCondition(ci)}>
+                      <Trash2 className="w-2.5 h-2.5" />
+                    </Button>
+                  </div>
+                ))}
+                <Button size="sm" variant="ghost" className="h-6 text-[10px] text-muted-foreground" onClick={addCondition}>
+                  + Add condition
                 </Button>
+
+                {/* Apply */}
+                <p className="text-[10px] font-bold uppercase text-muted-foreground mb-1 mt-2">Then apply:</p>
+                <div className="grid grid-cols-2 gap-1">
+                  <div>
+                    <label className="text-[10px] text-muted-foreground">Danger Level</label>
+                    <Input type="number" value={Number(apply.danger_level) || ''} onChange={e => setApplyField('danger_level', parseInt(e.target.value) || 0)}
+                      className="h-7 text-[11px]" placeholder="1-5" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-muted-foreground">Weather Override</label>
+                    <Input value={String(apply.weather_override || '')} onChange={e => setApplyField('weather_override', e.target.value || null)}
+                      className="h-7 text-[11px]" placeholder="BLOOD_MOON" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-muted-foreground">XP Mult</label>
+                    <Input type="number" step="0.1" value={Number(apply.xp_mult) || ''} onChange={e => setApplyField('xp_mult', parseFloat(e.target.value) || null)}
+                      className="h-7 text-[11px]" placeholder="1.5" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-muted-foreground">Spawn Mult</label>
+                    <Input type="number" step="0.1" value={Number(apply.spawn_mult) || ''} onChange={e => setApplyField('spawn_mult', parseFloat(e.target.value) || null)}
+                      className="h-7 text-[11px]" placeholder="2.0" />
+                  </div>
+                </div>
               </div>
-              <textarea defaultValue={JSON.stringify(rule, null, 2)}
-                onBlur={(e: React.FocusEvent<HTMLTextAreaElement>) => {
-                  try {
-                    const p = [...autoRules]; p[i] = JSON.parse(e.target.value); setAutoRules(p)
-                  } catch {}
-                }}
-                rows={4} className="w-full px-2 py-1.5 bg-input border border-border rounded text-[11px] font-mono resize-none" />
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </div>

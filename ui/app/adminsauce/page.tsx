@@ -31,11 +31,16 @@ import { MapManagerPanel }       from "@/components/admin/map-manager-panel"
 import { RegionManagerPanel }    from "@/components/admin/region-manager-panel"
 import { SpawnManagerPanel }     from "@/components/admin/spawn-manager-panel"
 import { MapConnectionsPanel }   from "@/components/admin/map-connections-panel"
+import { MapHubPanel }           from "@/components/admin/map-hub-panel"
+import { WorldHubPanel }         from "@/components/admin/world-hub-panel"
 import { SchedulerPanel }        from "@/components/admin/scheduler-panel"
 
 // ── Content ───────────────────────────────────────────────────────
 import { NpcEditorPanel }        from "@/components/admin/npc-editor-panel"
 import { QuestBoardPanel }       from "@/components/admin/questboard-panel"
+import { QuestHubPanel }         from "@/components/admin/quest-hub-panel"
+import { EnemyHubPanel }         from "@/components/admin/enemy-hub-panel"
+import { CommerceHubPanel }      from "@/components/admin/commerce-hub-panel"
 import { ShopSupplyPanel }       from "@/components/admin/shop-supply-panel"
 import { LootTablePanel }        from "@/components/admin/loot-table-panel"
 import { CraftManagerPanel }     from "@/components/admin/craft-manager-panel"
@@ -45,10 +50,17 @@ import { AuctionPanel }          from "@/components/admin/auction-panel"
 import { StatEnginePanel }       from "@/components/admin/stat-engine-panel"
 import { CharacterCreatorPanel } from "@/components/admin/character-creator-panel"
 import { ClassSkillPanel }       from "@/components/admin/class-skill-panel"
+import { ClassHubPanel }         from "@/components/admin/class-hub-panel"
+import { StatsHubPanel }         from "@/components/admin/stats-hub-panel"
+import { RaceHubPanel }          from "@/components/admin/race-hub-panel"
 
 // ── Combat ────────────────────────────────────────────────────────
 import { LimitBreakPanel }       from "@/components/admin/limit-battle-panels"
 import { BattleCmdPanel }        from "@/components/admin/limit-battle-panels"
+import { BattleHubPanel }        from "@/components/admin/battle-hub-panel"
+import { ArenaHubPanel }         from "@/components/admin/arena-hub-panel"
+import { StatusHubPanel }        from "@/components/admin/status-hub-panel"
+import { ModerationHubPanel }    from "@/components/admin/moderation-hub-panel"
 import { BattleConfigPanel }     from "@/components/admin/battle-config-panel"
 import { TemplatePickerPanel }   from "@/components/admin/template-picker-panel"
 import { AssetManagerPanel }     from "@/components/admin/asset-manager-panel"
@@ -58,6 +70,7 @@ import { DialogueBuilderPanel }  from "@/components/admin/dialogue-builder-panel
 // ── Magic ─────────────────────────────────────────────────────────
 import { OghamPanel }            from "@/components/admin/ogham-panel"
 import { OghamFamilyPanel }      from "@/components/admin/ogham-family-panel"
+import { OghamHubPanel }         from "@/components/admin/ogham-hub-panel"
 import { ArtifactManagerPanel }  from "@/components/admin/artifact-manager-panel"
 
 // ── Staff ─────────────────────────────────────────────────────────
@@ -71,6 +84,12 @@ import { EventLogPanel }         from "@/components/admin/event-log-panel"
 // ── Config ────────────────────────────────────────────────────────
 import { SettingsPanel }         from "@/components/admin/settings-panel"
 import { ModulesPanel }          from "@/components/admin/modules-panel"
+import { ConfigHubPanel }        from "@/components/admin/config-hub-panel"
+
+// ── Staff Messenger + Command Bar + Notes Strip ─────────────────
+import { StaffMessenger }        from "@/components/admin/staff-messenger"
+import { CommandBar }            from "@/components/admin/command-bar"
+import { GmNotesStrip }          from "@/components/admin/gm-notes-strip"
 
 // ─────────────────────────────────────────────────────────────────
 
@@ -86,41 +105,54 @@ async function checkStaff(): Promise<boolean> {
   }
 }
 
-function SectionContent({ section }: { section: AdminSection }) {
+function SectionContent({ section, onNavigate }: { section: AdminSection; onNavigate: (s: AdminSection) => void }) {
   switch (section) {
     // Overview
-    case 'dashboard':         return <DashboardPanel />
+    case 'dashboard':         return <DashboardPanel onNavigate={s => onNavigate(s as AdminSection)} />
     case 'players':           return <PlayerManager />
     case 'economy':           return <EconomyPanel />
     case 'gm_tools':          return <GmToolsPanel />
 
     // World
-    case 'world_forge':       return <WorldForgePanel />
-    case 'world':             return <WorldStatePanel />
-    case 'maps':              return <MapManagerPanel />
-    case 'regions':           return <RegionManagerPanel />
-    case 'spawns':            return <SpawnManagerPanel />
-    case 'map_connections':   return <MapConnectionsPanel />
+    case 'world_forge':       return <WorldHubPanel />
+    case 'world':             return <WorldHubPanel />
+    case 'world_events':      return <WorldHubPanel />
+    case 'maps':              return <MapHubPanel />
+    case 'map_connections':   return <MapHubPanel />
+    case 'regions':           return <MapHubPanel />
+    case 'spawns':            return <MapHubPanel />
+    case 'spawn_waves':       return <MapHubPanel />
+    case 'region_weather':    return <MapHubPanel />
+    case 'region_rep_gates':  return <MapHubPanel />
+    case 'npc_patrols':       return <EntityManager section="npc_patrols" />
     case 'scheduler':         return <SchedulerPanel />
 
     // Content
     case 'items':             return <EntityManager section="items" />
-    case 'npcs':              return <NpcEditorPanel />
-    case 'quests':            return <EntityManager section="quests" />
-    case 'quest_builder':     return <QuestBuilderPanel />
+    case 'item_sets':         return <EntityManager section="item_sets" />
+    case 'npc_schedules':     return <EntityManager section="npc_schedules" />
+    case 'enemy_scaling':     return <EnemyHubPanel />
+    case 'npcs':              return <NpcEditorPanel filterMode="friendly" />
+    case 'enemies':           return <EnemyHubPanel />
+    case 'quests':            return <QuestHubPanel />
+    case 'quest_builder':     return <QuestHubPanel />
+    case 'questboard':        return <QuestHubPanel />
     case 'dialogue_builder':  return <DialogueBuilderPanel />
-    case 'questboard':        return <QuestBoardPanel />
-    case 'shop_supply':       return <ShopSupplyPanel />
-    case 'loot_tables':       return <LootTablePanel />
-    case 'crafting':          return <CraftManagerPanel />
-    case 'auction':           return <AuctionPanel />
+    case 'shop_supply':       return <CommerceHubPanel />
+    case 'loot_tables':       return <EnemyHubPanel />
+    case 'crafting':          return <CommerceHubPanel />
+    case 'auction':           return <CommerceHubPanel />
 
     // Character
-    case 'classes':           return <EntityManager section="classes" />
-    case 'races':             return <EntityManager section="races" />
+    case 'classes':           return <ClassHubPanel />
+    case 'skills':            return <ClassHubPanel />
+    case 'class_skill':       return <ClassHubPanel />
+    case 'race_class_access': return <ClassHubPanel />
+    case 'races':             return <RaceHubPanel />
     case 'feats':             return <EntityManager section="feats" />
-    case 'stat':              return <StatEnginePanel />
-    case 'class_skill':       return <ClassSkillPanel />
+    case 'stat':              return <StatsHubPanel />
+    case 'ability_scores':    return <StatsHubPanel />
+    case 'titles':            return <EntityManager section="titles" />
     case 'character_creator': return <CharacterCreatorPanel />
 
     // Templates + Assets
@@ -128,29 +160,32 @@ function SectionContent({ section }: { section: AdminSection }) {
     case 'assets':            return <AssetManagerPanel />
 
     // Combat
-    case 'battle_config':     return <BattleConfigPanel />
-    case 'battle_cmd':        return <BattleCmdPanel />
-    case 'limit':             return <LimitBreakPanel />
-    case 'status':            return <EntityManager section="status" />
-    case 'arenas':            return <EntityManager section="arenas" />
+    case 'battle_config':     return <BattleHubPanel />
+    case 'battle_cmd':        return <BattleHubPanel />
+    case 'limit':             return <BattleHubPanel />
+    case 'status':            return <StatusHubPanel />
+    case 'arenas':            return <ArenaHubPanel />
 
     // Magic
-    case 'oghams':            return <OghamPanel />
-    case 'ogham_family':      return <OghamFamilyPanel />
+    case 'oghams':            return <OghamHubPanel />
+    case 'ogham_family':      return <OghamHubPanel />
     case 'artifacts':         return <ArtifactManagerPanel />
-    case 'skills':            return <EntityManager section="skills" />
+    case 'artifact_rivalry':  return <EntityManager section="artifact_rivalries" />
 
     // Staff
     case 'gm_notes':          return <GmNotesPanel />
+    case 'moderation':        return <ModerationHubPanel />
+    case 'reports':           return <ModerationHubPanel />
     case 'live_social':       return <LiveSocialPanel />
-    case 'reports':           return <ReportsPanel />
     case 'referrals':         return <ReferralPanel />
     case 'achievements':      return <AchievementPanel />
     case 'event_log':         return <EventLogPanel />
 
     // Config
-    case 'settings':          return <SettingsPanel />
-    case 'modules':           return <ModulesPanel />
+    case 'settings':          return <ConfigHubPanel />
+    case 'modules':           return <ConfigHubPanel />
+    case 'templates':         return <ConfigHubPanel />
+    case 'assets':            return <ConfigHubPanel />
 
     default:
       return (
@@ -199,15 +234,20 @@ export default function AdminSaucePage() {
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       <AdminSidebar currentSection={section} onSectionChange={handleSectionChange} />
-      <main className="flex-1 overflow-y-auto min-w-0">
-        <Suspense fallback={
-          <div className="flex items-center justify-center h-64">
-            <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-          </div>
-        }>
-          <SectionContent section={section} />
-        </Suspense>
+      <main className="flex-1 overflow-y-auto min-w-0 flex flex-col">
+        <GmNotesStrip />
+        <div className="flex-1 overflow-y-auto">
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-64">
+              <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            </div>
+          }>
+            <SectionContent section={section} onNavigate={handleSectionChange} />
+          </Suspense>
+        </div>
       </main>
+      <StaffMessenger />
+      <CommandBar onNavigate={s => handleSectionChange(s as AdminSection)} />
     </div>
   )
 }

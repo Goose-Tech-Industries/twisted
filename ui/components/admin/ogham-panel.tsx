@@ -1,4 +1,5 @@
 "use client"
+import { toast } from "@/hooks/use-toast"
 import React from 'react'
 
 import { useState, useEffect, useCallback } from "react"
@@ -10,11 +11,11 @@ import { Plus, Pencil, Trash2, Info, ChevronLeft, Droplets } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface Ogham {
-  id: number; name: string; icon: string; description: string; lore: string
+  id: number; name: string; icon: string; description: string; lore_text: string
   family_id?: number; rank: number; base_ogham_id?: number
   element_attack?: string; on_hit_status?: string; on_hit_chance?: number
-  stat_bonus?: string; kills_to_rank_up?: number
-  granted_skill_id?: number
+  stat_bonus_json?: string; kills_to_rank_up?: number
+  grant_skill_id?: number
 }
 interface OghamFamily { id: number; name: string; icon: string }
 interface Skill { id: number; name: string }
@@ -46,17 +47,17 @@ function grantSummary(og: Ogham): string {
   if (og.element_attack) parts.push(`${og.element_attack} Attack`)
   if (og.on_hit_status)  parts.push(`${og.on_hit_chance ?? 100}% ${og.on_hit_status} on hit`)
   try {
-    const sb = typeof og.stat_bonus === 'string' ? JSON.parse(og.stat_bonus || '{}') : og.stat_bonus || {}
+    const sb = typeof og.stat_bonus_json === 'string' ? JSON.parse(og.stat_bonus_json || '{}') : og.stat_bonus_json || {}
     Object.entries(sb).forEach(([k, v]) => parts.push(`+${v} ${k.toUpperCase()}`))
   } catch {}
-  if (og.granted_skill_id) parts.push(`Skill #${og.granted_skill_id}`)
+  if (og.grant_skill_id) parts.push(`Skill #${og.grant_skill_id}`)
   return parts.join(' · ') || '—'
 }
 
 const BLANK: Partial<Ogham> = {
-  name: '', icon: '🩸', description: '', lore: '',
+  name: '', icon: '🩸', description: '', lore_text: '',
   rank: 1, element_attack: '', on_hit_status: '', on_hit_chance: 0,
-  stat_bonus: '{}', kills_to_rank_up: 50,
+  stat_bonus_json: '{}', kills_to_rank_up: 50,
 }
 
 export function OghamPanel() {
@@ -89,19 +90,19 @@ export function OghamPanel() {
   const openEdit = (og?: Partial<Ogham>) => {
     const item: Partial<Ogham> = og ? { ...og } : { ...BLANK }
     setEditing(item)
-    const sb = typeof item.stat_bonus === 'string' ? item.stat_bonus || '{}' : JSON.stringify(item.stat_bonus || {}, null, 2)
+    const sb = typeof item.stat_bonus_json === 'string' ? item.stat_bonus_json || '{}' : JSON.stringify(item.stat_bonus_json || {}, null, 2)
     setBonusJson(sb)
     setJsonError('')
   }
 
   const save = async () => {
     if (!editing) return
-    if (!editing.name?.trim()) { alert('Name is required.'); return }
+    if (!editing.name?.trim()) { toast({ title: 'Name is required', variant: 'destructive' }); return }
     try { JSON.parse(bonusJson) } catch { setJsonError('Invalid JSON in Stat Bonus.'); return }
-    const data = { ...editing, stat_bonus: bonusJson }
+    const data = { ...editing, stat_bonus_json: bonusJson }
     const res = await adminApi.entity.save('ogham', data as Record<string,unknown>, editing.id)
     if (res.success) { load(); setEditing(null) }
-    else alert(res.message || 'Save failed')
+    else toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
   }
 
   const del = async (id: number, name: string) => {
@@ -167,7 +168,7 @@ export function OghamPanel() {
 
           <div>
             <label className="text-sm font-medium">Lore Text <span className="text-muted-foreground font-normal">(flavour text)</span></label>
-            <textarea value={editing.lore || ''} onChange={e => set('lore', e.target.value)}
+            <textarea value={editing.lore_text || ''} onChange={e => set('lore_text', e.target.value)}
               rows={2} className="mt-1 w-full px-3 py-2 bg-input border border-border rounded-md text-sm resize-none" />
           </div>
 
@@ -233,7 +234,7 @@ export function OghamPanel() {
               <div>
                 <label className="text-sm font-medium">Grants Skill</label>
                 <FieldHint>Unlocks this skill while the Ogham is equipped.</FieldHint>
-                <select value={editing.granted_skill_id || ''} onChange={e => set('granted_skill_id', e.target.value ? parseInt(e.target.value) : null)}
+                <select value={editing.grant_skill_id || ''} onChange={e => set('grant_skill_id', e.target.value ? parseInt(e.target.value) : null)}
                   className="w-full px-3 py-2 bg-input border border-border rounded-md text-sm">
                   <option value="">— No skill —</option>
                   {skills.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}

@@ -7,9 +7,13 @@ import { Button } from "@/components/ui/button"
 import {
   Search, Ban, UserCheck, LogOut, MapPin, Package, Coins,
   TrendingUp, ChevronDown, ChevronUp, Shield, RefreshCw,
-  MessageSquare, Heart, Edit, Key, X, Check, Swords, Zap, Filter
+  MessageSquare, Heart, Edit, Key, X, Check, Swords, Zap, Filter, Trash2
 } from "lucide-react"
 import adminApi from "@/lib/admin-api"
+import { cn } from "@/lib/utils"
+import { toast } from "@/hooks/use-toast"
+import { Flag, Clock, StickyNote } from "lucide-react"
+import { getNameColor, getNameEffect } from "@/lib/name-colors"
 
 // ── Types ─────────────────────────────────────────────────────────
 interface CharDetail {
@@ -31,6 +35,7 @@ interface PlayerDetail {
 interface PlayerRow {
   id: number; username: string; role: string; is_banned: boolean
   last_login: string; gold?: number; char_count?: number; online?: boolean
+  chat_color?: string | null
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -39,6 +44,10 @@ function isRec(v: unknown): v is Record<string, unknown> {
 }
 function toStr(v: unknown, fb = "") { return typeof v === "string" ? v : v == null ? fb : String(v) }
 function toNum(v: unknown, fb = 0) { const n = Number(v); return Number.isFinite(n) ? n : fb }
+function safeDate(v: string): string {
+  try { const d = new Date(v); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString() }
+  catch { return '—' }
+}
 
 function extractRows(input: unknown): PlayerRow[] {
   const raw: unknown[] = Array.isArray(input) ? input
@@ -51,10 +60,11 @@ function extractRows(input: unknown): PlayerRow[] {
     gold: r.currency !== undefined ? toNum(r.currency) : r.gold !== undefined ? toNum(r.gold) : undefined,
     char_count: r.char_count !== undefined ? toNum(r.char_count) : undefined,
     online: Boolean(r.online),
+    chat_color: typeof r.chat_color === 'string' ? r.chat_color : null,
   })).filter(p => p.id > 0)
 }
 
-const ROLES = ["PLAYER", "MOD", "GM", "ADMIN"]
+const ROLES = ["PLAYER", "MOD", "GM", "ADMIN", "OWNER"]
 const ROLE_STYLE: Record<string, string> = {
   ADMIN: "bg-primary/20 text-primary border-primary/30",
   OWNER: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -62,6 +72,179 @@ const ROLE_STYLE: Record<string, string> = {
   MOD:   "bg-green-500/20 text-green-400 border-green-500/30",
   STAFF: "bg-purple-500/20 text-purple-400 border-purple-500/30",
   PLAYER:"bg-secondary text-muted-foreground border-border",
+}
+const ROLE_HIERARCHY = ["PLAYER", "MOD", "GM", "ADMIN", "OWNER"]
+
+// ── Role Selector Dropdown ───────────────────────────────────────
+function RoleSelector({ player, currentRole, onSelect, onCancel, loading }: {
+  player: PlayerRow
+  currentRole: string
+  onSelect: (role: string) => void
+  onCancel: () => void
+  loading: boolean
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4"
+      onClick={e => { if (e.target === e.currentTarget) onCancel() }}>
+      <Card className="celtic-border w-full max-w-xs">
+        <CardContent className="p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-sm">Change Role — {player.username}</h3>
+            <button onClick={onCancel} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="space-y-1">
+            {ROLE_HIERARCHY.map(role => {
+              const isCurrent = role === currentRole.toUpperCase()
+              const style = ROLE_STYLE[role] || ROLE_STYLE.PLAYER
+              return (
+                <button
+                  key={role}
+                  disabled={isCurrent || loading}
+                  onClick={() => onSelect(role)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm border transition-all ${
+                    isCurrent
+                      ? `${style} ring-1 ring-primary/50`
+                      : "border-border hover:border-primary/30 hover:bg-secondary/50"
+                  } ${loading ? "opacity-50" : ""}`}
+                >
+                  <span className="flex items-center gap-2">
+                    <Shield className="w-3.5 h-3.5" />
+                    <span className="font-medium">{role}</span>
+                  </span>
+                  {isCurrent && <span className="text-[10px] text-muted-foreground">current</span>}
+                </button>
+              )
+            })}
+          </div>
+          {loading && (
+            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+              <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+              Updating role...
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+const FLAG_STYLE: Record<string, { bg: string; label: string }> = {
+  watch:      { bg: "bg-orange-500/20 text-orange-400 border-orange-500/30", label: "Watch" },
+  vip:        { bg: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30", label: "VIP" },
+  trusted:    { bg: "bg-green-500/20 text-green-400 border-green-500/30",    label: "Trusted" },
+  suspicious: { bg: "bg-red-500/20 text-red-400 border-red-500/30",          label: "Suspicious" },
+}
+
+// ── Audit Trail Panel ────────────────────────────────────────────
+function AuditTrail({ userId }: { userId: number }) {
+  const [events, setEvents] = useState<Array<Record<string, unknown>>>([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    fetch(`/admin-panel/player/${userId}/audit`, { credentials: "include" })
+      .then(r => r.json()).then(d => { if (d.success) setEvents(d.data || []) })
+      .catch(() => {}).finally(() => setLoading(false))
+  }, [userId])
+  if (loading) return <p className="text-xs text-muted-foreground py-2">Loading audit trail...</p>
+  if (!events.length) return <p className="text-xs text-muted-foreground py-2">No events recorded.</p>
+  return (
+    <div className="space-y-1 max-h-48 overflow-y-auto">
+      {events.map((e, i) => {
+        let detail = ''
+        try { detail = typeof e.detail_json === 'string' ? e.detail_json : JSON.stringify(e.detail_json) } catch {}
+        const eventType = String(e.event_type || '')
+        const actorName = String(e.actor_name || '')
+        const targetName = String(e.target_name || '')
+        const createdAt = String(e.created_at || '')
+        return (
+          <div key={i} className="flex items-start gap-2 text-xs py-1 border-b border-border/30 last:border-0">
+            <Clock className="w-3 h-3 text-muted-foreground flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <span className="font-medium text-primary">{eventType}</span>
+              {actorName && <span className="text-muted-foreground">{` by ${actorName}`}</span>}
+              {targetName && <span className="text-muted-foreground">{` on ${targetName}`}</span>}
+              {detail && detail !== '{}' && detail !== 'null' && (
+                <span className="text-muted-foreground/60 text-[10px] ml-1">{detail}</span>
+              )}
+            </div>
+            <span className="text-[10px] text-muted-foreground flex-shrink-0">
+              {createdAt ? safeDate(createdAt) : ''}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Player Notes Panel ───────────────────────────────────────────
+function PlayerNotes({ userId }: { userId: number }) {
+  const [notes, setNotes] = useState<Array<Record<string, unknown>>>([])
+  const [loading, setLoading] = useState(true)
+  const [newNote, setNewNote] = useState("")
+  const [newFlag, setNewFlag] = useState("none")
+
+  const loadNotes = () => {
+    fetch(`/admin-panel/player/${userId}/notes`, { credentials: "include" })
+      .then(r => r.json()).then(d => { if (d.success) setNotes(d.data || []) })
+      .catch(() => {}).finally(() => setLoading(false))
+  }
+  useEffect(() => { loadNotes() }, [userId])
+
+  const addNote = async () => {
+    if (!newNote.trim()) return
+    const r = await fetch(`/admin-panel/player/${userId}/notes`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+      body: JSON.stringify({ body: newNote, flag: newFlag })
+    }).then(r => r.json())
+    if (r.success) { setNewNote(""); setNewFlag("none"); loadNotes(); toast({ title: "Note added" }) }
+  }
+
+  const deleteNote = async (noteId: number) => {
+    await fetch(`/admin-panel/player/${userId}/notes/${noteId}`, { method: "DELETE", credentials: "include" })
+    loadNotes()
+  }
+
+  if (loading) return <p className="text-xs text-muted-foreground py-2">Loading notes...</p>
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-1">
+        <Input value={newNote} onChange={e => setNewNote(e.target.value)} placeholder="Add a note..."
+          className="h-7 text-xs flex-1" onKeyDown={e => { if (e.key === "Enter") addNote() }} />
+        <select value={newFlag} onChange={e => setNewFlag(e.target.value)}
+          className="h-7 text-[10px] bg-input border border-border rounded px-1">
+          <option value="none">No flag</option>
+          <option value="watch">Watch</option>
+          <option value="vip">VIP</option>
+          <option value="trusted">Trusted</option>
+          <option value="suspicious">Suspicious</option>
+        </select>
+        <Button size="sm" className="h-7 px-2 text-xs" onClick={addNote}>Add</Button>
+      </div>
+      {notes.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No notes yet.</p>
+      ) : (
+        <div className="space-y-1 max-h-48 overflow-y-auto">
+          {notes.map((n, i) => {
+            const flag = String(n.flag || 'none')
+            const fs = FLAG_STYLE[flag]
+            return (
+              <div key={i} className="flex items-start gap-2 text-xs py-1 border-b border-border/30 last:border-0">
+                <StickyNote className="w-3 h-3 text-muted-foreground flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  {fs && <span className={`text-[9px] px-1 py-0.5 rounded border mr-1 ${fs.bg}`}>{fs.label}</span>}
+                  <span>{String(n.body)}</span>
+                  <span className="text-muted-foreground/60 text-[10px] ml-1">— {String(n.author_name)}</span>
+                </div>
+                <button onClick={() => deleteNote(Number(n.id))} className="text-muted-foreground hover:text-destructive flex-shrink-0">
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ── Edit Modal ────────────────────────────────────────────────────
@@ -263,6 +446,10 @@ export function PlayerManager() {
   const [actionLoading, setAL]      = useState<string | null>(null)
   const [editingUser, setEditingUser]   = useState<PlayerDetail | null>(null)
   const [editingChar, setEditingChar]   = useState<CharDetail | null>(null)
+  const [roleTarget, setRoleTarget]    = useState<PlayerRow | null>(null)
+  const [roleLoading, setRoleLoading]  = useState(false)
+  const [playerFlags, setPlayerFlags]  = useState<Record<number, string>>({})
+  const [detailTab, setDetailTab]      = useState<"chars" | "audit" | "notes">("chars")
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -275,10 +462,18 @@ export function PlayerManager() {
 
   useEffect(() => { void load() }, [load])
 
+  // Load player flags
+  useEffect(() => {
+    fetch('/admin-panel/player-flags', { credentials: 'include' })
+      .then(r => r.json()).then(d => { if (d.success) setPlayerFlags(d.data || {}) })
+      .catch(() => {})
+  }, [players])
+
   const loadDetail = useCallback(async (userId: number) => {
     setDL(true); setDetail(null)
     try {
       const res = await fetch(`/admin-panel/player/${userId}`, { credentials: "include" })
+      if (!res.ok) { setError(`Failed to load player (${res.status})`); return }
       const json = await res.json()
       if (json.success && isRec(json.data)) {
         const d = json.data as Record<string, unknown>
@@ -308,7 +503,7 @@ export function PlayerManager() {
           online: Boolean(d.online), chars,
         })
       }
-    } catch { /* ignore */ }
+    } catch { setError("Failed to load player details.") }
     finally { setDL(false) }
   }, [])
 
@@ -322,9 +517,9 @@ export function PlayerManager() {
     setAL(key)
     try {
       const r = await fn()
-      if (r.success) { if (msg) window.alert(msg) }
-      else window.alert(r.message || "Action failed.")
-    } catch { window.alert("Server error.") }
+      if (r.success) { if (msg) toast({ title: msg }) }
+      else toast({ title: r.message || "Action failed.", variant: "destructive" })
+    } catch { toast({ title: "Server error.", variant: "destructive" }) }
     finally { setAL(null) }
   }
 
@@ -341,12 +536,22 @@ export function PlayerManager() {
     setPlayers(prev => prev.map(x => x.id === p.id ? { ...x, is_banned: false } : x))
   }
 
-  const handleRole = async (p: PlayerRow) => {
-    const newRole = window.prompt(`Change role for ${p.username}\nCurrent: ${p.role}\nOptions: ${ROLES.join(", ")}`)
-    if (!newRole || !ROLES.includes(newRole.toUpperCase())) return
-    await run(`role-${p.id}`, () => adminApi.players.setRole(p.id, newRole.toUpperCase()))
-    setPlayers(prev => prev.map(x => x.id === p.id ? { ...x, role: newRole.toUpperCase() } : x))
-    if (detail?.id === p.id) setDetail(prev => prev ? { ...prev, role: newRole.toUpperCase() } : prev)
+  const handleRole = async (role: string) => {
+    if (!roleTarget) return
+    const p = roleTarget
+    setRoleLoading(true)
+    try {
+      const r = await adminApi.players.setRole(p.id, role)
+      if (r.success) {
+        setPlayers(prev => prev.map(x => x.id === p.id ? { ...x, role } : x))
+        if (detail?.id === p.id) setDetail(prev => prev ? { ...prev, role } : prev)
+        setRoleTarget(null)
+        toast({ title: `Role changed to ${role}` })
+      } else {
+        toast({ title: r.message || "Failed to change role.", variant: "destructive" })
+      }
+    } catch { toast({ title: "Server error.", variant: "destructive" }) }
+    finally { setRoleLoading(false) }
   }
 
   const handleMessage = async (p: PlayerRow) => {
@@ -365,10 +570,18 @@ export function PlayerManager() {
     await run(`kick-${c.id}`, () => adminApi.players.kick(c.id, "Removed by admin"), `${c.name} kicked.`)
   }
   const handleTeleport = async (c: CharDetail) => {
-    const mapId = parseInt(window.prompt(`Teleport ${c.name} — Map ID:`) || "0", 10)
-    if (!mapId) return
-    const x = parseInt(window.prompt("X:") || "5", 10)
-    const y = parseInt(window.prompt("Y:") || "5", 10)
+    const mapStr = window.prompt(`Teleport ${c.name} — Map ID:`)
+    if (mapStr === null) return
+    const mapId = parseInt(mapStr, 10)
+    if (!mapId || isNaN(mapId)) return
+    const xStr = window.prompt("X:")
+    if (xStr === null) return
+    const x = parseInt(xStr, 10)
+    if (isNaN(x)) return
+    const yStr = window.prompt("Y:")
+    if (yStr === null) return
+    const y = parseInt(yStr, 10)
+    if (isNaN(y)) return
     await run(`tp-${c.id}`, () => adminApi.players.teleport(c.id, mapId, x, y), "Teleported.")
     if (detail) void loadDetail(detail.id)
   }
@@ -402,6 +615,17 @@ export function PlayerManager() {
       }).then(r => r.json()), "Status effects cleared."
     )
   }
+  const handleDeleteChar = async (c: CharDetail) => {
+    if (!window.confirm(`DELETE "${c.name}" permanently?\n\nThis removes the character, all items, equipment, stats, quests, and skills. This CANNOT be undone.`)) return
+    if (!window.confirm(`Are you ABSOLUTELY sure? Type the character name to confirm.\n\nCharacter: ${c.name}`)) return
+    await run(`delchar-${c.id}`, () =>
+      fetch("/admin-panel/player/delete-character", {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ charId: c.id })
+      }).then(r => r.json()), `${c.name} deleted.`
+    )
+    if (detail) void loadDetail(detail.id)
+  }
 
   // ── Filtered list ─────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -427,6 +651,15 @@ export function PlayerManager() {
   return (
     <div className="space-y-5">
       {/* Modals */}
+      {roleTarget && (
+        <RoleSelector
+          player={roleTarget}
+          currentRole={roleTarget.role}
+          onSelect={handleRole}
+          onCancel={() => setRoleTarget(null)}
+          loading={roleLoading}
+        />
+      )}
       {editingUser && (
         <EditUserModal
           player={editingUser}
@@ -504,29 +737,34 @@ export function PlayerManager() {
                 {/* Info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="font-medium text-sm">{player.username}</span>
+                    <span className={cn("font-medium text-sm", getNameEffect(player.role))}
+                      style={{ color: getNameColor(player.role, player.chat_color) || undefined }}>{player.username}</span>
                     <span className={`text-xs px-1.5 py-0.5 rounded border ${ROLE_STYLE[player.role.toUpperCase()] || ROLE_STYLE.PLAYER}`}>
                       {player.role}
                     </span>
                     {player.is_banned && <span className="text-xs px-1.5 py-0.5 rounded border bg-destructive/20 text-destructive border-destructive/30">BANNED</span>}
+                    {playerFlags[player.id] && FLAG_STYLE[playerFlags[player.id]] && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded border ${FLAG_STYLE[playerFlags[player.id]].bg}`}>
+                        {FLAG_STYLE[playerFlags[player.id]].label}
+                      </span>
+                    )}
                     {player.online && <span className="text-xs text-green-400">● online</span>}
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {player.char_count !== undefined ? `${player.char_count} chars` : ""}
                     {player.gold !== undefined ? ` · ${player.gold.toLocaleString()}g` : ""}
-                    {player.last_login ? ` · ${new Date(player.last_login).toLocaleDateString()}` : ""}
+                    {player.last_login ? ` · ${safeDate(player.last_login)}` : ""}
                   </p>
                 </div>
 
                 {/* Actions */}
                 <div className="flex items-center gap-1 flex-wrap">
                   <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1"
-                    title="Edit Account" onClick={e => { e.stopPropagation(); void loadDetail(player.id).then(() => {}) ; setExpandedId(player.id); setTimeout(() => { setEditingUser(detail || { id: player.id, username: player.username, role: player.role, is_banned: player.is_banned, last_login: player.last_login }) }, 300) }}>
+                    title="Edit Account" onClick={async (e) => { e.stopPropagation(); setExpandedId(player.id); await loadDetail(player.id); setEditingUser({ id: player.id, username: player.username, role: player.role, is_banned: player.is_banned, last_login: player.last_login }) }}>
                     <Edit className="w-3 h-3" /> Edit
                   </Button>
                   <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1"
-                    title="Change Role" onClick={e => { e.stopPropagation(); void handleRole(player) }}
-                    disabled={actionLoading === `role-${player.id}`}>
+                    title="Change Role" onClick={e => { e.stopPropagation(); setRoleTarget(player) }}>
                     <Shield className="w-3 h-3" /> Role
                   </Button>
                   <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1"
@@ -562,11 +800,24 @@ export function PlayerManager() {
                     <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                       {detail.email && <span>📧 {detail.email}</span>}
                       {detail.currency !== undefined && <span>💰 {detail.currency.toLocaleString()}g account balance</span>}
-                      {detail.created_at && <span>📅 Joined {new Date(detail.created_at).toLocaleDateString()}</span>}
+                      {detail.created_at && <span>Joined {safeDate(detail.created_at)}</span>}
                     </div>
                   )}
 
-                  {detailLoading ? (
+                  {/* Detail tabs */}
+                  <div className="flex gap-1 mb-2">
+                    {(["chars", "audit", "notes"] as const).map(t => (
+                      <button key={t} onClick={() => setDetailTab(t)}
+                        className={`text-[10px] px-2 py-1 rounded transition-colors capitalize ${detailTab === t ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+                        {t === "chars" ? "Characters" : t === "audit" ? "Audit Trail" : "Notes"}
+                      </button>
+                    ))}
+                  </div>
+
+                  {detailTab === "audit" && <AuditTrail userId={player.id} />}
+                  {detailTab === "notes" && <PlayerNotes userId={player.id} />}
+
+                  {detailTab === "chars" && detailLoading ? (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
                       <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                       Loading…
@@ -640,6 +891,10 @@ export function PlayerManager() {
                             <Button size="sm" variant="outline" className="h-6 px-2 text-xs gap-1 text-destructive hover:text-destructive"
                               onClick={() => void handleKick(char)} disabled={actionLoading === `kick-${char.id}`}>
                               <LogOut className="w-3 h-3" /> Kick
+                            </Button>
+                            <Button size="sm" variant="destructive" className="h-6 px-2 text-xs gap-1"
+                              onClick={() => void handleDeleteChar(char)} disabled={actionLoading === `delchar-${char.id}`}>
+                              <Trash2 className="w-3 h-3" /> Delete
                             </Button>
                           </div>
                         </div>

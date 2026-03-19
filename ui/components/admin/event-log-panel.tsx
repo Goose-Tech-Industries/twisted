@@ -34,6 +34,10 @@ const EVENT_TYPES: EventTypeOption[] = [
   { v: 'gm_give_gold',      l: '💰 GM Give Gold' },
   { v: 'gm_role_change',    l: '🎭 GM Role Change' },
   { v: 'map_connection_edit', l: '🗺️ Map Edit' },
+  { v: 'gm_kick',           l: '👢 GM Kick' },
+  { v: 'gm_delete_char',    l: '💀 GM Delete Char' },
+  { v: 'gm_note',           l: '📝 GM Note' },
+  { v: 'world_flag',        l: '🏴 World Flag' },
 ]
 
 function formatDetail(ev: GameEvent): string {

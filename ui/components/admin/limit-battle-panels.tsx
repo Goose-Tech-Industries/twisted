@@ -1,4 +1,5 @@
 "use client"
+import { toast } from "@/hooks/use-toast"
 import { useState, useEffect, useCallback } from "react"
 import adminApi from "@/lib/admin-api"
 import { Button } from "@/components/ui/button"
@@ -68,11 +69,11 @@ export function LimitBreakPanel() {
   }
 
   const save = async () => {
-    if (!editing?.name?.trim()) { alert('Name required'); return }
-    try { JSON.parse(fxJson) } catch { alert('Invalid effects JSON'); return }
+    if (!editing?.name?.trim()) { toast({ title: 'Name required', variant: 'destructive' }); return }
+    try { JSON.parse(fxJson) } catch { toast({ title: 'Invalid effects JSON', variant: 'destructive' }); return }
     const payload = { ...editing, effects: fxJson }
     const res = await adminApi.entity.save('limit', payload as Record<string, unknown>, editing.id)
-    if (res.success) { load(); setEditing(null) } else alert(String(res.message || 'Save failed'))
+    if (res.success) { load(); setEditing(null) } else toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
   }
 
   const del = async (id: number) => {
@@ -189,11 +190,11 @@ export function BattleCmdPanel() {
   }
 
   const save = async () => {
-    if (!editing?.name?.trim()) { alert('Name required'); return }
-    try { JSON.parse(fxJson) } catch { alert('Invalid effects JSON'); return }
+    if (!editing?.name?.trim()) { toast({ title: 'Name required', variant: 'destructive' }); return }
+    try { JSON.parse(fxJson) } catch { toast({ title: 'Invalid effects JSON', variant: 'destructive' }); return }
     const payload = { ...editing, effects: fxJson, is_default: editing.is_default ? 1 : 0 }
     const res = await adminApi.entity.save('battle_cmd', payload as Record<string, unknown>, editing.id)
-    if (res.success) { load(); setEditing(null) } else alert(String(res.message || 'Save failed'))
+    if (res.success) { load(); setEditing(null) } else toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
   }
 
   const del = async (id: number) => {

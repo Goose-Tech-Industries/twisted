@@ -8,6 +8,7 @@ import {
   BookOpen, Activity, BarChart2
 } from "lucide-react"
 import adminApi from "@/lib/admin-api"
+import { SessionMonitor } from "@/components/admin/session-monitor"
 
 // ─── Types ────────────────────────────────────────────────────────
 interface DashboardData {
@@ -29,7 +30,12 @@ interface DashboardData {
   tutorialRate: number
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────
+
+function safeDate(v: string): string {
+  try { const d = new Date(v); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString() }
+  catch { return '—' }
+}
 
 function MiniBar({ value, max, color }: { value: number; max: number; color: string }) {
   const pct = max > 0 ? Math.round((value / max) * 100) : 0
@@ -56,7 +62,7 @@ function Sparkline({ data }: { data: Array<{ day: string; n: number }> }) {
 
   const max = Math.max(...filled.map(r => r.n), 1)
   const W = 280; const H = 56; const pad = 4
-  const step = (W - pad * 2) / (filled.length - 1)
+  const step = filled.length > 1 ? (W - pad * 2) / (filled.length - 1) : 0
   const points = filled.map((r, i) => ({
     x: pad + i * step,
     y: pad + (H - pad * 2) * (1 - r.n / max),
@@ -151,27 +157,49 @@ const MOCK: DashboardData = {
 }
 
 // ─── Component ───────────────────────────────────────────────────
-export function DashboardPanel() {
+export function DashboardPanel({ onNavigate }: { onNavigate?: (section: string) => void }) {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [usingMock, setUsingMock] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const load = async () => {
+    setRefreshing(true)
     const res = await adminApi.dashboard.getStats()
     if (res.success && res.data) {
-      setData(res.data); setUsingMock(false)
+      setData(res.data as DashboardData); setUsingMock(false); setError(null)
+    } else if (!data) {
+      // Only fall back to mock on first load failure
+      setData(MOCK); setUsingMock(true); setError(res.message || 'Could not reach server')
     } else {
-      setData(MOCK); setUsingMock(true)
+      // Keep last good data on refresh failure
+      setError(res.message || 'Refresh failed')
     }
     setLastRefresh(new Date())
     setLoading(false)
+    setRefreshing(false)
   }
 
   useEffect(() => {
-    load()
-    const iv = setInterval(load, 30_000)
-    return () => clearInterval(iv)
+    let mounted = true
+    const doLoad = async () => {
+      setRefreshing(true)
+      const res = await adminApi.dashboard.getStats()
+      if (!mounted) return
+      if (res.success && res.data) {
+        setData(res.data as DashboardData); setUsingMock(false); setError(null)
+      } else {
+        setData(MOCK); setUsingMock(true); setError(res.message || 'Could not reach server')
+      }
+      setLastRefresh(new Date())
+      setLoading(false)
+      setRefreshing(false)
+    }
+    doLoad()
+    const iv = setInterval(doLoad, 30_000)
+    return () => { mounted = false; clearInterval(iv) }
   }, [])
 
   if (loading) return (
@@ -179,17 +207,26 @@ export function DashboardPanel() {
       <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
     </div>
   )
-  if (!data) return null
+  if (!data) return (
+    <div className="flex items-center justify-center h-64 text-muted-foreground">
+      <div className="text-center">
+        <p className="text-sm">{error || 'Failed to load dashboard.'}</p>
+        <button onClick={load} className="mt-2 px-3 py-1.5 text-xs bg-secondary hover:bg-secondary/80 rounded-md">Retry</button>
+      </div>
+    </div>
+  )
+
+  const nav = (s: string) => onNavigate?.(s)
 
   const statCards = [
-    { label: "Online Now",    value: data.online,                             icon: UserCheck, color: data.online > 0 ? "text-green-500" : "text-muted-foreground" },
-    { label: "Accounts",      value: data.stats.users,                        icon: Users,     color: "text-primary" },
-    { label: "Characters",    value: data.stats.chars,                        icon: Users,     color: "text-blue-400" },
-    { label: "Active Maps",   value: data.stats.maps,                         icon: Map,       color: "text-orange-400" },
-    { label: "NPCs",          value: data.stats.npcs,                         icon: Skull,     color: "text-green-400" },
-    { label: "Items",         value: data.stats.items,                        icon: Package,   color: "text-red-400" },
-    { label: "Battles Today", value: data.battlesToday ?? data.stats.battles, icon: Swords,    color: "text-destructive" },
-    { label: "World Gold",    value: `${(data.totalGold/1000).toFixed(1)}k`,  icon: Coins,     color: "text-yellow-500" },
+    { label: "Online Now",    value: data.online,                             icon: UserCheck, color: data.online > 0 ? "text-green-500" : "text-muted-foreground", link: "players" },
+    { label: "Accounts",      value: data.stats.users,                        icon: Users,     color: "text-primary",            link: "players" },
+    { label: "Characters",    value: data.stats.chars,                        icon: Users,     color: "text-blue-400",           link: "players" },
+    { label: "Active Maps",   value: data.stats.maps,                         icon: Map,       color: "text-orange-400",         link: "maps" },
+    { label: "NPCs",          value: data.stats.npcs,                         icon: Skull,     color: "text-green-400",          link: "npcs" },
+    { label: "Items",         value: data.stats.items,                        icon: Package,   color: "text-red-400",            link: "items" },
+    { label: "Battles Today", value: data.battlesToday ?? data.stats.battles, icon: Swords,    color: "text-destructive",        link: "battle_config" },
+    { label: "World Gold",    value: `${(data.totalGold/1000).toFixed(1)}k`,  icon: Coins,     color: "text-yellow-500",         link: "economy" },
   ]
 
   const mapPopEntries = Object.entries(data.mapPop).sort((a,b) => b[1]-a[1])
@@ -218,13 +255,14 @@ export function DashboardPanel() {
         <div className="flex items-center gap-2 flex-wrap">
           <AiStatusPill provider={data.aiProvider} />
           {data.openReports != null && data.openReports > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-900/50 text-red-400 border border-red-800">
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-900/50 text-red-400 border border-red-800 ${onNavigate ? "cursor-pointer hover:bg-red-900/70 transition-colors" : ""}`}
+              onClick={() => nav("reports")}>
               <Flag className="w-3 h-3" />
               {data.openReports} open report{data.openReports !== 1 ? 's' : ''}
             </span>
           )}
-          <button onClick={load} className="px-3 py-1.5 text-xs bg-secondary hover:bg-secondary/80 rounded-md transition-colors">
-            Refresh
+          <button onClick={load} disabled={refreshing} className="px-3 py-1.5 text-xs bg-secondary hover:bg-secondary/80 rounded-md transition-colors disabled:opacity-50">
+            {refreshing ? 'Refreshing...' : 'Refresh'}
           </button>
         </div>
       </div>
@@ -232,7 +270,8 @@ export function DashboardPanel() {
       {/* Stat cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {statCards.map(s => (
-          <Card key={s.label} className="celtic-border">
+          <Card key={s.label} className={`celtic-border ${onNavigate ? "cursor-pointer hover:border-primary/30 transition-colors" : ""}`}
+            onClick={() => nav(s.link)}>
             <CardContent className="p-4 text-center">
               <s.icon className={`w-5 h-5 mx-auto mb-1.5 ${s.color}`} />
               <div className={`text-2xl font-bold font-mono ${s.color}`}>{s.value}</div>
@@ -258,7 +297,8 @@ export function DashboardPanel() {
                 <div key={mapName}>
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">{mapName}</p>
                   {players.map((p, i) => (
-                    <div key={i} className="flex items-center justify-between py-1.5 border-b border-border/50 last:border-0">
+                    <div key={i} className={`flex items-center justify-between py-1.5 border-b border-border/50 last:border-0 ${onNavigate ? "cursor-pointer hover:bg-secondary/50 rounded px-1 -mx-1 transition-colors" : ""}`}
+                      onClick={() => nav("players")}>
                       <span className="flex items-center gap-2 text-sm">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
                         {p.name}
@@ -335,7 +375,8 @@ export function DashboardPanel() {
               : mapPopEntries.map(([mapId, count]) => {
                   const mapName = data.onlineList.find(p => String(p.mapId) === mapId)?.mapName || `Map ${mapId}`
                   return (
-                    <div key={mapId}>
+                    <div key={mapId} className={onNavigate ? "cursor-pointer hover:bg-secondary/50 rounded px-1 -mx-1 py-0.5 transition-colors" : ""}
+                      onClick={() => nav("maps")}>
                       <div className="flex justify-between text-xs mb-1">
                         <span className="text-muted-foreground truncate max-w-[140px]">{mapName}</span>
                         <span className="font-mono">{count}</span>
@@ -357,7 +398,8 @@ export function DashboardPanel() {
           </CardHeader>
           <CardContent className="space-y-1">
             {data.topChars.map((c, i) => (
-              <div key={i} className="flex items-center justify-between py-1.5 border-b border-border/50 last:border-0">
+              <div key={i} className={`flex items-center justify-between py-1.5 border-b border-border/50 last:border-0 ${onNavigate ? "cursor-pointer hover:bg-secondary/50 rounded px-1 -mx-1 transition-colors" : ""}`}
+                onClick={() => nav("players")}>
                 <span className="flex items-center gap-2">
                   <span className="text-muted-foreground text-xs w-4">#{i+1}</span>
                   <div>
@@ -372,7 +414,10 @@ export function DashboardPanel() {
         </Card>
       </div>
 
-      {/* Row 4: Recent accounts table */}
+      {/* Row 4: Session Monitor */}
+      <SessionMonitor />
+
+      {/* Row 5: Recent accounts table */}
       <Card className="celtic-border">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -392,14 +437,15 @@ export function DashboardPanel() {
               </thead>
               <tbody>
                 {data.recentUsers.map((u, i) => (
-                  <tr key={i} className="border-b border-border/50 last:border-0">
+                  <tr key={i} className={`border-b border-border/50 last:border-0 ${onNavigate ? "cursor-pointer hover:bg-secondary/50 transition-colors" : ""}`}
+                    onClick={() => nav("players")}>
                     <td className="py-2 font-medium pr-4">{u.username}</td>
                     <td className="py-2 pr-4"><RoleBadge role={u.role} /></td>
                     <td className="py-2 text-xs text-muted-foreground pr-4">
-                      {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
+                      {u.created_at ? safeDate(u.created_at) : '—'}
                     </td>
                     <td className="py-2 text-xs text-muted-foreground pr-4">
-                      {u.last_login ? new Date(u.last_login).toLocaleDateString() : 'never'}
+                      {u.last_login ? safeDate(u.last_login) : 'never'}
                     </td>
                     <td className="py-2">
                       {u.is_banned

@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { toast } from "@/hooks/use-toast"
 import { Plus, Pencil, Trash2, Eye, X, Save, GitBranch } from "lucide-react"
 import { NodeGraphEditorPanel } from "./node-graph-editor-panel"
 import type { ScriptEvent } from "./script-editor-panel"
@@ -30,7 +31,8 @@ export function QuestBuilderPanel() {
       const res = await fetch(`${API}/admin-panel/quest`, { credentials: 'include' })
       const data = await res.json()
       if (data.success) setQuests(data.data || [])
-    } catch {}
+      else toast({ title: 'Failed to load quests', variant: 'destructive' })
+    } catch { toast({ title: 'Could not reach server', variant: 'destructive' }) }
     setLoading(false)
   }, [])
 
@@ -79,7 +81,7 @@ export function QuestBuilderPanel() {
           _graphLayout: event._graphLayout
         })
       })
-    } catch {}
+    } catch { toast({ title: 'Save failed', variant: 'destructive' }) }
     setVisualEditorOpen(false)
     setEditingQuest(null)
     load()

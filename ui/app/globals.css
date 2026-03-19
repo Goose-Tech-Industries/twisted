@@ -288,3 +288,39 @@
     background: oklch(0.40 0.02 25);
   }
 }
+
+/* ── Staff Name Effects ─────────────────────────────────────────── */
+/* OWNER: Slow rainbow color cycle + glow — legendary name feel */
+.staff-name-owner {
+  background: linear-gradient(90deg, #facc15, #ff6b6b, #c084fc, #60a5fa, #4ade80, #facc15);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: owner-rainbow 6s linear infinite;
+  filter: drop-shadow(0 0 6px rgba(250, 204, 21, 0.4));
+}
+@keyframes owner-rainbow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+
+/* ADMIN: Red pulse glow */
+.staff-name-admin {
+  text-shadow: 0 0 6px rgba(248, 113, 113, 0.5), 0 0 12px rgba(248, 113, 113, 0.25);
+  animation: admin-pulse 2.5s ease-in-out infinite;
+}
+@keyframes admin-pulse {
+  0%, 100% { text-shadow: 0 0 6px rgba(248, 113, 113, 0.5); }
+  50% { text-shadow: 0 0 10px rgba(248, 113, 113, 0.7), 0 0 20px rgba(248, 113, 113, 0.35); }
+}
+
+/* GM: Purple subtle glow */
+.staff-name-gm {
+  text-shadow: 0 0 6px rgba(192, 132, 252, 0.4), 0 0 10px rgba(192, 132, 252, 0.2);
+}
+
+/* MOD: Green subtle glow */
+.staff-name-mod {
+  text-shadow: 0 0 5px rgba(74, 222, 128, 0.35);
+}

@@ -3,6 +3,7 @@ import React from 'react'
 
 import { cn } from "@/lib/utils"
 import { useGame } from "@/lib/game-context"
+import { getNameColor, getNameEffect } from "@/lib/name-colors"
 import type { GameView } from "@/lib/game-types"
 import { 
   User, 
@@ -63,7 +64,8 @@ export function GameSidebar() {
               {character.level}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-sidebar-foreground truncate">
+              <p className={cn("text-sm font-medium truncate", getNameEffect(state.role || undefined))}
+                style={{ color: getNameColor(state.role || undefined, state.chatColor) || undefined }}>
                 {character.name}
               </p>
               <p className="text-xs text-muted-foreground">

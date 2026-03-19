@@ -1,4 +1,5 @@
 "use client"
+import { toast } from "@/hooks/use-toast"
 import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { RefreshCw } from "lucide-react"
@@ -187,7 +188,7 @@ export function ReportsPanel() {
       } else {
         setReports((prev: Report[]) => prev.map((r: Report) => r.id === id ? { ...r, status } : r))
       }
-    } else alert('Failed: ' + String(d.error || 'Unknown error'))
+    } else toast({ title: String(d.error || 'Update failed'), variant: 'destructive' })
   }
 
   return (

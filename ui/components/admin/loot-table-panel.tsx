@@ -1,6 +1,7 @@
 "use client"
 import { useState, useEffect, useCallback } from "react"
 import adminApi from "@/lib/admin-api"
+import { toast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ChevronLeft, Plus, Trash2, Save, Search } from "lucide-react"
@@ -58,7 +59,7 @@ export function LootTablePanel() {
         e.id === editing.id ? { ...e, drop_table_json: JSON.stringify(payload) } : e
       ))
       setSaveOk(true); setTimeout(() => setSaveOk(false), 2000)
-    } else alert('Save failed: ' + String(res.message || 'Unknown error'))
+    } else toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
     setSaving(false)
   }
 

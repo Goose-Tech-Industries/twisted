@@ -125,6 +125,8 @@ interface EditorState {
   dirty: boolean
   showGrid: boolean
   showPassability: boolean
+  showEvents: boolean
+  showObjects: boolean
   rectStart: { x: number; y: number } | null
   clipboard: { tiles: number[]; width: number; height: number; sx: number; sy: number } | null
   selecting: boolean
@@ -166,7 +168,7 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
       tileTool: 'PAINT' as TileTool, brushSize: 1, objectPreset: 'LANTERN',
       zoom: 1, ambientDark: map.ambient_dark || 0, tilesetUrl: map.tileset_url || '',
       tilesetLoaded: false, tilesetCols: 0, tilesetSrc: '', painting: false, dirty: false,
-      showGrid: true, showPassability: false, rectStart: null,
+      showGrid: true, showPassability: false, showEvents: true, showObjects: true, rectStart: null,
       clipboard: null, selecting: false, selStart: null, selEnd: null
     }
   })
@@ -247,21 +249,22 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
 
   // Load lookup data
   useEffect(() => {
-    adminApi.entity.getAll('npc').then(r => setNpcs((r.data || []) as NPC[]))
-    adminApi.entity.getAll('shop').then(r => setShops((r.data || []) as Shop[]))
-    adminApi.entity.getAll('item').then(r => setItems((r.data || []) as Item[]))
+    adminApi.entity.getAll('npc').then(r => setNpcs((r.data || []) as NPC[])).catch(() => {})
+    adminApi.entity.getAll('shop').then(r => setShops((r.data || []) as Shop[])).catch(() => {})
+    adminApi.entity.getAll('item').then(r => setItems((r.data || []) as Item[])).catch(() => {})
     // Load autotile groups
     const API = process.env.NEXT_PUBLIC_API_URL || ''
     fetch(`${API}/admin-panel/autotile_group`, { credentials: 'include' })
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json() })
       .then(d => {
         if (d.success && d.data) {
-          setAutotileGroups(d.data.map((g: Record<string, unknown>) => ({
-            id: g.id, name: g.name, icon: g.icon || '🔲', base_tile: g.base_tile,
-            tileMap: typeof g.tile_map === 'string' ? JSON.parse(g.tile_map as string) : (g.tile_map || {})
-          })))
+          setAutotileGroups(d.data.map((g: Record<string, unknown>) => {
+            let tileMap = {}
+            try { tileMap = typeof g.tile_map === 'string' ? JSON.parse(g.tile_map as string) : (g.tile_map || {}) } catch {}
+            return { id: g.id, name: g.name, icon: g.icon || '🔲', base_tile: g.base_tile, tileMap }
+          }))
         }
-      }).catch(() => {})
+      }).catch(e => console.warn('[MapEditor] Autotile groups load failed:', e))
   }, [])
 
   const set = useCallback((update: Partial<EditorState>) => {
@@ -420,6 +423,32 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
       }
     }
     set({ tiles })
+  }
+
+  // Custom saved stamps (persisted to localStorage)
+  const [savedStamps, setSavedStamps] = useState<Array<{ name: string; tiles: number[]; width: number; height: number }>>([])
+  useEffect(() => {
+    try { const s = localStorage.getItem('map_stamps'); if (s) setSavedStamps(JSON.parse(s)) } catch {}
+  }, [])
+
+  const saveStamp = () => {
+    if (!state.clipboard) return
+    const name = prompt('Name this stamp:')
+    if (!name?.trim()) return
+    const stamp = { name: name.trim(), tiles: state.clipboard.tiles, width: state.clipboard.width, height: state.clipboard.height }
+    const newStamps = [...savedStamps, stamp]
+    setSavedStamps(newStamps)
+    try { localStorage.setItem('map_stamps', JSON.stringify(newStamps)) } catch {}
+  }
+
+  const deleteStamp = (idx: number) => {
+    const newStamps = savedStamps.filter((_, i) => i !== idx)
+    setSavedStamps(newStamps)
+    try { localStorage.setItem('map_stamps', JSON.stringify(newStamps)) } catch {}
+  }
+
+  const loadStamp = (stamp: { tiles: number[]; width: number; height: number }) => {
+    set({ clipboard: { ...stamp, sx: 0, sy: 0 } })
   }
 
   // Map room templates — pre-built layouts admins can stamp
@@ -779,6 +808,16 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
               state.showGrid ? 'bg-blue-900/40 border-blue-500 text-blue-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
             ▦
           </button>
+          <button onClick={() => set({ showEvents: !state.showEvents })}
+            className={cn('px-1.5 py-0.5 rounded text-[10px] border',
+              state.showEvents ? 'bg-blue-900/40 border-blue-500 text-blue-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
+            {state.showEvents ? '👁 Events' : '🚫 Events'}
+          </button>
+          <button onClick={() => set({ showObjects: !state.showObjects })}
+            className={cn('px-1.5 py-0.5 rounded text-[10px] border',
+              state.showObjects ? 'bg-green-900/40 border-green-500 text-green-300' : 'bg-[#222] border-[#444] text-muted-foreground')}>
+            {state.showObjects ? '👁 Objects' : '🚫 Objects'}
+          </button>
           <button onClick={() => set({ showPassability: !state.showPassability })}
             className={cn("px-1.5 py-0.5 rounded text-[10px] border",
               state.showPassability ? 'bg-red-900/40 border-red-500 text-red-300' : 'bg-[#222] border-[#444] text-muted-foreground')}
@@ -836,7 +875,30 @@ function MapEditor({ map, maps, onExit }: { map: GameMap; maps: GameMap[]; onExi
             📌 Paste {state.clipboard ? `(${state.clipboard.width}x${state.clipboard.height})` : ''}
           </button>
           {state.clipboard && (
-            <span className="text-[9px] text-cyan-400">✂️ Clipboard: {state.clipboard.width}x{state.clipboard.height}</span>
+            <>
+              <span className="text-[9px] text-cyan-400">✂️ Clipboard: {state.clipboard.width}x{state.clipboard.height}</span>
+              <button onClick={saveStamp}
+                className="px-1.5 py-0.5 rounded text-[10px] bg-green-900/30 border border-green-800/50 text-green-400 hover:bg-green-900/50"
+                title="Save clipboard as reusable stamp">
+                💾 Save Stamp
+              </button>
+            </>
+          )}
+          {savedStamps.length > 0 && (
+            <>
+              <span className="text-[#333] mx-1">|</span>
+              <span className="text-muted-foreground text-[10px]">MY STAMPS:</span>
+              {savedStamps.map((s, i) => (
+                <span key={i} className="inline-flex items-center gap-0.5">
+                  <button onClick={() => loadStamp(s)}
+                    className="px-1.5 py-0.5 rounded text-[10px] bg-purple-900/30 border border-purple-800/50 text-purple-300 hover:bg-purple-900/50"
+                    title={`Load stamp: ${s.width}x${s.height}`}>
+                    {s.name}
+                  </button>
+                  <button onClick={() => deleteStamp(i)} className="text-[8px] text-muted-foreground hover:text-destructive" title="Delete stamp">×</button>
+                </span>
+              ))}
+            </>
           )}
         </div>
       )}
@@ -1248,27 +1310,34 @@ export function MapManagerPanel() {
   const [creating, setCreating]     = useState<Partial<GameMap>>({})
   const [showCreate, setShowCreate] = useState(false)
 
+  const [loadError, setLoadError] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     setLoading(true)
-    const r = await adminApi.entity.getAll('map')
-    setMaps((r.data || []) as GameMap[])
+    try {
+      const r = await adminApi.entity.getAll('map')
+      if (r.success) { setMaps((r.data || []) as GameMap[]); setLoadError(null) }
+      else setLoadError(r.message || 'Failed to load maps')
+    } catch { setLoadError('Could not reach server') }
     setLoading(false)
   }, [])
 
   useEffect(() => { load() }, [load])
 
   const createMap = async () => {
-    if (!creating.name?.trim()) { alert('Name is required'); return }
-    const w = creating.width  || 20
-    const h = creating.height || 20
-    const res = await adminApi.entity.save('map', {
-      name: creating.name, width: w, height: h,
-      tiles_json:      JSON.stringify(new Array(w*h).fill(0)),
-      collisions_json: '[]', objects_json: '[]', anims_json: '[]',
-      ambient_dark: 0, tileset_url: null
-    } as Record<string,unknown>)
-    if (res.success) { await load(); setShowCreate(false); setCreating({}) }
-    else alert(res.message || 'Create failed')
+    if (!creating.name?.trim()) { setLoadError('Map name is required'); return }
+    const w = Math.min(Math.max(creating.width || 20, 5), 100)
+    const h = Math.min(Math.max(creating.height || 20, 5), 100)
+    try {
+      const res = await adminApi.entity.save('map', {
+        name: creating.name, width: w, height: h,
+        tiles_json:      JSON.stringify(new Array(w*h).fill(0)),
+        collisions_json: '[]', objects_json: '[]', anims_json: '[]',
+        ambient_dark: 0, tileset_url: null
+      } as Record<string,unknown>)
+      if (res.success) { await load(); setShowCreate(false); setCreating({}) }
+      else setLoadError(res.message || 'Create failed')
+    } catch { setLoadError('Server error creating map') }
   }
 
   const deleteMap = async (id: number, name: string) => {

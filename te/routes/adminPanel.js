@@ -107,7 +107,7 @@ router.get('/dashboard', requireStaff, async (req, res) => {
 
         // Open reports count (if table exists)
         const openReports = await tryCount(
-            db, "SELECT COUNT(*) AS n FROM game_reports WHERE status='open'"
+            db, "SELECT COUNT(*) AS n FROM player_reports WHERE status='open'"
         ).catch(() => null);
 
         // Total battles today
@@ -165,7 +165,7 @@ router.get('/players', requireStaff, async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     try {
         let sql = `SELECT u.id, u.username, u.email, u.role, u.currency AS gold,
-                          u.is_banned, u.created_at, u.last_login,
+                          u.is_banned, u.created_at, u.last_login, u.chat_color,
                           COUNT(c.id) AS char_count
                    FROM users u LEFT JOIN characters c ON c.user_id=u.id`;
         const params = [];
@@ -217,10 +217,135 @@ router.get('/player/:id', requireStaff, async (req, res) => {
     }
 });
 
+// ── Player Audit Trail ────────────────────────────────────────────
+router.get('/player/:id/audit', requireStaff, async (req, res) => {
+    const userId = parseInt(req.params.id);
+    try {
+        const [rows] = await db.query(
+            `SELECT * FROM game_event_log
+             WHERE target_id=? OR actor_id=?
+             ORDER BY created_at DESC LIMIT 50`,
+            [userId, userId]
+        );
+        res.json({ success: true, data: rows });
+    } catch(e) { res.json({ success: false, message: e.message }); }
+});
+
+// ── Player Notes & Flags ─────────────────────────────────────────
+router.get('/player/:id/notes', requireStaff, async (req, res) => {
+    const userId = parseInt(req.params.id);
+    try {
+        const [rows] = await db.query(
+            'SELECT * FROM admin_player_notes WHERE user_id=? ORDER BY created_at DESC',
+            [userId]
+        );
+        res.json({ success: true, data: rows });
+    } catch(e) { res.json({ success: false, message: e.message }); }
+});
+
+router.post('/player/:id/notes', requireStaff, async (req, res) => {
+    const userId = parseInt(req.params.id);
+    const { body, flag } = req.body;
+    if (!body || !body.trim()) return res.json({ success: false, message: 'Note body required' });
+    const validFlags = ['none','watch','vip','trusted','suspicious'];
+    const noteFlag = validFlags.includes(flag) ? flag : 'none';
+    try {
+        const [userRow] = await db.query('SELECT username FROM users WHERE id=?', [req.session.userId]);
+        const authorName = userRow[0]?.username || 'Unknown';
+        await db.query(
+            'INSERT INTO admin_player_notes (user_id, author_id, author_name, flag, body) VALUES (?,?,?,?,?)',
+            [userId, req.session.userId, authorName, noteFlag, body.trim()]
+        );
+        res.json({ success: true, message: 'Note added' });
+    } catch(e) { res.json({ success: false, message: e.message }); }
+});
+
+router.delete('/player/:id/notes/:noteId', requireStaff, async (req, res) => {
+    try {
+        await db.query('DELETE FROM admin_player_notes WHERE id=? AND user_id=?',
+            [req.params.noteId, req.params.id]);
+        res.json({ success: true });
+    } catch(e) { res.json({ success: false, message: e.message }); }
+});
+
+// Set player flag (latest note's flag = player's flag)
+router.post('/player/:id/flag', requireStaff, async (req, res) => {
+    const userId = parseInt(req.params.id);
+    const { flag } = req.body;
+    const validFlags = ['none','watch','vip','trusted','suspicious'];
+    if (!validFlags.includes(flag)) return res.json({ success: false, message: 'Invalid flag' });
+    try {
+        const [userRow] = await db.query('SELECT username FROM users WHERE id=?', [req.session.userId]);
+        const authorName = userRow[0]?.username || 'Unknown';
+        await db.query(
+            'INSERT INTO admin_player_notes (user_id, author_id, author_name, flag, body) VALUES (?,?,?,?,?)',
+            [userId, req.session.userId, authorName, flag, flag === 'none' ? 'Flag removed' : `Flagged as ${flag}`]
+        );
+        res.json({ success: true });
+    } catch(e) { res.json({ success: false, message: e.message }); }
+});
+
+// Get flags for player list display
+router.get('/player-flags', requireStaff, async (req, res) => {
+    try {
+        // Get the latest flag per user
+        const [rows] = await db.query(
+            `SELECT n.user_id, n.flag FROM admin_player_notes n
+             INNER JOIN (SELECT user_id, MAX(id) AS max_id FROM admin_player_notes WHERE flag != 'none' GROUP BY user_id) latest
+             ON n.id = latest.max_id`
+        );
+        const flags = {};
+        for (const r of rows) flags[r.user_id] = r.flag;
+        res.json({ success: true, data: flags });
+    } catch(e) { res.json({ success: true, data: {} }); }
+});
+
+// ── Delete Character ──────────────────────────────────────────────
+router.post('/player/delete-character', requireStaff, async (req, res) => {
+    const { charId } = req.body;
+    if (!charId) return res.json({ success: false, message: 'charId required' });
+    try {
+        // Get char info for logging
+        const [[char]] = await db.query('SELECT name, user_id FROM characters WHERE id=?', [charId]);
+        if (!char) return res.json({ success: false, message: 'Character not found' });
+
+        // Kick if online
+        if (global._onlinePlayers) {
+            const entry = Object.entries(global._onlinePlayers).find(([, p]) => p.charId === parseInt(charId));
+            if (entry) {
+                const sock = io?.sockets?.sockets?.get(entry[0]);
+                if (sock) { sock.emit('force_disconnect', 'Character deleted by admin'); sock.disconnect(true); }
+                delete global._onlinePlayers[entry[0]];
+            }
+        }
+
+        // Clean up all related data
+        const tables = [
+            'character_items', 'character_equipment', 'character_stats',
+            'character_ability_scores', 'character_skills', 'character_oghams',
+            'character_quests', 'character_mail', 'character_fighting_styles',
+            'character_signature_techs',
+        ];
+        for (const tbl of tables) {
+            await db.query(`DELETE FROM ?? WHERE character_id=?`, [tbl, charId]).catch(() => {});
+        }
+        // Delete the character itself
+        await db.query('DELETE FROM characters WHERE id=?', [charId]);
+
+        // Log it
+        await logEvent('gm_delete_char', req.session.userId, 'GM', parseInt(charId), char.name, { userId: char.user_id });
+
+        res.json({ success: true, message: `Character "${char.name}" deleted.` });
+    } catch(e) {
+        console.error('[DeleteChar]', e);
+        res.json({ success: false, message: e.message });
+    }
+});
+
 router.post('/player/:id/ban', requireStaff, async (req, res) => {
     const { reason } = req.body;
     const [uban] = await db.query('SELECT username FROM users WHERE id=?',[req.params.id]);
-    await db.query('UPDATE users SET is_banned=1 WHERE id=?', [req.params.id]);
+    await db.query('UPDATE users SET is_banned=1, ban_reason=? WHERE id=?', [reason || '', req.params.id]);
     _kickPlayer(parseInt(req.params.id), `You have been banned. ${reason || ''}`);
     const staffId = req.session.userId;
     await logEvent('gm_ban', staffId, 'GM', parseInt(req.params.id), uban[0]?.username, { reason });
@@ -229,7 +354,7 @@ router.post('/player/:id/ban', requireStaff, async (req, res) => {
 
 router.post('/player/:id/unban', requireStaff, async (req, res) => {
     const [uunban] = await db.query('SELECT username FROM users WHERE id=?',[req.params.id]);
-    await db.query('UPDATE users SET is_banned=0 WHERE id=?', [req.params.id]);
+    await db.query('UPDATE users SET is_banned=0, ban_reason=NULL WHERE id=?', [req.params.id]);
     await logEvent('gm_unban', req.session.userId, 'GM', parseInt(req.params.id), uunban[0]?.username);
     res.json({ success: true, message: 'Player unbanned.' });
 });
@@ -244,6 +369,23 @@ router.post('/player/:id/role', requireStaff, async (req, res) => {
     const [urole] = await db.query('SELECT username FROM users WHERE id=?',[req.params.id]);
     await db.query('UPDATE users SET role=? WHERE id=?', [role, req.params.id]);
     await logEvent('gm_role_change', req.session.userId, 'GM', parseInt(req.params.id), urole[0]?.username, { role });
+    // Notify connected player of role change via Socket.IO
+    const targetUserId = parseInt(req.params.id);
+    if (global._onlinePlayers && io) {
+        for (const [sid, p] of Object.entries(global._onlinePlayers)) {
+            if (p.userId === targetUserId) {
+                p.role = role; // Update in-memory
+                const sock = io.sockets.sockets.get(sid);
+                if (sock) {
+                    sock.emit('role_changed', { role });
+                    // Update admin_chat room membership
+                    const isStaff = ['ADMIN','GM','MOD','STAFF','OWNER'].includes(role.toUpperCase());
+                    if (isStaff) sock.join('admin_chat');
+                    else sock.leave('admin_chat');
+                }
+            }
+        }
+    }
     res.json({ success: true, message: `Role set to ${role}.` });
 });
 
@@ -985,17 +1127,17 @@ const ENTITY_TABLE_MAP = {
     // ── original types ────────────────────────────────────────────
     item: 'game_items', skill: 'game_skills', npc: 'game_npcs',
     map: 'game_maps', quest: 'quest_definitions', class: 'game_classes',
-    race: 'game_races', ogham: 'game_oghams', ogham_family: 'ogham_families',
+    race: 'game_races', ogham: 'game_oghams', ogham_family: 'game_ogham_families',
     shop: 'game_shops', arena: 'game_arenas', artifact: 'legendary_artifacts',
-    status: 'game_statuses', feat: 'game_feats', loot_table: 'npc_loot_tables',
-    spawn: 'map_spawns', battle_cmd: 'game_battle_cmds', background: 'game_backgrounds',
+    status: 'game_statuses', feat: 'game_feats', loot_table: 'game_loot_tables',
+    spawn: 'game_map_spawns', battle_cmd: 'game_battle_commands', background: 'game_backgrounds',
     // ── added for React admin panels ──────────────────────────────
     stat:           'game_stat_definitions',  // StatEnginePanel
-    shop_supply:    'shop_supplies',          // ShopSupplyPanel
+    shop_supply:    'game_shop_supplies',     // ShopSupplyPanel
     artifact_power: 'artifact_powers',        // ArtifactManagerPanel (powers tab)
     quest_board:    'game_quest_board',       // QuestBoardPanel
     region:         'game_regions',           // WorldStatePanel (faction/region lookups)
-    faction:        'game_factions',          // WorldStatePanel (faction lookups)
+    faction:        'factions',               // WorldStatePanel (faction lookups)
     scheduled_task: 'game_scheduled_tasks',  // SchedulerPanel
     craft_recipe:   'game_craft_recipes',    // CraftManagerPanel
     auction_listing:'auction_listings',      // AuctionPanel
@@ -1047,11 +1189,76 @@ const ENTITY_TABLE_MAP = {
     narration:      'game_battle_narrations',    // NarrationPanel
     premade_sig:    'game_premade_sig_techs',    // PremadeSigTechPanel
     training_log:   'game_master_training_log',  // TrainingLogPanel (read-only)
+    // ── Ability Scores (data-driven) ────────────────────────────────
+    region_weather: 'game_region_weather',         // RegionWeatherPanel
+    npc_patrol:     'game_npc_patrols',            // NpcPatrolPanel
+    world_event:    'game_world_events',           // WorldEventPanel
+    spawn_wave:     'game_spawn_waves',            // SpawnWavePanel
+    region_rep_gate:'game_region_rep_gates',       // RegionRepGatePanel
+    ability_score:  'game_ability_scores',         // AbilityScorePanel
+    ability_effect: 'game_ability_effects',        // AbilityEffectPanel
+    race_ability_bonus: 'game_race_ability_bonuses', // RaceAbilityBonusPanel
+    class_ability_bonus: 'game_class_ability_bonuses', // ClassAbilityBonusPanel
+    bg_ability_bonus: 'game_background_ability_bonuses', // BgAbilityBonusPanel
+    race_class_access: 'game_race_class_access',   // RaceClassAccessPanel
+    level_req:      'level_requirements',          // LevelRequirementsPanel
+    script:         'game_scripts',               // DialogueBuilderPanel
+    item_set:       'game_item_sets',             // ItemSetPanel
+    npc_schedule:   'game_npc_schedules',         // NpcSchedulePanel
+    enemy_scaling:  'game_enemy_scaling',          // EnemyScalingPanel
+    subclass:       'game_subclasses',            // SubclassPanel
+    racial_ability: 'game_racial_abilities',      // RacialAbilityPanel
+    class_mastery:  'game_class_mastery',          // ClassMasteryPanel
+    stat_cap:       'game_stat_caps',              // StatCapPanel
+    title:          'game_titles',                 // TitlePanel
+    char_transform: 'character_transformations',   // CharTransformPanel (read/manage)
+    arena_match:    'game_arena_matches',          // ArenaMatchPanel
+    arena_ranking:  'game_arena_rankings',          // ArenaRankingPanel
+    combo_chain:    'game_combo_chains',            // ComboChainPanel
+    summon:         'game_summons',                 // SummonPanel
+    battle_replay:  'game_battle_replays',          // BattleReplayPanel
+    arena_season:   'game_arena_seasons',           // ArenaSeasonPanel
+    map_hazard:     'game_map_hazards',             // MapHazardPanel
+    status_immunity:'game_status_immunities',       // StatusImmunityPanel
+    referral:       'game_referrals',                 // ReferralPanel
+    battle_template:'game_battle_templates',          // BattleTemplatePanel
+    staff_activity: 'staff_activity_log',             // StaffActivityPanel
+    shift_note:     'staff_shift_notes',              // ShiftNotePanel
+    auto_mod_rule:  'game_auto_mod_rules',            // AutoModPanel
+    player_warning: 'player_warnings',                // WarningPanel
+    staff_perm:     'staff_permissions',               // StaffPermPanel
+    broadcast_tmpl: 'staff_broadcast_templates',       // BroadcastTemplatePanel
+    player_appeal:  'player_appeals',                  // AppealPanel
+    staff_audit:    'staff_audit_log',                 // StaffAuditPanel
+    config_snapshot:'game_config_snapshots',            // ConfigSnapshotPanel
+    config_profile: 'game_config_profiles',            // ConfigProfilePanel
+    settings_log:   'settings_change_log',             // SettingsLogPanel
+    ogham_awakening:'game_ogham_awakenings',          // OghamAwakeningPanel
+    spell_tome:     'game_spell_tomes',              // SpellTomePanel
+    elem_affinity:  'game_elemental_affinities',     // ElementalAffinityPanel
+    item_curse:     'game_item_curses',              // ItemCursePanel
+    ogham_fusion:   'game_ogham_fusions',            // OghamFusionPanel
+    ogham_shard:    'game_ogham_shards',             // OghamShardPanel
+    shard_recipe:   'game_shard_recipes',             // ShardRecipePanel
+    corruption_tier:'game_ogham_corruption_tiers',   // CorruptionTierPanel
+    magic_school:   'game_magic_schools',             // MagicSchoolPanel
+    enchantment:    'game_enchantments',              // EnchantmentPanel
+    ritual:         'game_rituals',                   // RitualPanel
+    magic_resist:   'game_magic_resistances',         // MagicResistPanel
+    artifact_rivalry:'game_artifact_rivalries',       // ArtifactRivalryPanel
+    ki_move:        'game_ki_moves',                // KiMovePanel
+    fusion:         'game_fusions',                 // FusionPanel
+    battle_terrain: 'game_battle_terrain',           // BattleTerrainPanel
+    battle_item:    'game_battle_items',             // BattleItemPanel
+    finishing_move: 'game_finishing_moves',           // FinishingMovePanel
+    battle_condition:'game_battle_conditions',       // BattleConditionPanel
 };
 const ENTITY_PK_MAP = {
     artifact:       'artifact_id',
     artifact_power: 'power_id',
     quest:          'quest_id',
+    stat:           'id',
+    script:         'script_key',
     loot_table:     'id',
     spawn:          'id',
     sig_level:      'level',
@@ -1066,7 +1273,7 @@ function getTable(type) {
 function getPk(type) { return ENTITY_PK_MAP[type] || 'id'; }
 
 // ── type union used by the three generic CRUD routes below ────────
-const ENTITY_TYPES = 'item|skill|npc|map|quest|class|race|ogham|ogham_family|shop|arena|artifact|status|feat|loot_table|spawn|battle_cmd|background|stat|shop_supply|artifact_power|quest_board|region|faction|scheduled_task|craft_recipe|auction_listing|limit|body_type|limb_zone|battle_knockout|flavor_text|flavor_keyword|bleed_tier|sig_level|sig_ability|sig_tech|narration|premade_sig|training_log|fighting_style|style_rank|char_style|tournament|tourney_match|tourney_history|autotile_group|template|terminology|training_config|alignment_tier|alignment_action|battle_rule|elem_reaction|status_combo|afterlife|death_penalty|transformation|link_attack|trap|weather|boss_phase|win_condition|quest_battle_override';
+const ENTITY_TYPES = 'item|skill|npc|map|quest|class|race|ogham|ogham_family|shop|arena|artifact|status|feat|loot_table|spawn|battle_cmd|background|stat|shop_supply|artifact_power|quest_board|region|faction|scheduled_task|craft_recipe|auction_listing|limit|body_type|limb_zone|battle_knockout|flavor_text|flavor_keyword|bleed_tier|sig_level|sig_ability|sig_tech|narration|premade_sig|training_log|fighting_style|style_rank|char_style|tournament|tourney_match|tourney_history|autotile_group|template|terminology|training_config|alignment_tier|alignment_action|battle_rule|elem_reaction|status_combo|afterlife|death_penalty|transformation|link_attack|trap|weather|boss_phase|win_condition|quest_battle_override|ability_score|ability_effect|race_ability_bonus|class_ability_bonus|bg_ability_bonus|race_class_access|region_weather|npc_patrol|world_event|spawn_wave|region_rep_gate|level_req|script|item_set|npc_schedule|enemy_scaling|subclass|racial_ability|class_mastery|stat_cap|title|char_transform|arena_match|arena_ranking|combo_chain|summon|battle_replay|arena_season|map_hazard|status_immunity|ki_move|fusion|battle_terrain|battle_item|finishing_move|battle_condition|referral|battle_template|staff_activity|shift_note|auto_mod_rule|player_warning|staff_perm|broadcast_tmpl|player_appeal|staff_audit|config_snapshot|config_profile|settings_log|ogham_awakening|spell_tome|elem_affinity|item_curse|ogham_fusion|ogham_shard|shard_recipe|corruption_tier|magic_school|enchantment|ritual|magic_resist|artifact_rivalry';
 
 // GET /admin-panel/:type — list all entities of a type
 router.get(`/:type(${ENTITY_TYPES})`, requireStaff, async (req, res) => {
@@ -1079,7 +1286,7 @@ router.get(`/:type(${ENTITY_TYPES})`, requireStaff, async (req, res) => {
 });
 
 // GET /admin-panel/:type/:id — single entity
-router.get('/:type/:id', requireStaff, async (req, res) => {
+router.get(`/:type(${ENTITY_TYPES})/:id`, requireStaff, async (req, res) => {
     try {
         const table = getTable(req.params.type);
         const pk = getPk(req.params.type);
@@ -1090,7 +1297,7 @@ router.get('/:type/:id', requireStaff, async (req, res) => {
 });
 
 // POST /admin-panel/:type/:id/delete — delete
-router.post('/:type/:id/delete', requireStaff, async (req, res) => {
+router.post(`/:type(${ENTITY_TYPES})/:id/delete`, requireStaff, async (req, res) => {
     try {
         const table = getTable(req.params.type);
         const pk = getPk(req.params.type);
@@ -1100,7 +1307,7 @@ router.post('/:type/:id/delete', requireStaff, async (req, res) => {
 });
 
 // POST /admin-panel/:type/:id — update existing entity
-router.post('/:type/:id([\\w.-]+)', requireStaff, async (req, res) => {
+router.post(`/:type(${ENTITY_TYPES})/:id([\\w.-]+)`, requireStaff, async (req, res) => {
     try {
         const table = getTable(req.params.type);
         const pk = getPk(req.params.type);
@@ -1147,7 +1354,7 @@ router.post('/player/ban', requireStaff, async (req, res) => {
     req.params = { id: userId };
     req.body.reason = reason;
     try {
-        await db.query('UPDATE users SET is_banned=1, ban_reason=? WHERE id=?', [reason||'', userId]);
+        await db.query('UPDATE users SET is_banned=1, ban_reason=? WHERE id=?', [reason || '', userId]);
         res.json({ success: true, message: 'Player banned.' });
     } catch(e) { res.status(500).json({ success: false, message: e.message }); }
 });
@@ -1176,8 +1383,11 @@ router.post('/player/give-gold', requireStaff, async (req, res) => {
     const { charId, amount } = req.body;
     if (!charId || amount == null) return res.status(400).json({ success: false, message: 'charId and amount required' });
     try {
-        await db.query('UPDATE characters SET gold = gold + ? WHERE id=?', [amount, charId]);
-        res.json({ success: true, message: `Gave ${amount} gold to character ${charId}` });
+        // Gold is stored on users.currency, not characters
+        const [[char]] = await db.query('SELECT user_id FROM characters WHERE id=?', [charId]);
+        if (!char) return res.json({ success: false, message: 'Character not found' });
+        await db.query('UPDATE users SET currency=GREATEST(0,currency+?) WHERE id=?', [amount, char.user_id]);
+        res.json({ success: true, message: `${amount > 0 ? '+' : ''}${amount} gold applied.` });
     } catch(e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
@@ -1187,13 +1397,13 @@ router.post('/player/give-item', requireStaff, async (req, res) => {
     try {
         // Upsert: add to existing stack or insert new row
         const [existing] = await db.query(
-            'SELECT id, quantity FROM character_inventory WHERE character_id=? AND item_id=? LIMIT 1',
+            'SELECT id, quantity FROM character_items WHERE character_id=? AND item_id=? LIMIT 1',
             [charId, itemId]
         );
         if (existing.length) {
-            await db.query('UPDATE character_inventory SET quantity=quantity+? WHERE id=?', [quantity, existing[0].id]);
+            await db.query('UPDATE character_items SET quantity=quantity+? WHERE id=?', [quantity, existing[0].id]);
         } else {
-            await db.query('INSERT INTO character_inventory (character_id, item_id, quantity) VALUES (?,?,?)', [charId, itemId, quantity]);
+            await db.query('INSERT INTO character_items (character_id, item_id, quantity) VALUES (?,?,?)', [charId, itemId, quantity]);
         }
         res.json({ success: true, message: `Gave ${quantity}x item ${itemId} to character ${charId}` });
     } catch(e) { res.status(500).json({ success: false, message: e.message }); }
@@ -1337,19 +1547,147 @@ router.post('/settings', requireStaff, async (req, res) => {
 
         for (const [key, value] of Object.entries(settings)) {
             const type = typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string';
+            // Get old value for change log
+            const [oldRow] = await db.query('SELECT setting_value FROM system_settings WHERE setting_key=?', [key]).catch(() => [[]]);
+            const oldVal = oldRow[0]?.setting_value || null;
             // Write to game_settings (primary admin store)
             await db.query(
                 'INSERT INTO game_settings (setting_key, setting_value, setting_type) VALUES (?,?,?) ON DUPLICATE KEY UPDATE setting_value=?, setting_type=?',
                 [key, String(value), type, String(value), type]
             ).catch(() => {});
-            // Also write to system_settings for keys the engine reads directly (ai_*, enemy_scaling_factor)
+            // Also write to system_settings for keys the engine reads directly
             await db.query(
                 'INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=?',
                 [key, String(value), String(value)]
             ).catch(() => {});
+            // Log the change
+            if (oldVal !== String(value)) {
+                await db.query(
+                    'INSERT INTO settings_change_log (setting_key, old_value, new_value, changed_by, changed_by_name) VALUES (?,?,?,?,?)',
+                    [key, oldVal, String(value), req.session.userId, req.session.username || 'Admin']
+                ).catch(() => {});
+            }
         }
         res.json({ success: true, message: 'Settings saved' });
     } catch(e) { res.status(500).json({ success: false, message: e.message }); }
+});
+
+// ── System Health ────────────────────────────────────────────────
+router.get('/system-health', requireStaff, async (req, res) => {
+    try {
+        const os = require('os');
+        const [dbCheck] = await db.query('SELECT 1');
+        const [poolInfo] = await db.query('SHOW STATUS LIKE "Threads_connected"');
+        const onlineCount = Object.keys(global._onlinePlayers || {}).length;
+        const staffCount = Object.keys(global._staffPanel || {}).length;
+        res.json({
+            success: true,
+            data: {
+                uptime: process.uptime(),
+                memory: { total: os.totalmem(), free: os.freemem(), used: process.memoryUsage() },
+                cpu: os.loadavg(),
+                cpuCount: os.cpus().length,
+                dbConnections: parseInt(poolInfo[0]?.Value || '0'),
+                onlinePlayers: onlineCount,
+                staffOnline: staffCount,
+                nodeVersion: process.version,
+                platform: os.platform(),
+            }
+        });
+    } catch(e) { res.json({ success: false, message: e.message }); }
+});
+
+// ── Config Export (full) ─────────────────────────────────────────
+router.get('/config-export', requireStaff, async (req, res) => {
+    try {
+        const [settings] = await db.query('SELECT setting_key, setting_value FROM system_settings');
+        const [gameSettings] = await db.query('SELECT setting_key, setting_value FROM game_settings').catch(() => [[]]);
+        const [terminology] = await db.query('SELECT * FROM game_terminology').catch(() => [[]]);
+        const [modules] = await db.query('SELECT * FROM core_modules').catch(() => [[]]);
+        res.json({
+            success: true,
+            data: {
+                system_settings: settings,
+                game_settings: gameSettings,
+                terminology,
+                modules,
+                exported_at: new Date().toISOString()
+            }
+        });
+    } catch(e) { res.json({ success: false, message: e.message }); }
+});
+
+// ── Config Import ────────────────────────────────────────────────
+router.post('/config-import', requireStaff, async (req, res) => {
+    try {
+        const { system_settings, game_settings, terminology, modules } = req.body;
+        let applied = 0;
+        if (Array.isArray(system_settings)) {
+            for (const s of system_settings) {
+                await db.query('INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=?',
+                    [s.setting_key, s.setting_value, s.setting_value]).catch(() => {});
+                applied++;
+            }
+        }
+        if (Array.isArray(game_settings)) {
+            for (const s of game_settings) {
+                await db.query('INSERT INTO game_settings (setting_key, setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=?',
+                    [s.setting_key, s.setting_value, s.setting_value]).catch(() => {});
+                applied++;
+            }
+        }
+        res.json({ success: true, message: applied + ' settings imported' });
+    } catch(e) { res.json({ success: false, message: e.message }); }
+});
+
+// ── Asset Usage Report ───────────────────────────────────────────
+router.get('/asset-usage', requireStaff, async (req, res) => {
+    try {
+        const usage = [];
+        const tables = [
+            { table: 'game_npcs', col: 'icon_asset_id', label: 'NPC' },
+            { table: 'game_items', col: 'icon_asset_id', label: 'Item' },
+            { table: 'game_skills', col: 'icon_asset_id', label: 'Skill' },
+        ];
+        for (const t of tables) {
+            const [rows] = await db.query(
+                'SELECT e.id, e.name, e.?? AS asset_id FROM ?? e WHERE e.?? IS NOT NULL',
+                [t.col, t.table, t.col]
+            ).catch(() => [[]]);
+            for (const r of rows) {
+                usage.push({ asset_id: r.asset_id, entity_type: t.label, entity_id: r.id, entity_name: r.name });
+            }
+        }
+        res.json({ success: true, data: usage });
+    } catch(e) { res.json({ success: true, data: [] }); }
+});
+
+// ── Game Reset Tools ─────────────────────────────────────────────
+router.post('/reset-world-state', requireStaff, async (req, res) => {
+    if (req.staffRole !== 'OWNER') return res.json({ success: false, message: 'Only OWNER can reset world state' });
+    try {
+        await db.query('DELETE FROM world_flags').catch(() => {});
+        await db.query('UPDATE game_npcs SET mood=NULL, is_dead=0').catch(() => {});
+        await db.query('DELETE FROM npc_memories').catch(() => {});
+        res.json({ success: true, message: 'World state reset: flags cleared, NPCs restored, memories wiped' });
+    } catch(e) { res.json({ success: false, message: e.message }); }
+});
+
+router.post('/reset-player-data', requireStaff, async (req, res) => {
+    if (req.staffRole !== 'OWNER') return res.json({ success: false, message: 'Only OWNER can reset player data' });
+    try {
+        // Delete all character data but keep user accounts
+        const charTables = ['character_items','character_equipment','character_stats','character_ability_scores',
+            'character_skills','character_oghams','character_quests','character_mail',
+            'character_fighting_styles','character_signature_techs','character_titles',
+            'character_transformations','character_enchantments','character_ogham_shards',
+            'character_learned_spells','character_elemental_affinity','character_magic_affinity',
+            'character_discovered_recipes'];
+        for (const t of charTables) await db.query('DELETE FROM ??', [t]).catch(() => {});
+        await db.query('DELETE FROM characters').catch(() => {});
+        await db.query('UPDATE users SET currency=0, referral_count=0').catch(() => {});
+        res.json({ success: true, message: 'All character data wiped. User accounts preserved.' });
+    } catch(e) { res.json({ success: false, message: e.message }); }
 });
 
 

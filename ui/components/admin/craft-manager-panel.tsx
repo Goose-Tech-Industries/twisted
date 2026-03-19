@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Plus, Pencil, Trash2, ChevronLeft, Info } from "lucide-react"
+import { toast } from "@/hooks/use-toast"
 
 interface Recipe {
   id: number; name: string; icon: string; category: string
@@ -65,11 +66,11 @@ export function CraftManagerPanel() {
   }
 
   const save = async () => {
-    if (!editing?.result_item_id) { alert('Choose a result item'); return }
-    if (!ings.length) { alert('Add at least one ingredient'); return }
+    if (!editing?.result_item_id) { toast({ title: 'Choose a result item' }); return }
+    if (!ings.length) { toast({ title: 'Add at least one ingredient' }); return }
     const payload = { ...editing, ingredients_json: JSON.stringify(ings) }
     const res = await adminApi.entity.save('craft_recipe', payload as Record<string, unknown>, editing.id)
-    if (res.success) { load(); setEditing(null) } else alert(String(res.message || 'Save failed'))
+    if (res.success) { load(); setEditing(null) } else toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
   }
 
   const del = async (id: number) => {
@@ -81,8 +82,8 @@ export function CraftManagerPanel() {
     setEditing((prev: Partial<Recipe> | null) => ({ ...prev, [k]: v }))
 
   const addIng = () => {
-    if (!addItem) { alert('Select an item first'); return }
-    if (ings.find((i: Ing) => i.item_id === addItem)) { alert('That item is already an ingredient'); return }
+    if (!addItem) { toast({ title: 'Select an item first' }); return }
+    if (ings.find((i: Ing) => i.item_id === addItem)) { toast({ title: 'That item is already an ingredient' }); return }
     setIngs((prev: Ing[]) => [...prev, { item_id: addItem, qty: addQty }])
   }
 

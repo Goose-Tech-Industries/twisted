@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Plus, Pencil, Trash2, Info, ChevronLeft, ClipboardList, X } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { toast } from "@/hooks/use-toast"
 
 interface BoardQuest {
   id: number
@@ -126,7 +127,7 @@ export function QuestBoardPanel() {
 
   const save = async () => {
     if (!editing) return
-    if (!editing.title?.trim()) { alert('Title is required.'); return }
+    if (!editing.title?.trim()) { toast({ title: 'Title is required.' }); return }
 
     let reqRegionParsed = null
     if (reqRegionJson.trim()) {
@@ -146,7 +147,7 @@ export function QuestBoardPanel() {
     }
     const res = await adminApi.entity.save('quest_board', payload as Record<string, unknown>, editing.id)
     if (res.success) { load(); setEditing(null) }
-    else alert(res.message || 'Save failed')
+    else toast({ title: res.message || 'Save failed', variant: 'destructive' })
   }
 
   const del = async (id: number, title: string) => {

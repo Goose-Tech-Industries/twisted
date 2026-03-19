@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { toast } from "@/hooks/use-toast"
 import { Plus, GitBranch, MessageCircle } from "lucide-react"
 import { NodeGraphEditorPanel } from "./node-graph-editor-panel"
 import type { ScriptEvent } from "./script-editor-panel"
@@ -29,27 +30,29 @@ export function DialogueBuilderPanel() {
   const load = useCallback(async () => {
     try {
       const res = await fetch(`${API}/admin-panel/npc`, { credentials: 'include' })
+      if (!res.ok) throw new Error(`${res.status}`)
       const data = await res.json()
       if (data.success) {
-        // Filter to non-enemy NPCs with dialogue potential
         setNpcs((data.data || []).filter((n: NPC) => !n.is_enemy))
       }
-    } catch {}
+    } catch { toast({ title: 'Failed to load NPCs', variant: 'destructive' }) }
 
     // Load existing scripts
     try {
-      const res = await fetch(`${API}/admin-panel/scripts`, { credentials: 'include' })
+      const res = await fetch(`${API}/admin-panel/script`, { credentials: 'include' })
+      if (!res.ok) throw new Error(`${res.status}`)
       const data = await res.json()
       if (data.success && data.data) {
         const scriptMap: Record<string, ScriptEvent[]> = {}
         for (const s of data.data) {
           try {
-            scriptMap[s.script_key] = typeof s.events_json === 'string' ? JSON.parse(s.events_json) : s.events_json
-          } catch {}
+            const events = typeof s.script_json === 'string' ? JSON.parse(s.script_json) : (s.script_json || s.events_json)
+            scriptMap[s.script_key] = typeof events === 'string' ? JSON.parse(events) : (events || [])
+          } catch { console.warn('[Dialogue] Invalid script JSON for', s.script_key) }
         }
         setScripts(scriptMap)
       }
-    } catch {}
+    } catch { toast({ title: 'Failed to load scripts', variant: 'destructive' }) }
 
     setLoading(false)
   }, [])
@@ -96,26 +99,29 @@ export function DialogueBuilderPanel() {
     const scriptKey = editingNpc.script_key || `npc_${editingNpc.id}_dialogue`
 
     try {
-      // Save the script
-      await fetch(`${API}/admin-panel/scripts`, {
+      // Save the script via entity CRUD
+      const saveRes = await fetch(`${API}/admin-panel/script/${encodeURIComponent(scriptKey)}`, {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           script_key: scriptKey,
-          events_json: JSON.stringify([event]),
+          name: `Dialogue: ${editingNpc.name}`,
+          script_json: JSON.stringify([event]),
           description: `Dialogue tree for ${editingNpc.name}`
         })
       })
+      if (!saveRes.ok) throw new Error('Save failed')
 
       // Update NPC script_key if not set
       if (!editingNpc.script_key) {
         await fetch(`${API}/admin-panel/npc/${editingNpc.id}`, {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...editingNpc, script_key: scriptKey })
+          body: JSON.stringify({ script_key: scriptKey })
         })
       }
-    } catch {}
+      toast({ title: 'Dialogue saved' })
+    } catch { toast({ title: 'Save failed', variant: 'destructive' }) }
 
     setVisualEditorOpen(false)
     setEditingNpc(null)

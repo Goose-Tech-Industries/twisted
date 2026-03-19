@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Plus, Pencil, Trash2, ChevronLeft } from "lucide-react"
+import { toast } from "@/hooks/use-toast"
 
 interface Achievement {
   id: number; key_name: string; title: string; description: string; icon: string
@@ -66,7 +67,7 @@ export function AchievementPanel() {
 
   const save = async () => {
     if (!editing?.key_name?.trim() || !editing?.title?.trim()) {
-      alert('Key name and title required'); return
+      toast({ title: 'Key name and title required' }); return
     }
     const body = {
       ...editing,
@@ -76,14 +77,14 @@ export function AchievementPanel() {
     }
     const d = await apiReq('/api/achievements/save', body)
     if (d.success) { load(); setEditing(null) }
-    else alert('Error: ' + String(d.message || 'Unknown'))
+    else toast({ title: String(d.message || 'Error'), variant: 'destructive' })
   }
 
   const del = async (id: number, name: string) => {
     if (!confirm(`Delete "${name}"? Players who earned it keep their record.`)) return
     const d = await apiReq('/api/achievements/delete', { id })
     if (d.success) load()
-    else alert('Error: ' + String(d.message))
+    else toast({ title: String(d.message || 'Error'), variant: 'destructive' })
   }
 
   const setField = (k: keyof Achievement, v: unknown) =>

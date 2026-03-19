@@ -838,6 +838,13 @@ async function startServer() {
                         socket.emit('error_msg', 'Not logged in. Please refresh and log in again.');
                         return;
                     }
+                    // Check ban status on every join/reconnect
+                    const [banCheck] = await db.query('SELECT is_banned FROM users WHERE id=? LIMIT 1', [userId]);
+                    if (banCheck.length && banCheck[0].is_banned) {
+                        socket.emit('force_disconnect', { reason: 'Your account has been banned.' });
+                        socket.disconnect(true);
+                        return;
+                    }
                     if (!data || typeof data !== 'object') {
                         socket.emit('error_msg', 'join_game payload must be an object: { charId }.');
                         return;
@@ -862,15 +869,16 @@ async function startServer() {
                     const mapDataForClient = await getMapData(char.map_id);
                     if (mapDataForClient) socket.emit('map_data', mapDataForClient);
 
-                    // Fetch user role for chat permissions + admin room
-                    const [userRows] = await db.query('SELECT role FROM users WHERE id=?', [char.user_id]);
+                    // Fetch user role + chat color for permissions + admin room
+                    const [userRows] = await db.query('SELECT role, chat_color FROM users WHERE id=?', [char.user_id]);
                     const userRole = userRows.length ? (userRows[0].role || 'PLAYER') : 'PLAYER';
+                    const userChatColor = userRows.length ? (userRows[0].chat_color || null) : null;
                     const isStaffRole = ['ADMIN', 'GM', 'MOD', 'STAFF', 'OWNER'].includes(userRole.toUpperCase());
 
                     onlinePlayers[socket.id] = {
                         socketId: socket.id, charId: char.id, userId: char.user_id,
                         name: char.name, mapId: char.map_id, x: char.x, y: char.y,
-                        level: char.level, role: userRole,
+                        level: char.level, role: userRole, chatColor: userChatColor,
                         // Presence: loaded from DB so last session status is remembered
                         presence: char.presence_status || 'online',
                         awayMessage: char.away_message || null,
@@ -1031,8 +1039,46 @@ async function startServer() {
                     const p = onlinePlayers[socket.id];
                     if (!p) return;
                     const now = Date.now();
-                    if (now - lastMoveTime < 80) return;
+                    // Dynamic cooldown from settings (cached per connection)
+                    // Refresh cooldown from settings every 5 min
+                    if (!p._moveCooldown || (now - (p._moveCooldownCacheAt || 0) > 300000)) {
+                        try {
+                            const [cooldownRow] = await db.query("SELECT setting_value FROM system_settings WHERE setting_key='movement_cooldown_ms'");
+                            p._moveCooldown = parseInt(cooldownRow[0]?.setting_value) || 200; p._moveCooldownCacheAt = now;
+                        } catch { p._moveCooldown = 200; p._moveCooldownCacheAt = now; }
+                    }
+                    if (now - lastMoveTime < p._moveCooldown) return;
                     lastMoveTime = now;
+
+                    // Movement limit check (optional — configurable from AdminSauce)
+                    // Refresh move limit settings every 5 minutes
+                    if (!p._moveLimitChecked || (now - (p._moveLimitCacheAt || 0) > 300000)) {
+                        try {
+                            const [limitRows] = await db.query(
+                                "SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('movement_limit_enabled','movement_limit_type','movement_limit_amount')"
+                            );
+                            p._moveLimit = {};
+                            for (const r of limitRows) p._moveLimit[r.setting_key] = r.setting_value;
+                            p._moveLimitChecked = true; p._moveLimitCacheAt = now;
+                        } catch { p._moveLimitChecked = true; p._moveLimitCacheAt = now; p._moveLimit = {}; }
+                    }
+                    if (p._moveLimit?.movement_limit_enabled === 'true') {
+                        const maxMoves = parseInt(p._moveLimit.movement_limit_amount) || 1000;
+                        // Check/reset move counter
+                        if (!p._moveCount) p._moveCount = 0;
+                        if (!p._moveResetAt || now > p._moveResetAt) {
+                            p._moveCount = 0;
+                            const limitType = p._moveLimit.movement_limit_type || 'daily';
+                            p._moveResetAt = limitType === 'hourly' ? now + 3600000 : now + 86400000;
+                        }
+                        if (p._moveCount >= maxMoves) {
+                            socket.emit('chat_msg', { channel: 'system', from: 'System',
+                                text: `Movement limit reached (${maxMoves} ${p._moveLimit.movement_limit_type || 'daily'}). Rest and try again later.`,
+                                ts: Date.now() });
+                            return;
+                        }
+                        p._moveCount++;
+                    }
 
                     const map = await getMapData(p.mapId);
                     if (!map) return;
@@ -1094,9 +1140,17 @@ async function startServer() {
                              AND ?>=x_min AND ?<=x_max AND ?>=y_min AND ?<=y_max`,
                             [p.mapId, p.x, p.x, p.y, p.y]
                         );
+                        // Get region spawn multiplier
+                        let spawnRateMult = 1.0;
+                        try {
+                            const _spawnRegion = await getRegionForMap(p.mapId);
+                            if (_spawnRegion?.spawn_rate_mult) spawnRateMult = parseFloat(_spawnRegion.spawn_rate_mult) || 1.0;
+                        } catch {}
+
                         for (const zone of spawns) {
-                            // Roll encounter chance
-                            if (Math.random() * 100 >= (zone.encounter_rate || 10)) continue;
+                            // Roll encounter chance (modified by region spawn_rate_mult)
+                            const effectiveRate = (zone.encounter_rate || 10) * spawnRateMult;
+                            if (Math.random() * 100 >= effectiveRate) continue;
                             // Level check
                             const charLevel = p.level || 1;
                             if (charLevel < (zone.min_level || 1) || charLevel > (zone.max_level || 50)) continue;
@@ -1119,11 +1173,29 @@ async function startServer() {
                                 roll -= (entry.weight || 1);
                                 if (roll <= 0) { picked = entry; break; }
                             }
-                            // Start PvE battle with this NPC
+                            // Check for spawn waves first
+                            let waveEnemies = null;
+                            try {
+                                const [waves] = await db.query(
+                                    'SELECT * FROM game_spawn_waves WHERE spawn_id=? ORDER BY wave_number ASC',
+                                    [zone.id]
+                                );
+                                if (waves.length > 0) {
+                                    waveEnemies = waves.map(w => ({
+                                        wave: w.wave_number,
+                                        enemies: typeof w.enemies === 'string' ? JSON.parse(w.enemies) : (w.enemies || []),
+                                        delay: w.delay_seconds || 0,
+                                        isBoss: !!w.is_boss_wave
+                                    }));
+                                }
+                            } catch {}
+
+                            // Start PvE battle with this NPC (or wave data)
                             socket.emit('random_encounter', {
                                 zoneName: zone.name,
                                 npcId: picked.npc_id,
-                                npcName: picked.name || 'Enemy'
+                                npcName: picked.name || 'Enemy',
+                                waves: waveEnemies // null if no waves configured
                             });
                             break; // Only one encounter per step
                         }
@@ -1210,6 +1282,32 @@ async function startServer() {
                     // Fetch map data so we can use its spawn point if no coords given
                     const mapData = await getMapData(newMap);
                     if (mapData) socket.emit('map_data', mapData);
+
+                    // Rep gate check — block entry if region requires faction reputation
+                    try {
+                        const destRegion = await getRegionForMap(newMap);
+                        if (destRegion) {
+                            const [repGates] = await db.query(
+                                'SELECT * FROM game_region_rep_gates WHERE region_id=?', [destRegion.id]
+                            ).catch(() => [[]]);
+                            for (const gate of repGates) {
+                                const [repRow] = await db.query(
+                                    'SELECT reputation FROM player_faction_rep WHERE character_id=? AND faction_id=?',
+                                    [p.charId, gate.faction_id]
+                                ).catch(() => [[]]);
+                                const rep = repRow[0]?.reputation || 0;
+                                if (rep < gate.min_reputation || (gate.max_reputation != null && rep > gate.max_reputation)) {
+                                    socket.emit('chat_msg', {
+                                        channel: 'system', from: 'System',
+                                        text: gate.deny_message || 'You are not welcome here.',
+                                        ts: Date.now()
+                                    });
+                                    socket.emit('force_move', { x: p.x, y: p.y });
+                                    return; // Block the teleport
+                                }
+                            }
+                        }
+                    } catch {}
 
                     socket.leave('map_' + oldMap);
                     socket.to('map_' + oldMap).emit('player_left', p.charId);
@@ -1358,6 +1456,123 @@ async function startServer() {
                     });
 
                     if (liveNpc) {
+                        // ── DIALOGUE TREE CHECK ──────────────────────────────
+                        // If NPC has a script_key and dialogue mode allows scripts,
+                        // execute the dialogue tree instead of showing the generic menu.
+                        let dialogueMode = 'script_then_ai';
+                        try {
+                            const [modeRow] = await db.query("SELECT setting_value FROM system_settings WHERE setting_key='npc_dialogue_mode'");
+                            if (modeRow.length) dialogueMode = modeRow[0].setting_value || 'script_then_ai';
+                        } catch {}
+
+                        if (liveNpc.scriptKey && dialogueMode !== 'ai_only') {
+                            try {
+                                const [scriptRows] = await db.query(
+                                    'SELECT script_json FROM game_scripts WHERE script_key=? LIMIT 1',
+                                    [liveNpc.scriptKey]
+                                );
+                                if (scriptRows.length && scriptRows[0].script_json) {
+                                    const scriptEvents = typeof scriptRows[0].script_json === 'string'
+                                        ? JSON.parse(scriptRows[0].script_json)
+                                        : scriptRows[0].script_json;
+
+                                    if (Array.isArray(scriptEvents) && scriptEvents.length > 0) {
+                                        // Convert script events to event_queue commands
+                                        const eventQueue = [];
+                                        for (const ev of scriptEvents) {
+                                            if (!ev || !ev.actions) continue;
+                                            for (const action of (ev.actions || [])) {
+                                                switch (action.type) {
+                                                    case 'DIALOGUE':
+                                                        eventQueue.push({
+                                                            cmd: 'dialogue',
+                                                            speaker: action.speaker || liveNpc.name,
+                                                            text: action.text || ''
+                                                        });
+                                                        break;
+                                                    case 'CHOICE':
+                                                        eventQueue.push({
+                                                            cmd: 'npc_choice_menu',
+                                                            npcName: liveNpc.name,
+                                                            choices: (action.choices || []).map((c, i) => ({
+                                                                id: `script_choice_${i}`,
+                                                                text: c.text || c
+                                                            }))
+                                                        });
+                                                        break;
+                                                    case 'QUEST_START':
+                                                        eventQueue.push({ cmd: 'quest_start', questId: action.questId });
+                                                        break;
+                                                    case 'SET_FLAG':
+                                                        if (action.flag) {
+                                                            await db.query(
+                                                                "UPDATE characters SET state_json = JSON_SET(COALESCE(state_json,'{}'), ?, ?) WHERE id=?",
+                                                                [`$.${action.flag}`, action.value || 'true', p.charId]
+                                                            ).catch(() => {});
+                                                        }
+                                                        break;
+                                                    case 'GIVE_ITEM':
+                                                        if (action.itemId) {
+                                                            await db.query(
+                                                                'INSERT INTO character_items (character_id, item_id, quantity) VALUES (?,?,?) ON DUPLICATE KEY UPDATE quantity=quantity+?',
+                                                                [p.charId, action.itemId, action.quantity || 1, action.quantity || 1]
+                                                            ).catch(() => {});
+                                                            eventQueue.push({ cmd: 'dialogue', speaker: 'System', text: `Received item!` });
+                                                        }
+                                                        break;
+                                                    case 'GIVE_GOLD':
+                                                        if (action.amount) {
+                                                            await db.query('UPDATE users SET currency=currency+? WHERE id=?', [action.amount, p.userId]).catch(() => {});
+                                                            eventQueue.push({ cmd: 'dialogue', speaker: 'System', text: `Received ${action.amount} gold!` });
+                                                        }
+                                                        break;
+                                                    case 'TELEPORT':
+                                                        if (action.mapId) {
+                                                            eventQueue.push({ cmd: 'teleport', mapId: action.mapId, x: action.x || 5, y: action.y || 5 });
+                                                        }
+                                                        break;
+                                                    case 'OPEN_SHOP':
+                                                        if (action.shopId || liveNpc.shopId) {
+                                                            eventQueue.push({ cmd: 'shop_open', shopId: action.shopId || liveNpc.shopId });
+                                                        }
+                                                        break;
+                                                }
+                                            }
+                                        }
+
+                                        // If script produced events, send them and skip generic menu
+                                        if (eventQueue.length > 0) {
+                                            // Still offer talk option at the end if mode is script_then_ai
+                                            if (dialogueMode === 'script_then_ai') {
+                                                eventQueue.push({
+                                                    cmd: 'npc_choice_menu',
+                                                    npcName: liveNpc.name,
+                                                    choices: [
+                                                        { id: 'talk', text: '💬 Ask something else (AI)' },
+                                                        { id: 'farewell', text: '👋 Farewell' }
+                                                    ]
+                                                });
+                                            }
+                                            socket._talkingTo = liveNpc;
+                                            socket.emit('event_queue', eventQueue);
+                                            return;
+                                        }
+                                    }
+                                }
+                            } catch (scriptErr) {
+                                console.warn('[Dialogue] Script execution error for', liveNpc.name, scriptErr.message);
+                            }
+
+                            // If script_only mode and no script worked, show a generic message
+                            if (dialogueMode === 'script_only') {
+                                socket.emit('event_queue', [
+                                    { cmd: 'dialogue', speaker: liveNpc.name, text: '*looks at you but says nothing.*' },
+                                ]);
+                                return;
+                            }
+                        }
+
+                        // ── STANDARD MENU (AI mode or no script found) ──────
                         // Load memory for this player+NPC pair
                         const [memRows] = await db.query(
                             'SELECT facts_json, reputation FROM npc_memories WHERE char_id=? AND npc_name=?',
@@ -3029,6 +3244,8 @@ async function startServer() {
                         channel,
                         from: p.name,
                         fromCharId: p.charId,
+                        role: p.role || 'PLAYER',
+                        chatColor: p.chatColor || null,
                         text: msg,
                         ts: Date.now()
                     };
@@ -3956,6 +4173,153 @@ async function startServer() {
                 } catch (err) { console.error('Respawn error:', err); }
             });
 
+            // ── STAFF MESSENGER ────────────────────────────────────────
+            // Staff join/leave the admin panel — separate from game presence.
+            // Tracks who has AdminSauce open with away messages.
+
+            socket.on('staff_panel_join', async () => {
+                const sessionData = socket.request.session;
+                const userId = sessionData && sessionData.userId;
+                if (!userId) return;
+                const [rows] = await db.query('SELECT username, role, chat_color FROM users WHERE id=?', [userId]).catch(() => [[]]);
+                if (!rows.length) return;
+                const role = (rows[0].role || '').toUpperCase();
+                if (!['ADMIN','GM','MOD','STAFF','OWNER'].includes(role)) return;
+
+                socket.join('staff_panel');
+                if (!global._staffPanel) global._staffPanel = {};
+                global._staffPanel[socket.id] = {
+                    socketId: socket.id, userId, username: rows[0].username,
+                    role, status: 'online', awayMessage: '', joinedAt: Date.now(),
+                    chatColor: rows[0].chat_color || null
+                };
+                // Notify others that someone signed on
+                socket.to('staff_panel').emit('staff_sign_on', { username: rows[0].username, role });
+                // Broadcast updated staff list — filter out invisible users for non-self
+                const visibleList = Object.values(global._staffPanel).filter(s => s.status !== 'invisible');
+                // Each user gets the full list if they're invisible (so they can see chat), otherwise filtered
+                for (const [sid, s] of Object.entries(global._staffPanel)) {
+                    const list = s.status === 'invisible'
+                        ? Object.values(global._staffPanel)
+                        : visibleList;
+                    io.to(sid).emit('staff_panel_presence', list);
+                }
+            });
+
+            socket.on('staff_panel_status', (data) => {
+                if (!global._staffPanel?.[socket.id]) return;
+                const validStatuses = ['online', 'away', 'busy', 'invisible'];
+                const status = validStatuses.includes(data?.status) ? data.status : 'online';
+                const wasInvisible = global._staffPanel[socket.id].status === 'invisible';
+                const goingInvisible = status === 'invisible';
+                global._staffPanel[socket.id].status = status;
+                global._staffPanel[socket.id].awayMessage = typeof data?.awayMessage === 'string' ? data.awayMessage.slice(0, 120) : '';
+                // Broadcast presence — invisible users hidden from others
+                const visibleList = Object.values(global._staffPanel).filter(s => s.status !== 'invisible');
+                for (const [sid, s] of Object.entries(global._staffPanel)) {
+                    const list = s.status === 'invisible'
+                        ? Object.values(global._staffPanel)
+                        : visibleList;
+                    io.to(sid).emit('staff_panel_presence', list);
+                }
+                // Sign on/off notifications for invisible transitions
+                if (goingInvisible && !wasInvisible) {
+                    socket.to('staff_panel').emit('staff_sign_off', { username: global._staffPanel[socket.id].username, role: global._staffPanel[socket.id].role });
+                } else if (wasInvisible && !goingInvisible) {
+                    socket.to('staff_panel').emit('staff_sign_on', { username: global._staffPanel[socket.id].username, role: global._staffPanel[socket.id].role });
+                }
+            });
+
+            socket.on('staff_set_color', async (data) => {
+                if (!global._staffPanel?.[socket.id]) return;
+                const s = global._staffPanel[socket.id];
+                // Only ADMIN and OWNER can set custom colors
+                if (!['ADMIN', 'OWNER'].includes(s.role)) return;
+                const color = typeof data?.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(data.color) ? data.color : null;
+                s.chatColor = color;
+                await db.query('UPDATE users SET chat_color=? WHERE id=?', [color, s.userId]).catch(() => {});
+                // Broadcast updated presence
+                const visibleList = Object.values(global._staffPanel).filter(st => st.status !== 'invisible');
+                for (const [sid, st] of Object.entries(global._staffPanel)) {
+                    io.to(sid).emit('staff_panel_presence', st.status === 'invisible' ? Object.values(global._staffPanel) : visibleList);
+                }
+            });
+
+            socket.on('staff_chat_send', async (data) => {
+                if (!global._staffPanel?.[socket.id]) return;
+                const sender = global._staffPanel[socket.id];
+                const body = typeof data?.body === 'string' ? data.body.trim().slice(0, 500) : '';
+                const channel = typeof data?.channel === 'string' ? data.channel.slice(0, 32) : 'general';
+                if (!body) return;
+                // DM channels: "dm:lowerId:higherId" — only deliver to participants
+                const isDM = channel.startsWith('dm:');
+                // Persist
+                await db.query(
+                    'INSERT INTO staff_messages (sender_id, sender_name, sender_role, channel, body) VALUES (?,?,?,?,?)',
+                    [sender.userId, sender.username, sender.role, channel, body]
+                ).catch(err => console.error('[StaffChat] DB error:', err.message));
+                const msg = {
+                    sender_id: sender.userId, sender_name: sender.username,
+                    sender_role: sender.role, sender_color: sender.chatColor || null,
+                    channel, body, created_at: new Date().toISOString()
+                };
+                if (isDM) {
+                    // Only send to the two participants
+                    const parts = channel.split(':');
+                    const id1 = parseInt(parts[1]), id2 = parseInt(parts[2]);
+                    for (const [sid, s] of Object.entries(global._staffPanel)) {
+                        if (s.userId === id1 || s.userId === id2) {
+                            io.to(sid).emit('staff_chat_msg', msg);
+                        }
+                    }
+                } else {
+                    io.to('staff_panel').emit('staff_chat_msg', msg);
+                }
+            });
+
+            socket.on('staff_chat_history', async (data) => {
+                if (!global._staffPanel?.[socket.id]) return;
+                const channel = typeof data?.channel === 'string' ? data.channel.slice(0, 32) : 'general';
+                const [rows] = await db.query(
+                    'SELECT sender_id, sender_name, sender_role, channel, body, created_at FROM staff_messages WHERE channel=? ORDER BY created_at DESC LIMIT 50',
+                    [channel]
+                ).catch(() => [[]]);
+                socket.emit('staff_chat_history', { channel, messages: rows.reverse() });
+            });
+
+            // Typing indicator — broadcast to channel participants
+            socket.on('staff_typing', (data) => {
+                if (!global._staffPanel?.[socket.id]) return;
+                const sender = global._staffPanel[socket.id];
+                const channel = typeof data?.channel === 'string' ? data.channel : 'general';
+                const isDM = channel.startsWith('dm:');
+                const payload = { userId: sender.userId, username: sender.username, channel };
+                if (isDM) {
+                    const parts = channel.split(':');
+                    const id1 = parseInt(parts[1]), id2 = parseInt(parts[2]);
+                    for (const [sid, s] of Object.entries(global._staffPanel)) {
+                        if (sid !== socket.id && (s.userId === id1 || s.userId === id2)) {
+                            io.to(sid).emit('staff_typing', payload);
+                        }
+                    }
+                } else {
+                    socket.to('staff_panel').emit('staff_typing', payload);
+                }
+            });
+
+            // Nudge/Buzz — send to a specific user
+            socket.on('staff_nudge', (data) => {
+                if (!global._staffPanel?.[socket.id]) return;
+                const sender = global._staffPanel[socket.id];
+                const targetUserId = parseInt(data?.targetUserId);
+                if (!targetUserId) return;
+                for (const [sid, s] of Object.entries(global._staffPanel)) {
+                    if (s.userId === targetUserId) {
+                        io.to(sid).emit('staff_nudge', { from: sender.username, fromRole: sender.role });
+                    }
+                }
+            });
+
             // 6. DISCONNECT
             socket.on('disconnect', async () => {
                 try {
@@ -4008,6 +4372,13 @@ async function startServer() {
                         ).catch(() => {}); // non-fatal
 
                         delete onlinePlayers[socket.id];
+                    }
+                    // Clean up staff panel presence
+                    if (global._staffPanel?.[socket.id]) {
+                        const leaving = global._staffPanel[socket.id];
+                        delete global._staffPanel[socket.id];
+                        io.to('staff_panel').emit('staff_sign_off', { username: leaving.username, role: leaving.role });
+                        io.to('staff_panel').emit('staff_panel_presence', Object.values(global._staffPanel));
                     }
                 } catch (err) { console.error("Disconnect error:", err); }
             });
@@ -4309,7 +4680,7 @@ async function startServer() {
                         n.quest_offers_json, n.schedule_json, n.shop_id,
                         n.mood, n.is_dead, n.predecessor_name,
                         n.is_recruitable, n.recruit_rep_req, n.recruit_quest_req,
-                        n.sprite_asset_id, a.file_url AS sprite_url
+                        n.script_key, n.sprite_asset_id, a.file_url AS sprite_url
                  FROM game_npcs n
                  LEFT JOIN game_assets a ON a.id = n.sprite_asset_id
                  WHERE n.map_id = ? AND n.is_enemy = 0 AND n.is_dead = 0`,
@@ -4351,7 +4722,8 @@ async function startServer() {
                         // Companion recruitment
                         isRecruitable:   !!row.is_recruitable,
                         recruitRepReq:   row.recruit_rep_req || 50,
-                        recruitQuestReq: row.recruit_quest_req || null
+                        recruitQuestReq: row.recruit_quest_req || null,
+                        scriptKey:       row.script_key || null
                     };
                 }
             }

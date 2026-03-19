@@ -1,4 +1,5 @@
 "use client"
+import { toast } from "@/hooks/use-toast"
 
 import { useState, useEffect, useRef, useCallback } from "react"
 import { Button } from "@/components/ui/button"
@@ -166,7 +167,7 @@ export function CharacterCreatorPanel({ charId }: { charId?: number }) {
   const copyJSON = () => {
     navigator.clipboard.writeText(JSON.stringify(state, null, 2))
       .then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
-      .catch(() => alert('Could not copy to clipboard'))
+      .catch(() => toast({ title: 'Could not copy to clipboard', variant: 'destructive' }))
   }
 
   const saveToCharacter = async () => {
@@ -180,8 +181,8 @@ export function CharacterCreatorPanel({ charId }: { charId?: number }) {
       })
       const d = await r.json()
       if (d.success) { setSaved(true); setTimeout(() => setSaved(false), 2500) }
-      else alert('Save failed: ' + d.message)
-    } catch (e) { alert('Save error: ' + String(e)) }
+      else toast({ title: String(d.message || 'Save failed'), variant: 'destructive' })
+    } catch (e) { toast({ title: 'Save error', variant: 'destructive' }) }
     setSaving(false)
   }
 

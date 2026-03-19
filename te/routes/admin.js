@@ -678,8 +678,31 @@ router.post('/scheduler/run-now', requireStaff, async (req, res) => {
         // Run again so it picks this specific one up
         await Scheduler.runDueTasks();
 
+        // Log the execution
+        await db.query('INSERT INTO game_scheduler_log (task_id, task_name, result, message) VALUES (?,?,?,?)',
+            [taskId, rows[0].name, 'success', 'Manually triggered by admin']).catch(() => {});
+
         res.json({ success: true, message: `Task triggered.` });
-    } catch(e) { res.json({ success: false, message: e.message }); }
+    } catch(e) {
+        // Log failure
+        const { taskId } = req.body;
+        await db.query('INSERT INTO game_scheduler_log (task_id, task_name, result, message) VALUES (?,?,?,?)',
+            [taskId || 0, 'unknown', 'error', e.message]).catch(() => {});
+        res.json({ success: false, message: e.message });
+    }
+});
+
+// Scheduler execution log
+router.get('/scheduler/log', requireStaff, async (req, res) => {
+    try {
+        const taskId = req.query.taskId ? parseInt(String(req.query.taskId)) : null;
+        let sql = 'SELECT * FROM game_scheduler_log';
+        const params = [];
+        if (taskId) { sql += ' WHERE task_id=?'; params.push(taskId); }
+        sql += ' ORDER BY ran_at DESC LIMIT 50';
+        const [rows] = await db.query(sql, params);
+        res.json({ success: true, data: rows });
+    } catch(e) { res.json({ success: true, data: [] }); }
 });
 
 // ── TEST AI CONNECTION ─────────────────────────────────────────────

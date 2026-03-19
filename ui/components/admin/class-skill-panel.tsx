@@ -1,4 +1,5 @@
 "use client"
+import { toast } from "@/hooks/use-toast"
 // =================================================================
 // CLASS SKILL PANEL — Assign skills to classes
 // Shows a grid: classes (columns) × skills (rows).
@@ -75,7 +76,7 @@ export function ClassSkillPanel() {
     )
     setSaving((prev: Set<number>) => { const n = new Set(prev); n.delete(classId); return n })
     if (res.success) setDirty((prev: Set<number>) => { const n = new Set(prev); n.delete(classId); return n })
-    else alert('Save failed: ' + res.message)
+    else toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
   }
 
   const saveAll = async () => {

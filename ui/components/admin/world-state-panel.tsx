@@ -3,13 +3,26 @@ import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Trash2, Info, RefreshCw, RotateCcw, Skull, Globe, MessageSquare, Swords, Flag } from "lucide-react"
+import { Plus, Trash2, Info, RefreshCw, RotateCcw, Skull, Globe, MessageSquare, Swords, Flag, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 async function wReq(method: string, url: string, data?: unknown): Promise<Record<string, unknown>> {
-  const opts: RequestInit = { method, credentials: 'include', headers: { 'Content-Type': 'application/json' } }
-  if (data && method !== 'GET') opts.body = JSON.stringify(data)
-  return (await fetch(url, opts)).json()
+  try {
+    const opts: RequestInit = { method, credentials: 'include', headers: { 'Content-Type': 'application/json' } }
+    if (data && method !== 'GET') opts.body = JSON.stringify(data)
+    const res = await fetch(url, opts)
+    if (!res.ok) return { success: false, message: `Server error (${res.status})` }
+    return await res.json()
+  } catch {
+    return { success: false, message: 'Could not reach server' }
+  }
+}
+
+function safeDate(v: string): string {
+  try { const d = new Date(v); return isNaN(d.getTime()) ? '—' : d.toLocaleString() } catch { return '—' }
+}
+function safeDateShort(v: string): string {
+  try { const d = new Date(v); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString() } catch { return '—' }
 }
 
 interface WorldFlag { flag_key: string; flag_value: string; set_by: string; set_at: string }
@@ -20,7 +33,6 @@ interface Rumor     { id: number; char_name: string; rumor_text: string; spread_
 
 const MOODS: string[] = ['happy', 'fearful', 'angry', 'grieving', 'excited']
 const MOOD_ICONS: Record<string, string> = { happy: '😄', fearful: '😨', angry: '😠', grieving: '😢', excited: '🤩' }
-type Section = 'flags' | 'moods' | 'dead' | 'factions' | 'rumors'
 
 function Help({ children }: { children: React.ReactNode }) {
   return (
@@ -72,8 +84,11 @@ function FlagsSection() {
         <Input value={newKey} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewKey(e.target.value)}
           onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => e.key === 'Enter' && add()}
           placeholder="flag_key (e.g. goblin_boss_slain)" className="flex-1" />
-        <Input value={newVal} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewVal(e.target.value)}
-          placeholder="value" className="w-28" />
+        <select value={newVal} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setNewVal(e.target.value)}
+          className="px-3 py-2 bg-input border border-border rounded-md text-sm w-28">
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
         <Button onClick={add}><Plus className="w-4 h-4 mr-1" />Set</Button>
       </div>
       {loading ? <div className="text-center py-8 text-muted-foreground">Loading…</div>
@@ -98,7 +113,7 @@ function FlagsSection() {
                       </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Set by {f.set_by || '—'} · {f.set_at ? new Date(f.set_at).toLocaleString() : ''}
+                      Set by {f.set_by || '—'} · {f.set_at ? safeDate(f.set_at) : ''}
                     </p>
                   </div>
                   <Button size="sm" variant="outline" onClick={() => toggle(f.flag_key, f.flag_value)}>
@@ -174,7 +189,7 @@ function MoodsSection() {
                   <p className="text-xs text-muted-foreground">{n.map_name || `Map ${n.map_id}`}</p>
                 </div>
                 <Badge variant="outline" className="text-sm">{MOOD_ICONS[n.mood]} {n.mood}</Badge>
-                <select defaultValue={n.mood} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setMoodFn(n.name, e.target.value)}
+                <select value={n.mood} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setMoodFn(n.name, e.target.value)}
                   className="px-2 py-1 bg-input border border-border rounded text-xs">
                   {MOODS.map((m: string) => <option key={m} value={m}>{MOOD_ICONS[m]} {m}</option>)}
                 </select>
@@ -295,7 +310,7 @@ function FactionsSection() {
           </div>
         </div>
       ) : (
-        <Button onClick={() => { setIsNew(true); setEditing({ icon: '⚔️' }) }} className="mb-4">
+        <Button onClick={() => { setIsNew(true); setEditing({ icon: '⚔️', name: '', description: '', rival_id: null }) }} className="mb-4">
           <Plus className="w-4 h-4 mr-1" />New Faction
         </Button>
       )}
@@ -376,7 +391,7 @@ function RumorsSection() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-semibold text-sm">{r.char_name}</span>
-                      <span className="text-xs text-muted-foreground">{new Date(r.created_at).toLocaleDateString()}</span>
+                      <span className="text-xs text-muted-foreground">{safeDateShort(r.created_at)}</span>
                       {done && <Badge variant="secondary" className="text-[10px] py-0">Fully spread</Badge>}
                     </div>
                     <p className="text-xs text-muted-foreground italic mb-2">"{r.rumor_text}"</p>
@@ -401,23 +416,144 @@ function RumorsSection() {
   )
 }
 
+// ── Dashboard Overview ────────────────────────────────────────────
+function WorldDashboard({ onNavigate }: { onNavigate: (s: Section) => void }) {
+  const [stats, setStats] = useState({ flags: 0, activeFlags: 0, moods: 0, dead: 0, factions: 0, rumors: 0, spreading: 0 })
+
+  useEffect(() => {
+    Promise.all([
+      wReq('GET', '/admin/world-flags'),
+      wReq('GET', '/admin/npc-moods'),
+      wReq('GET', '/admin/dead-npcs'),
+      wReq('GET', '/admin/factions'),
+      wReq('GET', '/admin/rumors'),
+    ]).then(([flags, moods, dead, factions, rumors]) => {
+      const flagList = (flags.data || []) as WorldFlag[]
+      const moodList = (moods.data || []) as NpcMood[]
+      const deadList = (dead.data || []) as DeadNpc[]
+      const factionList = (factions.data || []) as Faction[]
+      const rumorList = (rumors.data || []) as Rumor[]
+      setStats({
+        flags: flagList.length,
+        activeFlags: flagList.filter(f => f.flag_value === 'true' || f.flag_value === '1').length,
+        moods: moodList.filter(n => n.mood).length,
+        dead: deadList.length,
+        factions: factionList.length,
+        rumors: rumorList.length,
+        spreading: rumorList.filter(r => r.spread_count < r.max_spread).length,
+      })
+    }).catch(() => {})
+  }, [])
+
+  const cards = [
+    { label: 'Active Flags', value: `${stats.activeFlags}/${stats.flags}`, color: 'text-green-400', section: 'flags' as Section, icon: <Flag className="w-4 h-4" /> },
+    { label: 'NPC Moods Set', value: stats.moods, color: 'text-yellow-400', section: 'moods' as Section, icon: <MessageSquare className="w-4 h-4" /> },
+    { label: 'Dead NPCs', value: stats.dead, color: stats.dead > 0 ? 'text-red-400' : 'text-muted-foreground', section: 'dead' as Section, icon: <Skull className="w-4 h-4" /> },
+    { label: 'Factions', value: stats.factions, color: 'text-purple-400', section: 'factions' as Section, icon: <Swords className="w-4 h-4" /> },
+    { label: 'Rumors', value: `${stats.spreading} spreading`, color: 'text-blue-400', section: 'rumors' as Section, icon: <Globe className="w-4 h-4" /> },
+  ]
+
+  return (
+    <div className="grid grid-cols-5 gap-2 mb-4">
+      {cards.map(c => (
+        <button key={c.label} onClick={() => onNavigate(c.section)}
+          className="p-3 bg-card border border-border rounded-lg hover:border-primary/30 transition-colors text-center">
+          <div className={`text-lg font-bold font-mono ${c.color}`}>{c.value}</div>
+          <div className="text-[10px] text-muted-foreground flex items-center justify-center gap-1 mt-0.5">{c.icon}{c.label}</div>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ── Flag Timeline ────────────────────────────────────────────────
+function FlagTimeline() {
+  const [events, setEvents] = useState<Array<Record<string, unknown>>>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    wReq('GET', '/admin-panel/event-log?type=world_flag&limit=50')
+      .then(d => { if (d.success) setEvents((d.data || []) as Array<Record<string, unknown>>) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  // Also try flag-related events from the event log
+  useEffect(() => {
+    wReq('GET', '/admin/world-flags').then(d => {
+      if (!d.success) return
+      const flags = (d.data || []) as WorldFlag[]
+      // Convert flags to timeline entries
+      const entries = flags.map(f => ({
+        event_type: f.flag_value === 'true' || f.flag_value === '1' ? 'flag_set' : 'flag_cleared',
+        actor_name: f.set_by || 'System',
+        target_name: f.flag_key,
+        detail_json: JSON.stringify({ value: f.flag_value }),
+        created_at: f.set_at || new Date().toISOString(),
+      }))
+      setEvents(prev => [...entries, ...prev].sort((a, b) =>
+        new Date(String(b.created_at)).getTime() - new Date(String(a.created_at)).getTime()
+      ).slice(0, 50))
+    }).catch(() => {})
+  }, [])
+
+  return (
+    <div>
+      <Help>
+        Timeline of all world flag changes. See when flags were set, by whom, and what triggered them.
+      </Help>
+      {loading ? <div className="text-center py-8 text-muted-foreground">Loading...</div>
+        : events.length === 0 ? (
+          <div className="text-center py-10 text-muted-foreground">No flag events recorded yet.</div>
+        ) : (
+          <div className="relative pl-6 space-y-2">
+            <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-border" />
+            {events.map((e, i) => {
+              const isSet = String(e.event_type).includes('set')
+              return (
+                <div key={i} className="relative">
+                  <div className={cn("absolute left-[-18px] top-1.5 w-3 h-3 rounded-full border-2",
+                    isSet ? "bg-green-500 border-green-700" : "bg-red-500 border-red-700")} />
+                  <div className="p-2 rounded border border-border/50 bg-card/50 text-xs">
+                    <div className="flex items-center gap-2">
+                      <code className="text-purple-400 font-bold">{String(e.target_name || e.flag_key || '')}</code>
+                      <span className={isSet ? "text-green-400" : "text-red-400"}>{isSet ? 'SET' : 'CLEARED'}</span>
+                      <span className="text-muted-foreground ml-auto">{safeDate(String(e.created_at || ''))}</span>
+                    </div>
+                    <span className="text-muted-foreground">by {String(e.actor_name || e.set_by || 'System')}</span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+    </div>
+  )
+}
+
 // ── Main Panel ────────────────────────────────────────────────────
+type Section = 'flags' | 'moods' | 'dead' | 'factions' | 'rumors' | 'timeline'
+
 const SECTIONS: Array<{ id: Section; label: string; icon: React.ReactNode }> = [
   { id: 'flags',    label: 'World Flags', icon: <Flag className="w-4 h-4" /> },
   { id: 'moods',    label: 'NPC Moods',   icon: <MessageSquare className="w-4 h-4" /> },
   { id: 'dead',     label: 'Dead NPCs',   icon: <Skull className="w-4 h-4" /> },
   { id: 'factions', label: 'Factions',    icon: <Swords className="w-4 h-4" /> },
   { id: 'rumors',   label: 'Rumors',      icon: <Globe className="w-4 h-4" /> },
+  { id: 'timeline', label: 'Flag Timeline', icon: <RefreshCw className="w-4 h-4" /> },
 ]
 
 export function WorldStatePanel() {
   const [active, setActive] = useState<Section>('flags')
   return (
     <div className="p-6">
-      <div className="mb-6">
+      <div className="mb-4">
         <h2 className="text-xl font-bold flex items-center gap-2"><Globe className="w-5 h-5" /> World State</h2>
         <p className="text-sm text-muted-foreground mt-0.5">Manage the living world — flags, NPC moods, factions, and rumors</p>
       </div>
+
+      <WorldDashboard onNavigate={setActive} />
+
       <div className="flex gap-2 flex-wrap mb-6">
         {SECTIONS.map((s: { id: Section; label: string; icon: React.ReactNode }) => (
           <button key={s.id} onClick={() => setActive(s.id)}
@@ -436,6 +572,7 @@ export function WorldStatePanel() {
       {active === 'dead'     && <DeadSection />}
       {active === 'factions' && <FactionsSection />}
       {active === 'rumors'   && <RumorsSection />}
+      {active === 'timeline' && <FlagTimeline />}
     </div>
   )
 }

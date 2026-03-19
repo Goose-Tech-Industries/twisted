@@ -127,6 +127,18 @@ router.delete('/:id', requireStaff, async (req, res) => {
         if (!rows.length) return res.status(404).json({ success: false });
         // Delete file
         try { fs.unlinkSync(rows[0].file_path); } catch {}
+        // Clean up asset references in game entities
+        const assetId = parseInt(req.params.id);
+        const refTables = [
+            { table: 'game_npcs', col: 'icon_asset_id' },
+            { table: 'game_items', col: 'icon_asset_id' },
+            { table: 'game_skills', col: 'icon_asset_id' },
+            { table: 'game_classes', col: 'icon_asset_id' },
+            { table: 'game_races', col: 'icon_asset_id' },
+        ];
+        for (const ref of refTables) {
+            await db.query(`UPDATE ?? SET ??=NULL WHERE ??=?`, [ref.table, ref.col, ref.col, assetId]).catch(() => {});
+        }
         await db.query('DELETE FROM game_assets WHERE id=?', [req.params.id]);
         res.json({ success: true });
     } catch (e) { res.status(500).json({ success: false, message: e.message }); }

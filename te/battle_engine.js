@@ -1779,6 +1779,35 @@ async function resolveTransform(db, battle, actor, result) {
         return result;
     }
 
+    // Alignment check
+    if (transform.alignment_required && transform.alignment_required !== 'any') {
+        try {
+            const [alignRow] = await db.query('SELECT alignment_score FROM characters WHERE id=?', [actor.charId]);
+            const score = alignRow.length ? (alignRow[0].alignment_score || 0) : 0;
+            if (transform.alignment_required === 'good' && score < (transform.alignment_min || 0)) {
+                result.log.push(`${actor.name}'s heart is not pure enough for this form.`);
+                return result;
+            }
+            if (transform.alignment_required === 'evil' && score > -(transform.alignment_min || 0)) {
+                result.log.push(`${actor.name} has not embraced enough darkness for this form.`);
+                return result;
+            }
+        } catch {}
+    }
+
+    // Prerequisite transform check
+    if (transform.prerequisite_transform_id) {
+        try {
+            const [prereq] = await db.query(
+                'SELECT is_unlocked FROM character_transformations WHERE character_id=? AND transformation_id=?',
+                [actor.charId, transform.prerequisite_transform_id]);
+            if (!prereq.length || !prereq[0].is_unlocked) {
+                result.log.push(`${actor.name} must first master a previous form!`);
+                return result;
+            }
+        } catch {}
+    }
+
     // Cost
     if (transform.mp_cost > 0 && actor.currentMp < transform.mp_cost) {
         result.log.push(`Not enough MP! Need ${transform.mp_cost}.`);
@@ -3648,6 +3677,35 @@ class BattleState {
     async initSettings(db, arenaRow) {
         this._settings = await loadBattleSettings(db);
         if (arenaRow) applyArenaOverrides(this._settings, arenaRow);
+
+        // Load stat caps for diminishing returns
+        try {
+            const [capRows] = await db.query('SELECT stat_key, tier, threshold, effectiveness FROM game_stat_caps ORDER BY stat_key, tier');
+            this._statCaps = {};
+            for (const r of capRows) {
+                if (!this._statCaps[r.stat_key]) this._statCaps[r.stat_key] = [];
+                this._statCaps[r.stat_key].push({ threshold: r.threshold, effectiveness: parseFloat(r.effectiveness) });
+            }
+        } catch { this._statCaps = {}; }
+    }
+
+    // Apply stat caps — diminishing returns on a stat value
+    applyStatCap(statKey, rawValue) {
+        const caps = this._statCaps?.[statKey];
+        if (!caps || !caps.length) return rawValue;
+        let effective = 0;
+        let prev = 0;
+        for (const cap of caps) {
+            const rangeEnd = Math.min(rawValue, cap.threshold);
+            if (rangeEnd > prev) effective += (rangeEnd - prev) * cap.effectiveness;
+            prev = cap.threshold;
+        }
+        // Beyond last cap
+        if (rawValue > prev) {
+            const lastEff = caps[caps.length - 1].effectiveness;
+            effective += (rawValue - prev) * lastEff;
+        }
+        return Math.floor(effective);
     }
 
     // Session 13: Load fighting styles for all combatants
@@ -7873,8 +7931,22 @@ async function endBattle(db, io, battle) {
             const sysXpMult   = parseFloat(global.worldFlags?.['xp_multiplier']  || 1);
             const sysGoldMult = parseFloat(global.worldFlags?.['gold_multiplier'] || 1);
 
-            const shareXp   = Math.max(1, Math.floor((baseXp   / partySize) * regionXpMult   * sysXpMult));
-            const shareGold = Math.max(0, Math.floor((baseGold / partySize) * regionGoldMult * sysGoldMult));
+            // Apply active world event multipliers
+            let eventXpMult = 1, eventGoldMult = 1, eventAtkMult = 1;
+            try {
+                const [activeEvents] = await db.query(
+                    "SELECT stat_modifiers FROM game_world_events WHERE is_active=1"
+                );
+                for (const ev of activeEvents) {
+                    const mods = typeof ev.stat_modifiers === 'string' ? JSON.parse(ev.stat_modifiers || '{}') : (ev.stat_modifiers || {});
+                    if (mods.xp_mult) eventXpMult *= parseFloat(mods.xp_mult);
+                    if (mods.gold_mult) eventGoldMult *= parseFloat(mods.gold_mult);
+                    if (mods.enemy_atk_mult) eventAtkMult *= parseFloat(mods.enemy_atk_mult);
+                }
+            } catch {}
+
+            const shareXp   = Math.max(1, Math.floor((baseXp   / partySize) * regionXpMult   * sysXpMult   * eventXpMult));
+            const shareGold = Math.max(0, Math.floor((baseGold / partySize) * regionGoldMult * sysGoldMult * eventGoldMult));
 
             // Award each surviving player
             for (const winner of survivingPlayers) {

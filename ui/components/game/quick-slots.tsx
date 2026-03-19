@@ -96,8 +96,8 @@ export function QuickSlots() {
   const consumables = inventory.filter(i => i.type === 'consumable')
   
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40">
-      <div className="flex gap-1 p-2 bg-card/90 backdrop-blur-sm border border-border rounded-lg shadow-lg">
+    <div className="shrink-0 flex justify-center border-t border-border bg-card/80">
+      <div className="flex gap-1 p-2">
         {slots.map((slot, index) => {
           const Icon = slot.item ? getItemIcon(slot.item) : SLOT_ICONS[index]
           

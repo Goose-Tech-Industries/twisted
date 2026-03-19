@@ -4,7 +4,7 @@ import adminApi from "@/lib/admin-api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Pencil, Trash2, ChevronLeft, Info, Play } from "lucide-react"
+import { Plus, Pencil, Trash2, ChevronLeft, Info, Play, Clock } from "lucide-react"
 
 interface Task {
   id: number; name: string; task_type: string; schedule_type: string
@@ -67,7 +67,12 @@ export function SchedulerPanel() {
 
   const openEdit = (t?: Task) => {
     setEditing({ ...(t || { name: '', task_type: 'SHOP_RESTOCK', schedule_type: 'DAILY', run_at_hour: 0, run_at_day: 1, interval_minutes: 60, target_id: null, is_enabled: 1, config_json: '{}' }) })
-    try { setCfg(JSON.parse(t?.config_json || '{}') as TaskCfg) } catch { setCfg({}) }
+    try {
+      setCfg(JSON.parse(t?.config_json || '{}') as TaskCfg)
+    } catch {
+      setCfg({})
+      console.warn('[Scheduler] Invalid config_json for task', t?.id)
+    }
   }
 
   const save = async () => {
@@ -82,11 +87,18 @@ export function SchedulerPanel() {
     await adminApi.entity.delete('scheduled_task', id); load()
   }
 
+  const [running, setRunning] = useState<number | null>(null)
   const runNow = async (id: number) => {
-    const r = await fetch('/scheduler/run-now', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId: id }) })
-    const d: Record<string, unknown> = await r.json()
-    alert(d.success ? `✅ ${d.message || 'Task ran'}` : `❌ ${d.message}`)
-    load()
+    if (!confirm('Run this task immediately?')) return
+    setRunning(id)
+    try {
+      const r = await fetch('/scheduler/run-now', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId: id }) })
+      if (!r.ok) { alert(`Server error (${r.status})`); return }
+      const d: Record<string, unknown> = await r.json()
+      alert(d.success ? `Task ran: ${d.message || 'OK'}` : `Failed: ${d.message}`)
+      load()
+    } catch { alert('Could not reach server') }
+    finally { setRunning(null) }
   }
 
   const setField = (k: keyof Task, v: unknown) =>
@@ -145,9 +157,14 @@ export function SchedulerPanel() {
             )}
             {schedType === 'WEEKLY' && (
               <div>
-                <label className="text-sm font-medium">Day (0=Sun)</label>
-                <Input type="number" min={0} max={6} value={Number(d.run_at_day) || 1}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setField('run_at_day', parseInt(e.target.value) || 1)} className="mt-1" />
+                <label className="text-sm font-medium">Day of Week</label>
+                <select value={Number(d.run_at_day) || 0}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setField('run_at_day', parseInt(e.target.value))}
+                  className="mt-1 w-full px-3 py-2 bg-input border border-border rounded text-sm">
+                  {['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map((day, i) => (
+                    <option key={i} value={i}>{day}</option>
+                  ))}
+                </select>
               </div>
             )}
             {schedType === 'INTERVAL_MINUTES' && (
@@ -167,8 +184,8 @@ export function SchedulerPanel() {
           </div>
           <div>
             <label className="text-sm font-medium">Target ID <span className="text-muted-foreground font-normal">(shop_id or map_id — 0 for ALL)</span></label>
-            <Input type="number" value={Number(d.target_id) || 0}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setField('target_id', parseInt(e.target.value) || null)}
+            <Input type="number" value={d.target_id != null ? Number(d.target_id) : 0}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => { const v = parseInt(e.target.value); setField('target_id', isNaN(v) ? null : v) }}
               className="mt-1 w-32" />
           </div>
 
@@ -256,7 +273,7 @@ export function SchedulerPanel() {
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {schedLabel(t)} · Last: {t.last_run_at ? new Date(t.last_run_at).toLocaleString() : 'Never'}
+                  {schedLabel(t)} · Last: {t.last_run_at ? new Date(t.last_run_at).toLocaleString(undefined, { timeZoneName: 'short' }) : 'Never'}
                 </p>
               </div>
               <div className="flex gap-1 shrink-0">
@@ -266,6 +283,50 @@ export function SchedulerPanel() {
                 <Button size="sm" variant="ghost" onClick={() => openEdit(t)}><Pencil className="w-3.5 h-3.5" /></Button>
                 <Button size="sm" variant="ghost" className="text-destructive" onClick={() => del(t.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Execution Log */}
+      <SchedulerLog />
+    </div>
+  )
+}
+
+function SchedulerLog() {
+  const [logs, setLogs] = useState<Array<{ id: number; task_id: number; task_name: string; result: string; message: string; ran_at: string }>>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('/scheduler/log', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => { if (d.success) setLogs(d.data || []) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  return (
+    <div className="mt-6 border-t border-border pt-4">
+      <h3 className="text-sm font-bold flex items-center gap-2 mb-3">
+        <Clock className="w-4 h-4 text-muted-foreground" /> Execution Log
+      </h3>
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Loading...</p>
+      ) : logs.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No executions logged yet.</p>
+      ) : (
+        <div className="space-y-1 max-h-64 overflow-y-auto">
+          {logs.map(log => (
+            <div key={log.id} className="flex items-center gap-3 p-2 rounded border border-border/50 bg-card/50 text-xs">
+              <span className={log.result === 'success' ? 'text-green-400' : 'text-red-400'}>
+                {log.result === 'success' ? '✓' : '✗'}
+              </span>
+              <span className="font-medium flex-shrink-0">{log.task_name}</span>
+              <span className="text-muted-foreground truncate flex-1">{log.message || '—'}</span>
+              <span className="text-muted-foreground flex-shrink-0">
+                {log.ran_at ? new Date(log.ran_at).toLocaleString(undefined, { timeZoneName: 'short' }) : '—'}
+              </span>
             </div>
           ))}
         </div>

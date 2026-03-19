@@ -13,7 +13,7 @@ interface Spawn {
   required_flag: string | null; world_flag_conditions: string | null
   encounter_table: string
 }
-interface GameMap  { id: number; name: string }
+interface GameMap  { id: number; name: string; width?: number; height?: number }
 interface NPC      { id: number; name: string; icon: string; is_enemy: boolean | number }
 interface EncEntry { npc_id: number; weight: number }
 
@@ -61,7 +61,10 @@ export function SpawnManagerPanel() {
       encounter_rate: 10, min_level: 1, max_level: 50,
       required_flag: null, world_flag_conditions: null, encounter_table: '[]',
     })
-    try { setEnc(JSON.parse(s?.encounter_table || '[]') as EncEntry[]) } catch { setEnc([]) }
+    try {
+      const parsed = JSON.parse(s?.encounter_table || '[]')
+      setEnc(Array.isArray(parsed) ? parsed as EncEntry[] : [])
+    } catch { setEnc([]); console.warn('[Spawn] Invalid encounter_table JSON for spawn', s?.id) }
     setAddNpcId(enemies[0]?.id || 0)
   }
 
@@ -81,7 +84,7 @@ export function SpawnManagerPanel() {
     setEditing((prev: Partial<Spawn> | null) => ({ ...prev, [k]: v }))
 
   const addEnc = () => {
-    if (!addNpcId) { alert('Select an enemy NPC first.'); return }
+    if (!addNpcId) return
     setEnc((prev: EncEntry[]) => [...prev, { npc_id: addNpcId, weight: addWeight }])
   }
 
@@ -127,6 +130,38 @@ export function SpawnManagerPanel() {
               </div>
             ))}
           </div>
+          {/* Visual Zone Preview */}
+          {(() => {
+            const map = maps.find((m: GameMap) => m.id === Number(d.map_id))
+            if (!map) return null
+            const mw = map.width || 20, mh = map.height || 20
+            const cellSize = Math.max(4, Math.min(12, 240 / Math.max(mw, mh)))
+            const x1 = Number(d.x_min) || 0, y1 = Number(d.y_min) || 0
+            const x2 = Number(d.x_max) || mw - 1, y2 = Number(d.y_max) || mh - 1
+            return (
+              <div className="p-3 bg-secondary/20 border border-border rounded-lg">
+                <p className="text-[10px] text-muted-foreground mb-1">Zone preview on {map.name} ({mw}x{mh})</p>
+                <svg width={mw * cellSize} height={mh * cellSize} className="border border-border/50 rounded">
+                  <rect width={mw * cellSize} height={mh * cellSize} fill="#1a1a2e" />
+                  {/* Grid lines */}
+                  {Array.from({ length: mw + 1 }).map((_, x) => (
+                    <line key={`v${x}`} x1={x * cellSize} y1={0} x2={x * cellSize} y2={mh * cellSize} stroke="#333" strokeWidth="0.5" />
+                  ))}
+                  {Array.from({ length: mh + 1 }).map((_, y) => (
+                    <line key={`h${y}`} x1={0} y1={y * cellSize} x2={mw * cellSize} y2={y * cellSize} stroke="#333" strokeWidth="0.5" />
+                  ))}
+                  {/* Spawn zone highlight */}
+                  <rect x={x1 * cellSize} y={y1 * cellSize}
+                    width={(Math.min(x2, mw - 1) - x1 + 1) * cellSize}
+                    height={(Math.min(y2, mh - 1) - y1 + 1) * cellSize}
+                    fill="rgba(248,113,113,0.25)" stroke="#f87171" strokeWidth="1.5" strokeDasharray="3,2" />
+                </svg>
+                {x2 < x1 && <p className="text-[10px] text-red-400 mt-1">Warning: x_max is less than x_min</p>}
+                {y2 < y1 && <p className="text-[10px] text-red-400 mt-1">Warning: y_max is less than y_min</p>}
+              </div>
+            )
+          })()}
+
           <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="text-sm font-medium">Encounter Rate %</label>

@@ -5,7 +5,8 @@ import adminApi from "@/lib/admin-api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Info, RotateCcw, Plus, Trash2, CheckCircle, XCircle, Loader2, FlaskConical } from "lucide-react"
+import { Info, RotateCcw, Plus, Trash2, CheckCircle, XCircle, Loader2, FlaskConical, Search } from "lucide-react"
+import { toast } from "@/hooks/use-toast"
 
 // ── Type definitions matching settings_manager.js LABEL_GROUPS ──
 type RowDef = [string, string, string, string] // [key, label, default, hint]
@@ -430,7 +431,7 @@ export function SettingsPanel() {
 
   const addCustom = async () => {
     const k = customKey.trim().replace(/\s+/g,'_')
-    if (!k) { alert('Key is required'); return }
+    if (!k) { toast({ title: 'Key is required', variant: 'destructive' }); return }
     await saveSetting(k, customVal)
     setCustomKey(''); setCustomVal('')
   }
@@ -482,10 +483,55 @@ export function SettingsPanel() {
             {g.title}
           </button>
         ))}
+        <button onClick={() => setActiveTab('all_settings')}
+          className={`px-3 py-2 text-xs font-semibold border-b-2 transition-colors whitespace-nowrap -mb-px ${
+            activeTab === 'all_settings'
+              ? 'border-primary text-primary bg-card rounded-t'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}>
+          🔍 All Settings ({Object.keys(data).length})
+        </button>
       </div>
 
+      {/* All Settings browser */}
+      {activeTab === 'all_settings' && (() => {
+        const [search, setSearch] = [customKey, setCustomKey] // reuse state
+        const allKeys = Object.keys(data).sort()
+        const filtered = search ? allKeys.filter(k => k.toLowerCase().includes(search.toLowerCase()) || (data[k] || '').toLowerCase().includes(search.toLowerCase())) : allKeys
+        // Group by prefix
+        const groups: Record<string, string[]> = {}
+        for (const k of filtered) {
+          const prefix = k.split('_').slice(0, 2).join('_')
+          if (!groups[prefix]) groups[prefix] = []
+          groups[prefix].push(k)
+        }
+        return (
+          <div>
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search settings..." className="pl-10" />
+            </div>
+            <p className="text-xs text-muted-foreground mb-3">Showing {filtered.length} of {allKeys.length} settings. Edit any value and it saves automatically.</p>
+            {Object.entries(groups).map(([prefix, keys]) => (
+              <div key={prefix} className="mb-4">
+                <h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1 px-1">{prefix}</h3>
+                <div className="space-y-1">
+                  {keys.map(k => (
+                    <div key={k} className="flex items-center gap-2 p-2 bg-card border border-border rounded text-xs">
+                      <code className="text-purple-400 font-mono flex-shrink-0 w-48 truncate" title={k}>{k}</code>
+                      <Input value={data[k] || ''} onChange={e => saveSetting(k, e.target.value)}
+                        className="h-7 text-xs flex-1" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
+
       {/* Tab description */}
-      <p className="text-xs text-muted-foreground mb-4">{group.desc}</p>
+      {activeTab !== 'all_settings' && group && <p className="text-xs text-muted-foreground mb-4">{group.desc}</p>}
 
       {/* Custom tab renderers */}
       {activeTab === 'config_ai' && <AiTab data={data} onSave={saveSetting} />}

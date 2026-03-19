@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Plus, Trash2, Info, Store, ChevronLeft, Pencil, Globe, Save } from "lucide-react"
+import { toast } from "@/hooks/use-toast"
 
 interface Shop { id: number; name: string; description: string; shop_type: string; npc_id: number; location_map_id: number }
 interface Item { id: number; name: string; icon: string; type: string; value: number }
@@ -171,7 +172,7 @@ export function ShopSupplyPanel() {
   }
 
   const saveShop = async () => {
-    if (!editingShop.name?.trim()) { alert('Name is required.'); return }
+    if (!editingShop.name?.trim()) { toast({ title: 'Name is required.' }); return }
     if (editingShop.id) {
       await adminApi.entity.save('shop', { name: editingShop.name, description: editingShop.description, location_map_id: editingShop.location_map_id || null } as Record<string,unknown>, editingShop.id)
     } else {

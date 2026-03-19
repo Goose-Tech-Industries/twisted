@@ -202,7 +202,8 @@ interface GameState {
   isAuthenticated: boolean
   username: string | null
   role: string | null
-  
+  chatColor: string | null
+
   // Character
   character: Character | null
   charFull: CharacterFull | null
@@ -269,6 +270,8 @@ interface NearbyPlayer {
   y: number
   isOffline?: boolean
   presence?: string
+  role?: string
+  chatColor?: string | null
   }
 
 interface PartyMember {
@@ -285,7 +288,7 @@ interface PartyMember {
 // ACTIONS
 // =================================================================
 type GameAction =
-  | { type: 'SET_AUTH'; payload: { isAuthenticated: boolean; username: string | null; role: string | null } }
+  | { type: 'SET_AUTH'; payload: { isAuthenticated: boolean; username: string | null; role: string | null; chatColor?: string | null } }
   | { type: 'SET_CHARACTER'; payload: Character }
   | { type: 'SET_CHAR_FULL'; payload: CharacterFull }
   | { type: 'UPDATE_HP'; payload: { current: number; max?: number } }
@@ -344,6 +347,7 @@ const initialState: GameState = {
   isAuthenticated: false, // Login required — must authenticate against the real backend
   username: null,
   role: null,
+  chatColor: null,
   character: null,
   charFull: null,
   inventory: [],
@@ -632,6 +636,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
     
     socket.on('connect', () => {
       dispatch({ type: 'SET_SOCKET_CONNECTED', payload: true })
+      // Re-register with server after reconnect (e.g. server restart)
+      const lastCharId = localStorage.getItem('te_last_char_id')
+      if (lastCharId) {
+        socket.emit('select_character', { charId: parseInt(lastCharId, 10) })
+      }
     })
     
     socket.on('disconnect', () => {
@@ -859,7 +868,7 @@ socket.on('player_list', (data: NearbyPlayer[] | { players: NearbyPlayer[] }) =>
       dispatch({ type: 'SET_API_AVAILABLE', payload: true })
       const d = res as any
       if (d.success) {
-        dispatch({ type: 'SET_AUTH', payload: { isAuthenticated: true, username: d.username ?? null, role: d.role ?? null } })
+        dispatch({ type: 'SET_AUTH', payload: { isAuthenticated: true, username: d.username ?? null, role: d.role ?? null, chatColor: d.chatColor ?? null } })
         const savedCharId = localStorage.getItem('te_last_char_id')
         if (savedCharId) {
           const charId = parseInt(savedCharId, 10)
@@ -889,7 +898,7 @@ socket.on('player_list', (data: NearbyPlayer[] | { players: NearbyPlayer[] }) =>
     dispatch({ type: 'SET_LOADING', payload: false })
     
     if (res.success && res.data) {
-      dispatch({ type: 'SET_AUTH', payload: { isAuthenticated: true, username: res.data.username ?? null, role: res.data.role ?? null } })
+      dispatch({ type: 'SET_AUTH', payload: { isAuthenticated: true, username: res.data.username ?? null, role: res.data.role ?? null, chatColor: (res.data as Record<string, unknown>).chatColor as string ?? null } })
       // Store daily reward if server sent one — modal shown in page.tsx
       if (res.data.dailyReward) {
         dispatch({ type: 'SET_DAILY_REWARD', payload: res.data.dailyReward })
@@ -919,7 +928,7 @@ socket.on('player_list', (data: NearbyPlayer[] | { players: NearbyPlayer[] }) =>
     const res = await api.auth.me()
     const meData2 = (res as any)
     if (meData2.success) {
-      dispatch({ type: 'SET_AUTH', payload: { isAuthenticated: true, username: meData2.username ?? null, role: meData2.role ?? null } })
+      dispatch({ type: 'SET_AUTH', payload: { isAuthenticated: true, username: meData2.username ?? null, role: meData2.role ?? null, chatColor: meData2.chatColor ?? null } })
       if (meData2.charId) pendingCharIdRef.current = meData2.charId
     }
   }, [])
@@ -1100,25 +1109,39 @@ socket.on('player_list', (data: NearbyPlayer[] | { players: NearbyPlayer[] }) =>
   }, [state.character, loadQuests, notify])
   
   // Socket-based actions
+  const lastMoveRef = useRef(0)
+  const moveQueuedRef = useRef(false)
+  const MOVE_COOLDOWN = 250 // ms between moves — 4 tiles/sec max, prevents sprint exploit
+
   const move = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
     const char = state.character
     if (!char || !socketRef.current) return
+
+    // Client-side rate limit — strict cooldown
+    const now = Date.now()
+    if (now - lastMoveRef.current < MOVE_COOLDOWN) return
+    if (moveQueuedRef.current) return // don't queue multiple moves
+    lastMoveRef.current = now
+    moveQueuedRef.current = true
+
     const dx = direction === 'left' ? -1 : direction === 'right' ? 1 : 0
     const dy = direction === 'up' ? -1 : direction === 'down' ? 1 : 0
     const newX = char.x + dx
     const newY = char.y + dy
 
-    // Client-side collision check before optimistic update
+    // Client-side collision check
     const map = state.currentMap
     if (map && map.tiles) {
       const tilesArr = map.tiles as number[]
-      if (newX < 0 || newX >= map.width || newY < 0 || newY >= map.height) return
+      if (newX < 0 || newX >= map.width || newY < 0 || newY >= map.height) { moveQueuedRef.current = false; return }
       const tileId = tilesArr[newY * map.width + newX]
-      if (tileId === 1 || tileId === 2) return // wall or water
+      if (tileId === 1 || tileId === 2) { moveQueuedRef.current = false; return }
     }
 
     socketRef.current.emit('move', { x: newX, y: newY })
     dispatch({ type: 'SET_CHARACTER', payload: { ...char, x: newX, y: newY } })
+    // Unlock after cooldown
+    setTimeout(() => { moveQueuedRef.current = false }, MOVE_COOLDOWN)
   }, [state.character, state.currentMap, dispatch])
   
   const interact = useCallback(() => {

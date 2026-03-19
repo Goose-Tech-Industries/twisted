@@ -1,4 +1,5 @@
 "use client"
+import { toast } from "@/hooks/use-toast"
 
 import { useState, useEffect, useCallback } from "react"
 import adminApi from "@/lib/admin-api"
@@ -119,15 +120,15 @@ export function ArtifactManagerPanel() {
   }
 
   const saveArtifact = async () => {
-    if (!editingArtifact.artifact_id?.trim()) { alert('Artifact ID is required.'); return }
-    if (!editingArtifact.name?.trim()) { alert('Name is required.'); return }
+    if (!editingArtifact.artifact_id?.trim()) { toast({ title: 'Artifact ID is required', variant: 'destructive' }); return }
+    if (!editingArtifact.name?.trim()) { toast({ title: 'Name is required', variant: 'destructive' }); return }
     try { JSON.parse(cursesJson) } catch { setCursesError('Invalid JSON in Active Curses.'); return }
 
     const payload = { ...editingArtifact, active_curses_json: cursesJson }
     const id = isNewArtifact ? undefined : editingArtifact.artifact_id
     const res = await adminApi.entity.save('artifact', payload as Record<string, unknown>, id as unknown as number)
     if (res.success) { load(); setView('list') }
-    else alert(res.message || 'Save failed')
+    else toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
   }
 
   const deleteArtifact = async (artifactId: string, name: string) => {
@@ -160,15 +161,15 @@ export function ArtifactManagerPanel() {
   }
 
   const savePower = async () => {
-    if (!editingPower.power_id?.trim()) { alert('Power ID is required.'); return }
-    if (!editingPower.name?.trim()) { alert('Name is required.'); return }
+    if (!editingPower.power_id?.trim()) { toast({ title: 'Power ID is required', variant: 'destructive' }); return }
+    if (!editingPower.name?.trim()) { toast({ title: 'Name is required', variant: 'destructive' }); return }
     try { JSON.parse(effectJson) } catch { setEffectError('Invalid JSON in Effect JSON.'); return }
 
     const payload = { ...editingPower, effect_json: effectJson, artifact_id: selectedArtifactId }
     const id = isNewPower ? undefined : editingPower.power_id
     const res = await adminApi.entity.save('artifact_power', payload as Record<string, unknown>, id as unknown as number)
     if (res.success) { load(); setView('powers') }
-    else alert(res.message || 'Save failed')
+    else toast({ title: String(res.message || 'Save failed'), variant: 'destructive' })
   }
 
   const deletePower = async (powerId: string, name: string) => {
@@ -228,7 +229,7 @@ export function ArtifactManagerPanel() {
               <label className="text-sm font-medium">Rarity</label>
               <select value={a.rarity || 'legendary'} onChange={e => setA('rarity', e.target.value)}
                 className="mt-1 w-full px-3 py-2 bg-input border border-border rounded-md text-sm">
-                {['rare','epic','legendary','mythic'].map(r => (
+                {['legendary','mythic','cosmic'].map(r => (
                   <option key={r} value={r}>{r.charAt(0).toUpperCase()+r.slice(1)}</option>
                 ))}
               </select>
@@ -413,7 +414,7 @@ export function ArtifactManagerPanel() {
               <label className="text-sm font-medium">Power Type</label>
               <select value={p.power_type || 'passive'} onChange={e => setP('power_type', e.target.value)}
                 className="mt-1 w-full px-3 py-2 bg-input border border-border rounded-md text-sm">
-                {['passive','active','ultimate','curse','aura'].map(t => <option key={t} value={t}>{t}</option>)}
+                {['passive','active','ultimate'].map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
             <div>

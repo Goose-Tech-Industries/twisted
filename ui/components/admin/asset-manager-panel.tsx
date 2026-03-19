@@ -5,7 +5,8 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { Upload, Trash2, Image, Music, Volume2, Grid3x3, Search, X, Check } from "lucide-react"
+import { Upload, Trash2, Image, Music, Volume2, Grid3x3, Search, X, Check, CheckSquare, Square } from "lucide-react"
+import { toast } from "@/hooks/use-toast"
 
 const API = process.env.NEXT_PUBLIC_API_URL || ''
 
@@ -34,14 +35,20 @@ export function AssetManagerPanel() {
   const [uploadDesc, setUploadDesc] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState<Asset | null>(null)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [filterCategory, setFilterCategory] = useState<string>('')
+
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
       const url = `${API}/assets-api/list${filterType ? `?type=${filterType}` : ''}`
       const res = await fetch(url, { credentials: 'include' })
+      if (!res.ok) { setLoadError(`Server error (${res.status})`); setLoading(false); return }
       const data = await res.json()
-      if (data.success) setAssets(data.assets || [])
-    } catch {}
+      if (data.success) { setAssets(data.assets || []); setLoadError(null) }
+      else setLoadError(data.message || 'Failed to load assets')
+    } catch { setLoadError('Could not reach server') }
     setLoading(false)
   }, [filterType])
 
@@ -61,14 +68,16 @@ export function AssetManagerPanel() {
       const res = await fetch(`${API}/assets-api/upload`, {
         method: 'POST', credentials: 'include', body: form
       })
+      if (!res.ok) { setLoadError(`Upload server error (${res.status})`); setUploading(false); return }
       const data = await res.json()
       if (data.success) {
         load()
         setUploadDesc('')
+        setLoadError(null)
       } else {
-        alert(data.message || 'Upload failed')
+        setLoadError(data.message || 'Upload failed')
       }
-    } catch (err) { alert('Upload error') }
+    } catch { setLoadError('Upload error — could not reach server') }
     setUploading(false)
     if (fileRef.current) fileRef.current.value = ''
   }
@@ -76,19 +85,51 @@ export function AssetManagerPanel() {
   const deleteAsset = async (id: number) => {
     if (!confirm('Delete this asset?')) return
     try {
-      await fetch(`${API}/assets-api/${id}`, { method: 'DELETE', credentials: 'include' })
-      load()
-    } catch {}
+      const res = await fetch(`${API}/assets-api/${id}`, { method: 'DELETE', credentials: 'include' })
+      if (!res.ok) { setLoadError(`Delete failed (${res.status})`); return }
+      const data = await res.json()
+      if (data.success) { setPreview(null); load() }
+      else setLoadError(data.message || 'Delete failed')
+    } catch { setLoadError('Delete error — could not reach server') }
+  }
+
+  const toggleSelect = (id: number) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const bulkDelete = async () => {
+    if (selected.size === 0) return
+    if (!confirm(`Delete ${selected.size} selected asset${selected.size > 1 ? 's' : ''}?`)) return
+    let deleted = 0
+    for (const id of selected) {
+      try {
+        const res = await fetch(`${API}/assets-api/${id}`, { method: 'DELETE', credentials: 'include' })
+        if (res.ok) { const d = await res.json(); if (d.success) deleted++ }
+      } catch {}
+    }
+    toast({ title: `Deleted ${deleted} of ${selected.size} assets` })
+    setSelected(new Set())
+    setPreview(null)
+    load()
   }
 
   const isAudio = (mime: string) => mime?.startsWith('audio/')
   const isImage = (mime: string) => mime?.startsWith('image/')
   const formatSize = (bytes: number) => bytes > 1024*1024 ? `${(bytes/1024/1024).toFixed(1)}MB` : `${(bytes/1024).toFixed(0)}KB`
 
-  const filtered = assets.filter(a =>
-    (a.original_name || a.filename || '').toLowerCase().includes(search.toLowerCase()) ||
-    (a.description || '').toLowerCase().includes(search.toLowerCase())
-  )
+  const categories = [...new Set(assets.map(a => a.category || 'general').filter(Boolean))].sort()
+
+  const filtered = assets.filter(a => {
+    if (filterCategory && (a.category || 'general') !== filterCategory) return false
+    const q = search.toLowerCase()
+    return (a.original_name || a.filename || '').toLowerCase().includes(q) ||
+      (a.description || '').toLowerCase().includes(q) ||
+      (a.category || '').toLowerCase().includes(q)
+  })
 
   return (
     <div className="space-y-4">
@@ -101,6 +142,13 @@ export function AssetManagerPanel() {
           {assets.length} assets
         </div>
       </div>
+
+      {loadError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive flex items-center justify-between">
+          <span>{loadError}</span>
+          <button onClick={() => setLoadError(null)} className="text-xs opacity-60 hover:opacity-100 ml-2">dismiss</button>
+        </div>
+      )}
 
       {/* Upload Section */}
       <Card className="celtic-border">
@@ -137,7 +185,7 @@ export function AssetManagerPanel() {
       </Card>
 
       {/* Filter + Search */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap items-center">
         <div className="flex gap-1 flex-wrap">
           <Button variant={filterType === '' ? 'default' : 'outline'} size="sm"
             onClick={() => setFilterType('')}>All</Button>
@@ -148,9 +196,29 @@ export function AssetManagerPanel() {
             </Button>
           ))}
         </div>
+        {categories.length > 1 && (
+          <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)}
+            className="h-8 text-xs bg-input border border-border rounded px-2">
+            <option value="">All categories</option>
+            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
         <Input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search..." className="w-48" />
+          placeholder="Search name, desc, category..." className="w-56" />
       </div>
+
+      {/* Bulk actions */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 bg-secondary/50 border border-border rounded-md px-3 py-2">
+          <span className="text-xs text-muted-foreground">{selected.size} selected</span>
+          <Button variant="destructive" size="sm" className="h-7 text-xs gap-1" onClick={bulkDelete}>
+            <Trash2 className="w-3 h-3" /> Delete Selected
+          </Button>
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setSelected(new Set())}>
+            Clear
+          </Button>
+        </div>
+      )}
 
       {/* Asset Grid */}
       {loading ? (
@@ -168,9 +236,18 @@ export function AssetManagerPanel() {
             return (
               <Card key={asset.id} className={cn(
                 "celtic-border cursor-pointer overflow-hidden hover:ring-2 hover:ring-primary transition-all",
-                preview?.id === asset.id && "ring-2 ring-primary"
+                preview?.id === asset.id && "ring-2 ring-primary",
+                selected.has(asset.id) && "ring-2 ring-blue-500"
               )} onClick={() => setPreview(asset)}>
                 <div className="aspect-square bg-muted/30 flex items-center justify-center relative overflow-hidden">
+                  <button
+                    className="absolute top-1 left-1 z-10 text-muted-foreground hover:text-foreground"
+                    onClick={(e) => { e.stopPropagation(); toggleSelect(asset.id) }}>
+                    {selected.has(asset.id)
+                      ? <CheckSquare className="w-4 h-4 text-blue-500" />
+                      : <Square className="w-4 h-4 opacity-40 hover:opacity-100" />
+                    }
+                  </button>
                   {isImage(asset.mime_type) ? (
                     <img src={`${API}${asset.file_url}`} alt={asset.original_name}
                       className="w-full h-full object-contain image-rendering-pixelated"
@@ -221,6 +298,13 @@ export function AssetManagerPanel() {
               <p><span className="text-muted-foreground">Size:</span> {formatSize(preview.file_size)}</p>
               <p><span className="text-muted-foreground">Category:</span> {preview.category}</p>
               {preview.description && <p><span className="text-muted-foreground">Desc:</span> {preview.description}</p>}
+              {preview.tags && preview.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {preview.tags.map(tag => (
+                    <span key={tag} className="text-[9px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">{tag}</span>
+                  ))}
+                </div>
+              )}
               <p className="text-[9px] text-muted-foreground font-mono break-all">{preview.file_url}</p>
             </div>
 

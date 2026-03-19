@@ -94,6 +94,8 @@ export function WorldForgePanel() {
   const [maps,          setMaps]          = useState<MapRef[]>([])
   const [loreBible,     setLoreBible]     = useState('')
   const [loreSaved,     setLoreSaved]     = useState(false)
+  const [history,       setHistory]       = useState<Array<{ mode: string; data: GeneratedData; timestamp: number }>>([])
+  const [showHistory,   setShowHistory]   = useState(false)
 
   const [townBiome,   setTownBiome]   = useState('dark forest')
   const [townSize,    setTownSize]    = useState('village')
@@ -107,21 +109,41 @@ export function WorldForgePanel() {
   const [questLevel,  setQuestLevel]  = useState('1')
   const [worldTheme,  setWorldTheme]  = useState("A dying coastal town where the fishermen started returning from the sea changed — speaking in dead languages, their eyes the colour of deep water.")
 
+  // Load generation history from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('worldforge_history')
+      if (saved) setHistory(JSON.parse(saved))
+    } catch {}
+  }, [])
+
+  const addToHistory = (mode: string, data: GeneratedData) => {
+    const entry = { mode, data, timestamp: Date.now() }
+    const newHistory = [entry, ...history].slice(0, 10)
+    setHistory(newHistory)
+    try { localStorage.setItem('worldforge_history', JSON.stringify(newHistory)) } catch {}
+  }
+
   useEffect(() => {
     fetch('/admin-panel/lore-bible', { credentials: 'include' })
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.json() })
       .then((d: Record<string, unknown>) => { if (d.success && d.value) setLoreBible(String(d.value)) })
-      .catch(() => {})
-    adminApi.entity.getAll('map').then((r) => setMaps((r.data || []) as MapRef[]))
+      .catch((e) => { console.warn('[WorldForge] Lore bible load failed:', e) })
+    adminApi.entity.getAll('map')
+      .then((r) => setMaps((r.data || []) as MapRef[]))
+      .catch((e) => { console.warn('[WorldForge] Maps load failed:', e) })
   }, [])
 
   const saveLore = async () => {
-    await fetch('/admin-panel/lore-bible', {
-      method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value: loreBible }),
-    }).catch(() => {})
-    setLoreSaved(true); setTimeout(() => setLoreSaved(false), 2500)
+    try {
+      const r = await fetch('/admin-panel/lore-bible', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: loreBible }),
+      })
+      if (!r.ok) { setErrorMsg('Failed to save lore bible'); setView('error'); return }
+      setLoreSaved(true); setTimeout(() => setLoreSaved(false), 2500)
+    } catch { setErrorMsg('Could not save lore bible'); setView('error') }
   }
 
   const generate = async () => {
@@ -140,7 +162,9 @@ export function WorldForgePanel() {
       })
       const data: Record<string, unknown> = await r.json()
       if (!data.success) { setErrorMsg(String(data.message || 'Generation failed')); setView('error'); return }
-      setResult(data.data as GeneratedData); setView('preview')
+      const genData = data.data as GeneratedData
+      setResult(genData); setView('preview')
+      addToHistory(mode, genData)
     } catch (e: unknown) { setErrorMsg(String(e)); setView('error') }
   }
 
@@ -161,16 +185,17 @@ export function WorldForgePanel() {
       })
       const data: Record<string, unknown> = await r.json()
       const newData = data.data as GeneratedData | undefined
-      if (!data.success || !newData?.npcs?.[0]) return
+      if (!data.success || !newData?.npcs?.[0]) { setErrorMsg('NPC regeneration returned no data'); setView('error'); return }
       const newNpc: NpcDef = { ...newData.npcs[0], x: existing.x, y: existing.y, is_enemy: existing.is_enemy }
       const npcs = [...(result.npcs || [])]
       npcs[idx] = newNpc
       setResult({ ...result, npcs })
-    } catch {}
+    } catch (e) { setErrorMsg(`NPC regen failed: ${e}`); setView('error') }
   }
 
   const commit = async () => {
     if (!result) return
+    if (!confirm('Commit this generated content to the database? This will create maps, NPCs, items, and quests.')) return
     setView('generating')
     try {
       const r = await fetch('/admin/world-forge/commit', {
@@ -411,8 +436,37 @@ export function WorldForgePanel() {
           <h2 className="text-xl font-bold flex items-center gap-2">🌍 World Forge</h2>
           <p className="text-sm text-muted-foreground">AI-powered content generator. Preview everything before it touches your database.</p>
         </div>
-        <Badge className="bg-purple-900/50 text-purple-300 border-purple-700">✨ AI POWERED</Badge>
+        <div className="flex items-center gap-2">
+          {history.length > 0 && (
+            <Button variant="outline" size="sm" onClick={() => setShowHistory(!showHistory)} className="text-xs">
+              📜 History ({history.length})
+            </Button>
+          )}
+          <Badge className="bg-purple-900/50 text-purple-300 border-purple-700">✨ AI POWERED</Badge>
+        </div>
       </div>
+
+      {/* Generation History */}
+      {showHistory && history.length > 0 && (
+        <div className="mb-4 p-4 bg-card border border-border rounded-lg">
+          <h3 className="text-xs font-bold uppercase text-muted-foreground mb-2">Previous Generations</h3>
+          <div className="space-y-1 max-h-40 overflow-y-auto">
+            {history.map((h, i) => (
+              <div key={i} className="flex items-center gap-3 p-2 rounded hover:bg-secondary/50 text-xs">
+                <span className="text-muted-foreground">{new Date(h.timestamp).toLocaleString()}</span>
+                <Badge variant="outline" className="text-[10px]">{h.mode}</Badge>
+                <span className="flex-1 text-muted-foreground truncate">
+                  {h.data.map?.name || `${(h.data.npcs || []).length} NPCs`}
+                </span>
+                <Button size="sm" variant="outline" className="h-6 text-[10px]"
+                  onClick={() => { setResult(h.data); setMode(h.mode as GenerateMode); setView('preview'); setShowHistory(false) }}>
+                  Load
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <div className={cardBase}>

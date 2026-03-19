@@ -20,8 +20,57 @@ function requireStaff(req, res, next) {
 // ---------------------------------------------------------------
 // GEMINI CALLER  (falls back to Ollama if no Gemini key)
 // ---------------------------------------------------------------
+// Rate limit tracking per provider
+if (!global._aiRateTracker) global._aiRateTracker = { lastCall: 0, callCount: 0, resetAt: 0 };
+
+// Model-based rate limits (requests per minute)
+const RATE_LIMITS = {
+    'gemini-1.5-flash': 15,      // Free tier
+    'gemini-1.5-pro': 2,         // Free tier
+    'gemini-2.0-flash': 15,      // Free tier
+    'default-gemini': 15,        // Unknown model fallback
+    'ollama': 999,               // No limit for local
+    'openai': 60,                // Paid tier
+};
+
+function getModelRateLimit(model) {
+    return RATE_LIMITS[model] || RATE_LIMITS['default-gemini'];
+}
+
+async function waitForRateLimit(model) {
+    const tracker = global._aiRateTracker;
+    const rpm = getModelRateLimit(model);
+    const minInterval = Math.ceil(60000 / rpm); // ms between calls
+
+    const now = Date.now();
+    // Reset counter every minute
+    if (now > tracker.resetAt) {
+        tracker.callCount = 0;
+        tracker.resetAt = now + 60000;
+    }
+
+    // If we've hit the limit, wait
+    if (tracker.callCount >= rpm) {
+        const waitMs = tracker.resetAt - now;
+        if (waitMs > 0) {
+            console.log(`[WorldForge] Rate limited (${rpm} RPM for ${model}), waiting ${Math.ceil(waitMs/1000)}s...`);
+            await new Promise(r => setTimeout(r, waitMs + 1000));
+            tracker.callCount = 0;
+            tracker.resetAt = Date.now() + 60000;
+        }
+    }
+
+    // Enforce minimum interval between calls
+    const elapsed = now - tracker.lastCall;
+    if (elapsed < minInterval) {
+        await new Promise(r => setTimeout(r, minInterval - elapsed));
+    }
+
+    tracker.lastCall = Date.now();
+    tracker.callCount++;
+}
+
 async function callAI(prompt) {
-    // Check DB for API key (admin panel saves to game_settings)
     let dbApiKey = '', dbModel = '', dbProvider = '';
     if (db) {
         try {
@@ -36,38 +85,46 @@ async function callAI(prompt) {
     }
 
     const geminiKey = dbApiKey || process.env.GEMINI_API_KEY;
-    // Try Gemini first
     if (geminiKey && (dbProvider === 'gemini' || dbProvider === '' || !dbProvider || process.env.GEMINI_API_KEY)) {
         const model = dbModel || process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-        const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
-        const res   = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { temperature: 0.9, maxOutputTokens: 8192 }
-            })
-        });
-        if (res.status === 429) {
-            const retryAfter = res.headers.get('Retry-After') || '60';
-            global._geminiRateLimit = { at: Date.now(), retryAfter: parseInt(retryAfter) };
-            const rlErr = new Error(`Gemini rate limit hit. Free tier resets in ~${retryAfter}s. Try again shortly, or set NPC_LLM_URL in .env for Ollama fallback.`);
-            rlErr.isRateLimit = true;
-            throw rlErr;
+
+        // Wait for rate limit before calling
+        await waitForRateLimit(model);
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
+        let retries = 0;
+        while (retries < 3) {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { temperature: 0.9, maxOutputTokens: 8192 }
+                })
+            });
+            if (res.status === 429) {
+                const retryAfter = parseInt(res.headers.get('Retry-After') || '30');
+                console.log(`[WorldForge] Gemini 429 — waiting ${retryAfter}s (retry ${retries + 1}/3)`);
+                await new Promise(r => setTimeout(r, retryAfter * 1000));
+                retries++;
+                continue;
+            }
+            if (!res.ok) {
+                const body = await res.text().catch(() => '');
+                throw new Error(`Gemini HTTP ${res.status}: ${body.slice(0, 200)}`);
+            }
+            const json = await res.json();
+            const text = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            return cleanJSON(text);
         }
-        if (!res.ok) {
-            const body = await res.text().catch(() => '');
-            throw new Error(`Gemini HTTP ${res.status}: ${body.slice(0, 200)}`);
-        }
-        const json = await res.json();
-        const text = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        return cleanJSON(text);
+        throw new Error('Gemini rate limit exceeded after 3 retries. Wait a minute and try again.');
     }
 
     // Ollama fallback
     if (process.env.NPC_LLM_URL) {
+        await waitForRateLimit('ollama');
         const model = process.env.NPC_LLM_MODEL || 'llama3';
-        const res   = await fetch(process.env.NPC_LLM_URL, {
+        const res = await fetch(process.env.NPC_LLM_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model, prompt, stream: false })
@@ -77,7 +134,7 @@ async function callAI(prompt) {
         return cleanJSON(String(json.response || json.text || ''));
     }
 
-    throw new Error('No AI provider configured. Set GEMINI_API_KEY or NPC_LLM_URL in .env');
+    throw new Error('No AI provider configured. Set GEMINI_API_KEY or NPC_LLM_URL in .env, or configure in AdminSauce Settings.');
 }
 
 // Strip markdown fences, extract JSON object or array
