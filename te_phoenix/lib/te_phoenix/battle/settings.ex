@@ -390,7 +390,14 @@ defmodule TePhoenix.Battle.Settings do
 
     # Reactions (auto-counter, auto-potion, opportunity attacks, baton pass)
     enable_reactions: false,
-    reactions_per_turn: 1
+    reactions_per_turn: 1,
+
+    # Turn delay (Grandia-style push-back on stagger)
+    enable_turn_delay: false,
+    stagger_turn_delay: 2,
+
+    # Rolling HP (Earthbound odometer)
+    enable_rolling_hp: false
   }
 
   @doc "Returns default settings map"

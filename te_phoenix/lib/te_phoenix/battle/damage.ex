@@ -272,7 +272,15 @@ defmodule TePhoenix.Battle.Damage do
               if settings[:enable_limb_targeting] and effective_limb and target.limb_hp != %{} do
                 resolve_limb_damage(target, damage, effective_limb, settings, crit, elements, result)
               else
-                target = Combatant.apply_damage(target, damage)
+                # Rolling HP (Earthbound odometer) — server applies
+                # damage immediately but tracks the rolling total for
+                # client-side HP ticker animation.
+                target =
+                  if settings[:enable_rolling_hp] do
+                    Systems.queue_rolling_damage(target, damage, settings)
+                  else
+                    Combatant.apply_damage(target, damage)
+                  end
                 {damage, target, nil, result}
               end
 
@@ -316,10 +324,19 @@ defmodule TePhoenix.Battle.Damage do
                 {target, result}
               end
 
-            # ── Stagger (FF7R) ──────────────────────────────────
+            # ── Stagger (FF7R) + turn delay on break ────────────
             {damage, target, result} =
               if settings[:enable_stagger_system] do
-                apply_stagger(target, damage, settings, result)
+                {d, t, r} = apply_stagger(target, damage, settings, result)
+                # Apply turn delay when a stagger break occurs (Grandia-style)
+                if t.broken and not target.broken and settings[:enable_turn_delay] do
+                  delay = settings[:stagger_turn_delay] || 2
+                  {new_queue, r} = Systems.apply_turn_delay(state.turn_queue, t, delay, r)
+                  state = %{state | turn_queue: new_queue}
+                  {d, t, r}
+                else
+                  {d, t, r}
+                end
               else
                 {damage, target, result}
               end
