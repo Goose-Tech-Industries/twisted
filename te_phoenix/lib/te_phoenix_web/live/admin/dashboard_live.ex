@@ -16,6 +16,8 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       auto_pilot: TePhoenix.Game.AutoPilot.enabled?(),
       admin_online: [],
       generated_content: nil,
+      ai_insights: [],
+      ai_insights_loading: false,
       # Live state context
       live_state: nil,
       # Anomaly detection
@@ -53,6 +55,16 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     msg = if is_binary(error), do: error, else: inspect(error)
     {:noreply, assign(socket, director_loading: false, director_error: "AI error: #{msg}")}
   end
+
+  def handle_info({:ai_insights_result, insights}, socket) do
+    {:noreply, assign(socket, ai_insights: insights, ai_insights_loading: false)}
+  end
+
+  def handle_info(:ai_insights_timeout, %{assigns: %{ai_insights_loading: true}} = socket) do
+    {:noreply, assign(socket, ai_insights_loading: false, ai_insights: [%{type: "error", icon: "⏱️", text: "Analysis timed out. Check your AI API key."}])}
+  end
+
+  def handle_info(:ai_insights_timeout, socket), do: {:noreply, socket}
 
   def handle_info(:narrative_timeout, %{assigns: %{narrative_loading: true}} = socket) do
     {:noreply, assign(socket, narrative_loading: false, narrative: "Narrative generation timed out. Check your AI API key in Settings → ai_api_key.")}
@@ -170,6 +182,15 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
   end
 
   defp execute_non_ai_action(action, title, actor, socket) do
+    # Weather opens a picker instead of executing immediately
+    if action == "weather" do
+      maps = case Repo.query("SELECT id, name FROM game_maps WHERE is_active=1 ORDER BY name") do
+        {:ok, %{rows: rows}} -> Enum.map(rows, fn [id, name] -> %{id: id, name: name} end)
+        _ -> [%{id: 1, name: "Default"}]
+      end
+      {:noreply, assign(socket, show_weather_picker: true, weather_maps: maps)}
+    else
+
     result = case action do
       "broadcast" ->
         msg = "📢 #{title}"
@@ -178,11 +199,6 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
         })
         TePhoenix.Game.AdminAudit.log("gm_broadcast", actor, nil, %{source: "director", message: msg})
         "Broadcast sent."
-
-      "weather" ->
-        # Open weather picker instead of random
-        send(self(), :open_weather_picker)
-        "Opening weather picker..."
 
       "double_xp" ->
         Repo.query("INSERT INTO system_settings (setting_key, setting_value) VALUES ('double_xp', '1') ON DUPLICATE KEY UPDATE setting_value='1'")
@@ -213,7 +229,7 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
           _ -> 1
         end
         try do
-          Repo.query("INSERT INTO game_npcs (name, map_id, x, y, hp, max_hp, atk, def, is_enemy, is_boss, created_at) VALUES ('Ancient Fomorian', ?, ?, ?, 2000, 2000, 50, 30, 1, 1, NOW())", [map_id, :rand.uniform(15), :rand.uniform(15)])
+          Repo.query("INSERT INTO game_npcs (name, map_id, x, y, base_hp, base_atk, base_def, is_enemy, is_boss, is_active) VALUES ('Ancient Fomorian', ?, ?, ?, 2000, 50, 30, 1, 1, 1)", [map_id, :rand.uniform(15), :rand.uniform(15)])
         rescue
           _ -> :ok
         end
@@ -283,6 +299,22 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     else
       {:noreply, put_flash(socket, :info, result)}
     end
+    end  # close weather if/else
+  end
+
+  def handle_event("run_ai_insights", _params, socket) do
+    socket = assign(socket, ai_insights_loading: true)
+    pid = self()
+    Task.start(fn ->
+      try do
+        insights = generate_ai_insights()
+        send(pid, {:ai_insights_result, insights})
+      rescue
+        e -> send(pid, {:ai_insights_result, [%{type: "error", icon: "❌", text: "Analysis failed: #{Exception.message(e)}"}]})
+      end
+    end)
+    Process.send_after(self(), :ai_insights_timeout, 30_000)
+    {:noreply, socket}
   end
 
   def handle_event("toggle_live_state", _params, socket) do
@@ -1041,6 +1073,176 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     TePhoenix.Game.AdminAudit.log("gm_broadcast", actor, nil, %{source: "director", message: message})
   end
 
+  defp insight_border("content_gap"), do: "border-red-800/30 bg-red-950/20"
+  defp insight_border("balance"), do: "border-purple-800/30 bg-purple-950/20"
+  defp insight_border("player"), do: "border-blue-800/30 bg-blue-950/20"
+  defp insight_border("economy"), do: "border-yellow-800/30 bg-yellow-950/20"
+  defp insight_border("error"), do: "border-red-800/50 bg-red-950/30"
+  defp insight_border(_), do: "border-zinc-800 bg-zinc-950/30"
+
+  defp insight_color("content_gap"), do: "text-red-400"
+  defp insight_color("balance"), do: "text-purple-400"
+  defp insight_color("player"), do: "text-blue-400"
+  defp insight_color("economy"), do: "text-yellow-400"
+  defp insight_color("error"), do: "text-red-400"
+  defp insight_color(_), do: "text-zinc-400"
+
+  defp generate_ai_insights do
+    insights = []
+
+    # Content Gap Analysis
+    gaps = compute_content_gaps()
+    insights = insights ++ Enum.map(gaps, fn gap ->
+      %{type: "content_gap", icon: "📋", text: gap}
+    end)
+
+    # Balance Analysis
+    balance = compute_balance_insights()
+    insights = insights ++ Enum.map(balance, fn b ->
+      %{type: "balance", icon: "⚖️", text: b}
+    end)
+
+    # Player Insights
+    player_insights = compute_player_insights()
+    insights = insights ++ Enum.map(player_insights, fn p ->
+      %{type: "player", icon: "👤", text: p}
+    end)
+
+    # Economy Forecast
+    economy = compute_economy_insights()
+    insights = insights ++ Enum.map(economy, fn e ->
+      %{type: "economy", icon: "💰", text: e}
+    end)
+
+    if insights == [], do: [%{type: "info", icon: "✅", text: "Everything looks healthy!"}], else: insights
+  end
+
+  defp compute_content_gaps do
+    gaps = []
+
+    # Maps with no NPCs
+    gaps = case Repo.query("SELECT m.name FROM game_maps m WHERE m.is_active=1 AND NOT EXISTS (SELECT 1 FROM game_npcs n WHERE n.map_id=m.id AND n.is_active=1) LIMIT 3") do
+      {:ok, %{rows: rows}} when rows != [] ->
+        names = Enum.map(rows, fn [n] -> n end) |> Enum.join(", ")
+        ["Maps with no NPCs: #{names}" | gaps]
+      _ -> gaps
+    end
+
+    # Maps with no spawn zones
+    gaps = case Repo.query("SELECT m.name FROM game_maps m WHERE m.is_active=1 AND NOT EXISTS (SELECT 1 FROM game_map_spawn_zones s WHERE s.map_id=m.id) LIMIT 3") do
+      {:ok, %{rows: rows}} when rows != [] ->
+        names = Enum.map(rows, fn [n] -> n end) |> Enum.join(", ")
+        ["Maps with no spawn zones: #{names}" | gaps]
+      _ -> gaps
+    end
+
+    # Skills with no damage formula
+    gaps = case Repo.query("SELECT COUNT(*) FROM game_skills WHERE effects IS NULL OR effects='' OR effects='{}'") do
+      {:ok, %{rows: [[c]]}} when not is_nil(c) ->
+        cv = safe_int(c)
+        if cv > 0, do: ["#{cv} skills have no effects configured" | gaps], else: gaps
+      _ -> gaps
+    end
+
+    gaps
+  rescue
+    _ -> []
+  end
+
+  defp compute_balance_insights do
+    insights = []
+
+    # Class distribution
+    insights = case Repo.query("SELECT c.name, COUNT(*) as cnt FROM characters ch JOIN game_classes c ON c.id=ch.class_id GROUP BY c.name ORDER BY cnt DESC LIMIT 5") do
+      {:ok, %{rows: rows}} when length(rows) >= 2 ->
+        [{top_name, top_count} | _] = Enum.map(rows, fn [n, c] -> {n, safe_int(c)} end)
+        {bot_name, bot_count} = List.last(Enum.map(rows, fn [n, c] -> {n, safe_int(c)} end))
+        if top_count > 0 and bot_count >= 0 do
+          ratio = if bot_count > 0, do: Float.round(top_count / bot_count, 1), else: "∞"
+          ["Class imbalance: #{top_name} (#{top_count}) vs #{bot_name} (#{bot_count}) — #{ratio}x ratio" | insights]
+        else
+          insights
+        end
+      _ -> insights
+    end
+
+    # Overpowered items
+    insights = case Repo.query("SELECT name, bonus_atk FROM game_items WHERE bonus_atk > 50 ORDER BY bonus_atk DESC LIMIT 3") do
+      {:ok, %{rows: rows}} when rows != [] ->
+        items = Enum.map(rows, fn [n, a] -> "#{n} (+#{safe_int(a)} ATK)" end) |> Enum.join(", ")
+        ["High-power items: #{items}" | insights]
+      _ -> insights
+    end
+
+    insights
+  rescue
+    _ -> []
+  end
+
+  defp compute_player_insights do
+    insights = []
+
+    # Longest active session
+    insights = case Repo.query("SELECT username, TIMESTAMPDIFF(MINUTE, last_login, NOW()) as mins FROM users WHERE last_login > NOW() - INTERVAL 24 HOUR ORDER BY mins ASC LIMIT 1") do
+      {:ok, %{rows: [[name, mins]]}} when not is_nil(mins) ->
+        m = safe_int(mins)
+        if m < 480, do: ["#{name} has been active for #{m} minutes today" | insights], else: insights
+      _ -> insights
+    end
+
+    # Most deaths
+    insights = case Repo.query("SELECT name, death_count FROM characters WHERE death_count > 5 ORDER BY death_count DESC LIMIT 1") do
+      {:ok, %{rows: [[name, deaths]]}} ->
+        ["#{name} has died #{safe_int(deaths)} times — might need easier content or better gear" | insights]
+      _ -> insights
+    end
+
+    # Highest level
+    insights = case Repo.query("SELECT name, level FROM characters ORDER BY level DESC LIMIT 1") do
+      {:ok, %{rows: [[name, level]]}} ->
+        ["Top character: #{name} at level #{safe_int(level)}" | insights]
+      _ -> insights
+    end
+
+    insights
+  rescue
+    _ -> []
+  end
+
+  defp compute_economy_insights do
+    insights = []
+
+    # Gold distribution
+    insights = case Repo.query("SELECT AVG(currency), MAX(currency), MIN(currency) FROM users WHERE is_banned=0 AND currency > 0") do
+      {:ok, %{rows: [[avg, max_g, min_g]]}} when not is_nil(avg) ->
+        avg_v = safe_int(avg)
+        max_v = safe_int(max_g)
+        ratio = if avg_v > 0, do: Float.round(max_v / avg_v, 1), else: 0
+        if ratio > 10 do
+          ["Gold inequality: richest has #{max_v}g (#{ratio}x the average #{avg_v}g). Consider a gold sink." | insights]
+        else
+          ["Gold distribution: avg #{avg_v}g, max #{max_v}g, min #{safe_int(min_g)}g — looks healthy" | insights]
+        end
+      _ -> insights
+    end
+
+    # Items in circulation
+    insights = case Repo.query("SELECT COUNT(*) FROM game_items") do
+      {:ok, %{rows: [[c]]}} ->
+        count = safe_int(c)
+        if count < 10 do
+          ["Only #{count} items in the game. Players need more gear options." | insights]
+        else
+          insights
+        end
+      _ -> insights
+    end
+
+    insights
+  rescue
+    _ -> []
+  end
+
   defp ai_active?(provider) do
     provider not in [nil, "", "disabled", "none"]
   end
@@ -1788,6 +1990,40 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
               c.status == :missing && "text-red-400"
             ]}>{c.count}</span>
           </div>
+        </div>
+      </div>
+
+      <%!-- AI Insights Panel --%>
+      <div class="bg-zinc-900 border border-amber-800/30 rounded-xl p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-bold text-amber-400 flex items-center gap-2">
+            <span>🧠</span> AI Insights
+          </h3>
+          <button phx-click="run_ai_insights" disabled={@ai_insights_loading}
+            class={["px-3 py-1.5 rounded text-xs font-medium",
+              @ai_insights_loading && "bg-zinc-700 text-zinc-500 cursor-wait",
+              !@ai_insights_loading && "bg-amber-600 hover:bg-amber-500 text-white"]}>
+            {if @ai_insights_loading, do: "Analyzing...", else: "Run Analysis"}
+          </button>
+        </div>
+
+        <div :if={@ai_insights_loading} class="flex items-center gap-2 py-4 justify-center">
+          <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+          <span class="text-xs text-zinc-400">AI is analyzing your game data...</span>
+        </div>
+
+        <div :if={@ai_insights != [] and not @ai_insights_loading} class="grid md:grid-cols-2 gap-3">
+          <div :for={insight <- @ai_insights} class={"p-3 rounded border #{insight_border(insight.type)}"}>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-sm">{insight.icon}</span>
+              <span class={"text-xs font-bold uppercase #{insight_color(insight.type)}"}>{insight.type}</span>
+            </div>
+            <p class="text-xs text-zinc-300">{insight.text}</p>
+          </div>
+        </div>
+
+        <div :if={@ai_insights == [] and not @ai_insights_loading} class="text-xs text-zinc-600 py-4 text-center">
+          Click <span class="text-amber-400">Run Analysis</span> for AI-powered content gap analysis, balance report, player insights, and economy forecast
         </div>
       </div>
 

@@ -118,7 +118,7 @@ defmodule TePhoenix.Waves.Registry do
       on_wave_clear_json LONGTEXT,
       on_sequence_complete_json LONGTEXT,
       settings_json LONGTEXT,
-      loop TINYINT(1) DEFAULT 0,
+      `loop` TINYINT(1) DEFAULT 0,
       enabled TINYINT(1) DEFAULT 1,
       updated_at DATETIME NOT NULL
     )
@@ -130,7 +130,7 @@ defmodule TePhoenix.Waves.Registry do
   defp load_all do
     :ets.delete_all_objects(@ets)
 
-    case Repo.query("SELECT `key`, name, description, map_id, rounds_json, scaling_json, on_wave_start_json, on_wave_clear_json, on_sequence_complete_json, settings_json, loop, enabled FROM #{@table}") do
+    case Repo.query("SELECT `key`, name, description, map_id, rounds_json, scaling_json, on_wave_start_json, on_wave_clear_json, on_sequence_complete_json, settings_json, `loop`, enabled FROM #{@table}") do
       {:ok, %{rows: rows}} ->
         for row <- rows do
           d = row_to_def(row)
@@ -167,14 +167,14 @@ defmodule TePhoenix.Waves.Registry do
       INSERT INTO #{@table}
         (`key`, name, description, map_id, rounds_json, scaling_json,
          on_wave_start_json, on_wave_clear_json, on_sequence_complete_json,
-         settings_json, loop, enabled, updated_at)
+         settings_json, `loop`, enabled, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
       ON DUPLICATE KEY UPDATE
         name=VALUES(name), description=VALUES(description), map_id=VALUES(map_id),
         rounds_json=VALUES(rounds_json), scaling_json=VALUES(scaling_json),
         on_wave_start_json=VALUES(on_wave_start_json), on_wave_clear_json=VALUES(on_wave_clear_json),
         on_sequence_complete_json=VALUES(on_sequence_complete_json),
-        settings_json=VALUES(settings_json), loop=VALUES(loop),
+        settings_json=VALUES(settings_json), `loop`=VALUES(`loop`),
         enabled=VALUES(enabled), updated_at=NOW()
       """,
       [

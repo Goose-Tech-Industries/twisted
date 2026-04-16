@@ -207,14 +207,14 @@ defmodule TePhoenix.AI.ContentGenerator do
   defp publish_npc(data) do
     map_id = data["map_id"] || 1
     Repo.query(
-      "INSERT INTO game_npcs (name, map_id, x, y, hp, max_hp, atk, `def`, mo, md, speed, is_enemy, is_boss, icon, description, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())",
+      "INSERT INTO game_npcs (name, map_id, x, y, base_hp, base_atk, base_def, base_mo, base_md, base_speed, is_enemy, is_boss, icon, description, is_active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
       [data["name"], map_id, :rand.uniform(15), :rand.uniform(15),
-       data["hp"] || 100, data["hp"] || 100, data["atk"] || 10, data["def"] || 5,
+       data["hp"] || 100, data["atk"] || 10, data["def"] || 5,
        data["mo"] || 5, data["md"] || 5, data["speed"] || 10,
        data["is_enemy"] || 0, data["is_boss"] || 0,
        data["icon"] || "👤", data["description"] || ""]
     )
-    {:ok, "#{data["name"]} created!"}
+    {:ok, "#{data["name"]} created on map #{map_id}!"}
   rescue
     e -> {:error, Exception.message(e)}
   end
