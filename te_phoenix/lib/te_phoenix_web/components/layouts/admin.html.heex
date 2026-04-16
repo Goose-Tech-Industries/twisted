@@ -18,6 +18,8 @@
       <.nav_link href={~p"/sauce/world"} icon="map" label="Maps, NPCs & Regions" active={@active_tab == :world} />
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:inventory)} href={~p"/sauce/content"} icon="box" label="Items, Shops & Loot" active={@active_tab == :content} />
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:objectives)} href={~p"/sauce/world/objectives"} icon="target" label="Objectives" active={@active_tab == :objectives} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:dialogue)} href={~p"/sauce/dialogue"} icon="chat" label="Dialogue Trees" active={@active_tab == :dialogue} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:quests)} href={~p"/sauce/quests"} icon="scroll" label="Quest Designer" active={@active_tab == :quests} />
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:waves)} href={~p"/sauce/world/waves"} icon="zap" label="Wave Sequences" active={@active_tab == :waves} />
 
       <div class="px-4 py-1.5 mt-1"><span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600/50">Characters & Combat</span></div>
@@ -34,7 +36,7 @@
       <div class="px-4 py-1.5 mt-1"><span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600/50">Systems</span></div>
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:economy)} href={~p"/sauce/economy"} icon="chart" label="Economy" active={@active_tab == :economy} />
       <.nav_link href={~p"/sauce/config"} icon="zap" label="Battle & Config" active={@active_tab == :config} />
-      <.nav_link href={~p"/sauce/campaigns"} icon="scroll" label="Rulesets & Scheduler" active={@active_tab == :campaigns} />
+      <.nav_link href={~p"/sauce/campaigns"} icon="scroll" label="Campaigns & Sagas" active={@active_tab == :campaign} />
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:social)} href={~p"/sauce/social"} icon="shield" label="Moderation & Chat" active={@active_tab == :social} />
 
       <div class="px-4 py-1.5 mt-1"><span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600/50">Admin</span></div>

@@ -4,7 +4,7 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
   alias TePhoenix.Repo
   alias TePhoenix.Game.SagaEngine
 
-  @tabs ~w(rulesets campaigns scheduler sagas action_windows modifiers dm_campaigns)
+  @tabs ~w(rulesets campaigns scheduler sagas action_windows modifiers)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -295,8 +295,8 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
       "campaigns" -> load_campaigns(socket)
       "scheduler" -> load_scheduler(socket)
       "sagas" -> load_sagas(socket)
-      tab when tab in ~w(action_windows modifiers dm_campaigns) ->
-        table = %{"action_windows" => "game_action_windows", "modifiers" => "game_ruleset_modifiers", "dm_campaigns" => "game_dm_campaigns"}[tab]
+      tab when tab in ~w(action_windows modifiers) ->
+        table = %{"action_windows" => "game_action_windows", "modifiers" => "game_ruleset_modifiers"}[tab]
         import TePhoenixWeb.Admin.CrudHelpers
         socket |> assign(current_table: table) |> load_tab_data(table, per_page: 30)
       _ -> socket
