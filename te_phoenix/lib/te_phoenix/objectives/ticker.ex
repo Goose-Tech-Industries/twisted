@@ -97,6 +97,7 @@ defmodule TePhoenix.Objectives.Ticker do
       "hold" -> tick_hold(inst, def_)
       "construct" -> tick_hold(inst, def_)
       "survive" -> tick_survive(inst, def_)
+      "harvest" -> tick_harvest(inst, def_)
       _ -> :ok
     end
   end
@@ -130,6 +131,10 @@ defmodule TePhoenix.Objectives.Ticker do
 
   defp tick_survive(inst, _def_) do
     Objectives.advance(inst.id, 1)
+  end
+
+  defp tick_harvest(inst, def_) do
+    TePhoenix.Objectives.Resources.tick_harvest(inst, def_)
   end
 
   defp broadcast(map_id, message) do

@@ -9,7 +9,7 @@ defmodule TePhoenix.Battle.Combat do
   """
 
   require Logger
-  alias TePhoenix.Battle.{Combatant, Damage, Systems, Narrative, Loot}
+  alias TePhoenix.Battle.{Combatant, Damage, Systems, Narrative, Loot, Projectiles}
   alias TePhoenix.Repo
 
   import Ecto.Query
@@ -549,7 +549,15 @@ defmodule TePhoenix.Battle.Combat do
       }
       {state, result}
     else
-      {state, result} = Damage.resolve_skill(state, actor, target, skill, effects, result, opts)
+      # If skill has a projectile config, spawn a projectile instead of
+      # resolving damage instantly. The projectile travels, then resolves
+      # the damage pipeline on impact.
+      {state, result} =
+        if Map.has_key?(effects, "projectile") do
+          Projectiles.spawn_projectile(state, actor, target, effects["projectile"], skill.name)
+        else
+          Damage.resolve_skill(state, actor, target, skill, effects, result, opts)
+        end
 
       # Apply cooldown after the skill fires. The cooldown_turns value
       # lives on the skill row (DB-driven, editable from AdminSauce).

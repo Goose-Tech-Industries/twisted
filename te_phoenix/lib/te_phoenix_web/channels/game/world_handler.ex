@@ -401,6 +401,32 @@ defmodule TePhoenixWeb.Game.WorldHandler do
     {:noreply, socket}
   end
 
+  # ── Resource queries ─────────────────────────────────────────────
+
+  def handle("resource_get", %{"resource_type" => rt} = payload, socket) do
+    p = PlayerRegistry.get(socket.assigns[:char_id])
+
+    if p do
+      team_id = payload["team_id"] || 1
+      amount = TePhoenix.Objectives.Resources.get_pool(p.map_id, team_id, rt)
+      push(socket, "resource_info", %{resource: rt, amount: amount, team_id: team_id})
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle("resource_all", _payload, socket) do
+    p = PlayerRegistry.get(socket.assigns[:char_id])
+
+    if p do
+      team_id = 1
+      pools = TePhoenix.Objectives.Resources.get_all_pools(p.map_id, team_id)
+      push(socket, "resource_all", %{resources: pools, team_id: team_id})
+    end
+
+    {:noreply, socket}
+  end
+
   # ── Matchmaking controls ─────────────────────────────────────────
 
   def handle("queue_join", %{"mode" => mode}, socket) do

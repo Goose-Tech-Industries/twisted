@@ -14,7 +14,7 @@ defmodule TePhoenix.Battle.State do
   use GenServer
   require Logger
 
-  alias TePhoenix.Battle.{Combatant, Settings, StatusEffects, Triggers}
+  alias TePhoenix.Battle.{Combatant, Settings, StatusEffects, Triggers, Projectiles}
 
   # ── State struct ────────────────────────────────────────────────
 
@@ -63,7 +63,10 @@ defmodule TePhoenix.Battle.State do
     # Pending events queued by data-driven trigger rules (interrogation
     # prompts, post-ko dialogue, quest hooks). Channels drain this list
     # via get_pending_events/1 + clear_pending_events/1.
-    pending_events: []
+    pending_events: [],
+
+    # Active projectiles in flight (skillshots, ranged attacks, AoE)
+    active_projectiles: []
   ]
 
   # ── Object presets (BG3-style destructibles) ────────────────────
@@ -529,7 +532,11 @@ defmodule TePhoenix.Battle.State do
       state = merge_result_into_log(state, result)
       ctx = %{victim: c, attacker: nil}
       {state, result} = Triggers.fire("turn_end", state, ctx, %{log: [], actions: []})
-      merge_result_into_log(state, result)
+      state = merge_result_into_log(state, result)
+
+      # Advance projectiles in flight
+      {state, proj_result} = Projectiles.tick_projectiles(state)
+      merge_result_into_log(state, proj_result)
     else
       _ -> state
     end

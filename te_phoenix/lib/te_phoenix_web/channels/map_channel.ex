@@ -216,6 +216,13 @@ defmodule TePhoenixWeb.MapChannel do
     {:noreply, socket}
   end
 
+  # ── Resource fan-out ─────────────────────────────────────────────
+
+  def handle_info({:resource_update, team_id, resource_type, amount}, socket) do
+    push(socket, "resource_update", %{team_id: team_id, resource: resource_type, amount: amount})
+    {:noreply, socket}
+  end
+
   # ── Wave fan-out ────────────────────────────────────────────────
 
   def handle_info({:wave_event, event, payload}, socket) do

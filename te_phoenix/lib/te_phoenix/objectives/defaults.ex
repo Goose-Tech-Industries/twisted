@@ -132,6 +132,70 @@ defmodule TePhoenix.Objectives.Defaults do
         }
       },
       %{
+        key: "gold_mine",
+        name: "Gold Mine",
+        icon: "💰",
+        type: "harvest",
+        progress_model: "counter",
+        target_value: 500,
+        description: "Mineable gold deposit. Workers gather gold into team pool.",
+        on_complete: %{"broadcast" => "resource_depleted"},
+        settings: %{
+          "resource_type" => "gold",
+          "yield_per_tick" => 5,
+          "max_gatherers" => 3,
+          "depleted_respawn_seconds" => 120
+        }
+      },
+      %{
+        key: "lumber_patch",
+        name: "Lumber",
+        icon: "🪵",
+        type: "harvest",
+        progress_model: "counter",
+        target_value: 300,
+        description: "Harvestable trees. Workers chop wood into team pool.",
+        on_complete: %{"broadcast" => "resource_depleted"},
+        settings: %{
+          "resource_type" => "wood",
+          "yield_per_tick" => 3,
+          "max_gatherers" => 2,
+          "depleted_respawn_seconds" => 180
+        }
+      },
+      %{
+        key: "crystal_vein",
+        name: "Crystal Vein",
+        icon: "💎",
+        type: "harvest",
+        progress_model: "counter",
+        target_value: 200,
+        description: "Rare crystal deposit. Slow but valuable.",
+        on_complete: %{"broadcast" => "resource_depleted"},
+        settings: %{
+          "resource_type" => "crystal",
+          "yield_per_tick" => 1,
+          "max_gatherers" => 2,
+          "depleted_respawn_seconds" => 300
+        }
+      },
+      %{
+        key: "gas_geyser",
+        name: "Vespene Geyser",
+        icon: "♨️",
+        type: "harvest",
+        progress_model: "counter",
+        target_value: 1000,
+        team_owned: true,
+        description: "Gas resource. Requires extractor building to harvest.",
+        settings: %{
+          "resource_type" => "gas",
+          "yield_per_tick" => 4,
+          "max_gatherers" => 3,
+          "requires_building" => "extractor"
+        }
+      },
+      %{
         key: "td_waypoint",
         name: "Waypoint",
         icon: "📍",
