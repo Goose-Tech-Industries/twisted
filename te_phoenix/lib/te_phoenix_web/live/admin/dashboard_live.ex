@@ -259,8 +259,9 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
 
   defp load_stats(socket) do
     online_players = PlayerRegistry.all()
-    # Include admins currently in AdminSauce
-    admin_online = TePhoenix.Game.AdminPresence.all()
+    # Include admins currently in AdminSauce — enrich with chat_color from DB
+    admin_online_raw = TePhoenix.Game.AdminPresence.all()
+    admin_online = enrich_admin_presence(admin_online_raw)
     online_count = length(online_players) + length(admin_online)
 
     total_users = query_count("SELECT COUNT(*) FROM users")
@@ -861,6 +862,27 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     end
   end
 
+  defp enrich_admin_presence(admins) do
+    ids = Enum.map(admins, & &1[:user_id]) |> Enum.reject(&is_nil/1)
+    if ids == [] do
+      admins
+    else
+      id_str = Enum.join(ids, ",")
+      user_data = case Repo.query("SELECT id, username, chat_color, role FROM users WHERE id IN (#{id_str})") do
+        {:ok, %{rows: rows}} -> Map.new(rows, fn [id, name, color, role] -> {id, %{username: name, chat_color: color, role: role}} end)
+        _ -> %{}
+      end
+
+      Enum.map(admins, fn a ->
+        enriched = Map.get(user_data, a[:user_id], %{})
+        a
+        |> Map.put(:username, enriched[:username] || a[:username])
+        |> Map.put(:chat_color, enriched[:chat_color])
+        |> Map.put(:role, enriched[:role] || a[:role])
+      end)
+    end
+  end
+
   defp broadcast_all(message, style, actor) do
     TePhoenixWeb.Endpoint.broadcast!("social:lobby", "system_broadcast", %{
       message: message, style: style, from: "DIRECTOR",
@@ -978,6 +1000,11 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
           </div>
           <div class="text-2xl font-bold font-mono text-green-400">{@online_count}</div>
           <div class="text-[10px] text-zinc-500 uppercase tracking-wide mt-0.5">Online Now</div>
+          <div :if={@admin_online != []} class="mt-1.5 space-y-0.5">
+            <div :for={a <- @admin_online} class="text-[10px]">
+              <.styled_name name={a[:username] || "?"} role={to_string(a[:role] || "")} chat_color={a[:chat_color]} class="text-[10px]" />
+            </div>
+          </div>
         </div>
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-center">
           <div class="text-2xl mb-1.5">&#x1F465;</div>
@@ -1293,7 +1320,7 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
                 <div :for={a <- @admin_online} class="flex items-center justify-between py-0.5">
                   <div class="flex items-center gap-1.5">
                     <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shrink-0" />
-                    <span class={role_name_color(a[:role])}>{a[:username] || "Staff ##{a[:user_id]}"}</span>
+                    <.styled_name name={a[:username] || "Staff ##{a[:user_id]}"} role={to_string(a[:role] || "STAFF")} chat_color={a[:chat_color]} class="text-xs font-medium" />
                     <span class={"text-[9px] px-1 py-0 rounded border #{role_badge_classes(a[:role])}"}>{a[:role] || "STAFF"}</span>
                   </div>
                   <span class="text-zinc-600 text-[10px]">📄 {a[:page] || "Dashboard"}</span>

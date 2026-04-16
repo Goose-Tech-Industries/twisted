@@ -256,14 +256,61 @@ defmodule TePhoenix.Game.GameDirector do
 
     # Economy suggestion
     suggestions = if state.avg_gold > 5000 do
-      [%{title: "💰 Gold Sink Event", description: "Average gold is #{state.avg_gold} — consider a rare item auction or expensive vendor event",
+      [%{title: "💰 Gold Sink Event", description: "Average gold is #{state.avg_gold} — create a rare item auction or expensive vendor event",
         action: "gold_drop", priority: 3} | suggestions]
     else
       suggestions
     end
 
-    suggestions |> Enum.sort_by(& &1.priority, :desc) |> Enum.take(5)
+    # Content health checks (always useful, even with 0 players)
+    suggestions = add_content_suggestions(suggestions)
+
+    # Time-based suggestions
+    suggestions = case state.hour do
+      h when h >= 18 and h <= 22 ->
+        [%{title: "🌙 Peak Hours", description: "It's prime time (#{h}:00 UTC) — great time for a boss spawn or double XP event",
+          action: "double_xp", priority: 3} | suggestions]
+      h when h >= 2 and h <= 6 ->
+        [%{title: "🌑 Late Night", description: "Low traffic hours — good time to do maintenance or set up tomorrow's content",
+          action: "none", priority: 1} | suggestions]
+      _ -> suggestions
+    end
+
+    # Weather variety
+    suggestions = [%{title: "🌦️ Change Weather", description: "Shake things up — change the weather across all maps for atmosphere",
+      action: "weather", priority: 2} | suggestions]
+
+    # Raid suggestion (always available)
+    suggestions = [%{title: "🏰 Start a Raid", description: "Launch a horde survival wave sequence — great for engagement and testing combat",
+      action: "raid", priority: 2} | suggestions]
+
+    suggestions |> Enum.sort_by(& &1.priority, :desc) |> Enum.take(8)
   end
+
+  defp add_content_suggestions(suggestions) do
+    checks = [
+      {"game_npcs WHERE is_enemy=1", 0, %{title: "⚠️ No Enemies", description: "You have no enemy NPCs! Players can't battle. Create some enemies first.", action: "none", priority: 5}},
+      {"game_skills", 0, %{title: "⚠️ No Skills", description: "No skills defined yet. Characters need abilities to fight.", action: "none", priority: 5}},
+      {"game_items", 0, %{title: "⚠️ No Items", description: "No items in the game. Add weapons, armor, and consumables.", action: "none", priority: 4}},
+      {"game_quest_defs", 0, %{title: "📝 No Quests", description: "No quests designed. Create some to give players goals.", action: "none", priority: 3}},
+      {"game_maps WHERE is_active=1", 1, %{title: "🗺️ Only 1 Map", description: "Consider creating more maps to give players areas to explore.", action: "none", priority: 2}}
+    ]
+
+    Enum.reduce(checks, suggestions, fn {table, threshold, suggestion}, acc ->
+      count = case TePhoenix.Repo.query("SELECT COUNT(*) FROM #{table}") do
+        {:ok, %{rows: [[c]]}} -> safe_count(c)
+        _ -> 999
+      end
+      if count <= threshold, do: [suggestion | acc], else: acc
+    end)
+  rescue
+    _ -> suggestions
+  end
+
+  defp safe_count(nil), do: 0
+  defp safe_count(c) when is_integer(c), do: c
+  defp safe_count(%Decimal{} = d), do: d |> Decimal.round(0) |> Decimal.to_integer()
+  defp safe_count(_), do: 0
 
   defp find_level_clusters(levels) when levels == [], do: []
   defp find_level_clusters(levels) do
