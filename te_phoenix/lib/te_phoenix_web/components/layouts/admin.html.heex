@@ -25,6 +25,7 @@
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:combat)} href={~p"/sauce/combat/statuses"} icon="flame" label="Status Effects" active={@active_tab == :combat_statuses} />
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:combat)} href={~p"/sauce/combat/rules"} icon="scale" label="Battle Rules" active={@active_tab == :combat_rules} />
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:combat)} href={~p"/sauce/combat/bosses"} icon="flame" label="Boss Phases" active={@active_tab == :bosses} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:combat)} href={~p"/sauce/combat/surfaces"} icon="droplet" label="Surfaces" active={@active_tab == :surfaces} />
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:matchmaking)} href={~p"/sauce/matches"} icon="users" label="Match Modes" active={@active_tab == :matches} />
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:achievements)} href={~p"/sauce/gameplay"} icon="trophy" label="Arenas & Achievements" active={@active_tab == :gameplay} />
       <.nav_link :if={TePhoenix.Capabilities.enabled?(:scripting)} href={~p"/sauce/scripts"} icon="scroll" label="Visual Scripts" active={@active_tab == :scripts} />

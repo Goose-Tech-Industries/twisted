@@ -12,7 +12,7 @@ defmodule TePhoenix.Battle.Damage do
     Weapon triangle → Passives → Elemental reactions → Post-damage effects
   """
 
-  alias TePhoenix.Battle.{Combatant, State, Formula, StatusEffects, Triggers, Systems, BossPhases, Respawn, Tactics, Reactions}
+  alias TePhoenix.Battle.{Combatant, State, Formula, StatusEffects, Triggers, Systems, BossPhases, Respawn, Tactics, Reactions, ChargeMechanics}
 
   @doc """
   Resolve damage from a command or direct damage effect.
@@ -381,6 +381,15 @@ defmodule TePhoenix.Battle.Damage do
               |> Map.put(target.char_id, target)
             }
 
+            # ── Charge interrupt (stun/limb loss cancels charge) ──
+            target = Map.get(state.combatants, target.char_id, target)
+            {target, charge_result} = ChargeMechanics.check_charge_interrupt(target, :damage_taken, %{elements: elements, crit: crit})
+            state = put_in(state.combatants[target.char_id], target)
+            result = %{result | log: charge_result.log ++ result.log, actions: charge_result.actions ++ result.actions}
+
+            # ── Brace damage reduction (charging + bracing) ──────
+            # Already applied earlier in pipeline if target.bracing is set
+
             # ── Defender reactions (counter, reflect, evasion) ────
             target_for_react = Map.get(state.combatants, target.char_id, target)
             react_ctx = %{attacker: actor, victim: target_for_react, damage: damage, damage_type: Map.get(effects, "type", "physical"), element: List.first(elements), range: Map.get(effects, "range", 1)}
@@ -479,28 +488,39 @@ defmodule TePhoenix.Battle.Damage do
   # ── Active defense ──────────────────────────────────────────────
 
   defp resolve_active_defense(state, actor, target, damage, _action_name, settings, result, extra_dodge_bonus, dodge_ceiling) do
-    # Human uses the preference set via battle_channel "set_defense".
-    # AI auto-picks by tactics. If no preference, fall back to block so
-    # the target still gets SOME defense instead of eating the full hit.
-    defense_choice =
-      cond do
-        target.is_ai -> ai_pick_defense(target)
-        target.default_defense in ["dodge", "block", "counter"] -> target.default_defense
-        true -> "block"
-      end
+    # Brace: if the target is charging and chooses to brace, halve damage
+    # and keep the charge going instead of using a normal defense.
+    if ChargeMechanics.bracing?(target) do
+      {damage, target, result} = ChargeMechanics.apply_brace_reduction(target, damage, result)
+      {damage, target, result, false}
+    else
+      defense_choice =
+        cond do
+          target.is_ai -> ai_pick_defense(target)
+          target.default_defense in ["dodge", "block", "counter", "brace"] -> target.default_defense
+          true -> "block"
+        end
 
-    case defense_choice do
-      "dodge" ->
-        resolve_dodge(state, actor, target, damage, settings, result, extra_dodge_bonus, dodge_ceiling)
-
-      "block" ->
-        resolve_block(state, actor, target, damage, settings, result)
-
-      "counter" ->
-        resolve_counter(state, actor, target, damage, settings, result)
-
-      _ ->
+      # If target is charging and picks brace, handle it
+      if defense_choice == "brace" and ChargeMechanics.can_brace?(target) do
+        target = ChargeMechanics.apply_brace(target)
+        {damage, target, result} = ChargeMechanics.apply_brace_reduction(target, damage, result)
         {damage, target, result, false}
+      else
+        case defense_choice do
+          "dodge" ->
+            resolve_dodge(state, actor, target, damage, settings, result, extra_dodge_bonus, dodge_ceiling)
+
+          "block" ->
+            resolve_block(state, actor, target, damage, settings, result)
+
+          "counter" ->
+            resolve_counter(state, actor, target, damage, settings, result)
+
+          _ ->
+            {damage, target, result, false}
+        end
+      end
     end
   end
 
