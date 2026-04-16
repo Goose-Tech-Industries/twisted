@@ -132,6 +132,37 @@ defmodule TePhoenixWeb.Components.RuleBuilder do
     %{key: "script_id", label: "Custom script ID", type: :number}
   ]
 
+  @wave_scaling_keys [
+    %{key: "hp_mult_per_wave", label: "HP multiplier per wave", type: :number, step: 0.05},
+    %{key: "atk_mult_per_wave", label: "ATK multiplier per wave", type: :number, step: 0.05},
+    %{key: "xp_mult_per_wave", label: "XP multiplier per wave", type: :number, step: 0.05},
+    %{key: "count_add_per_loop", label: "Extra enemies per loop", type: :number}
+  ]
+
+  @wave_settings_keys [
+    %{key: "auto_start", label: "Auto-start on match begin", type: :bool},
+    %{key: "clear_condition", label: "Wave clear condition", type: :select, options: ["all_dead", "timer"]},
+    %{key: "wave_interval_seconds", label: "Time between waves (seconds)", type: :number}
+  ]
+
+  @objective_settings_keys [
+    %{key: "max_interactors", label: "Max simultaneous interactors", type: :number},
+    %{key: "skill_check_interval", label: "Skill check interval (seconds)", type: :number},
+    %{key: "skill_check_window", label: "Skill check window (seconds)", type: :number, step: 0.1},
+    %{key: "regress_on_cancel", label: "Progress regresses when nobody interacting", type: :bool},
+    %{key: "regress_rate", label: "Regression rate per second", type: :number, step: 0.1},
+    %{key: "capture_radius", label: "Capture radius (tiles)", type: :number},
+    %{key: "contest_pauses", label: "Contested = progress pauses", type: :bool},
+    %{key: "resource_type", label: "Resource type", type: :text, placeholder: "gold"},
+    %{key: "yield_per_tick", label: "Yield per tick", type: :number},
+    %{key: "depleted_respawn_seconds", label: "Respawn after depletion (seconds)", type: :number},
+    %{key: "requires_building", label: "Requires building key", type: :text},
+    %{key: "build_cost_gold", label: "Build cost (gold)", type: :number},
+    %{key: "attack_range", label: "Attack range (tiles)", type: :number},
+    %{key: "attack_damage", label: "Attack damage", type: :number},
+    %{key: "attack_speed_ms", label: "Attack speed (ms)", type: :number}
+  ]
+
   def schema_keys(:status_effects), do: @status_effect_keys
   def schema_keys(:status_tick), do: @tick_keys
   def schema_keys(:battle_rule_condition), do: @condition_keys
@@ -141,6 +172,9 @@ defmodule TePhoenixWeb.Components.RuleBuilder do
   def schema_keys(:wave_spawn), do: @spawn_keys
   def schema_keys(:match_win_condition), do: @win_condition_keys
   def schema_keys(:match_rewards), do: @reward_keys
+  def schema_keys(:wave_scaling), do: @wave_scaling_keys
+  def schema_keys(:wave_settings), do: @wave_settings_keys
+  def schema_keys(:objective_settings), do: @objective_settings_keys
   def schema_keys(_), do: []
 
   @impl true
@@ -338,5 +372,8 @@ defmodule TePhoenixWeb.Components.RuleBuilder do
   defp schema_label(:wave_spawn), do: "Spawn Config"
   defp schema_label(:match_win_condition), do: "Win Condition"
   defp schema_label(:match_rewards), do: "Rewards"
+  defp schema_label(:wave_scaling), do: "Wave Scaling"
+  defp schema_label(:wave_settings), do: "Wave Settings"
+  defp schema_label(:objective_settings), do: "Objective Settings"
   defp schema_label(_), do: "Configuration"
 end

@@ -34,7 +34,7 @@ defmodule TePhoenixWeb.Admin.SmartFields do
     "reacts_with_json" => :surface_reaction,
     "rewards_json" => :match_rewards,
     "win_conditions_json" => :match_win_condition,
-    "settings_json" => nil,
+    "settings_json" => :objective_settings,
     "heal_status" => :battle_rule_effect,
     "battlemod" => :battle_rule_effect,
     "inventorymod" => :objective_callback,
@@ -57,7 +57,9 @@ defmodule TePhoenixWeb.Admin.SmartFields do
     "alignment" => ~w(lawful_good neutral_good chaotic_good lawful_neutral true_neutral chaotic_neutral lawful_evil neutral_evil chaotic_evil),
     "difficulty" => ~w(easy normal hard nightmare),
     "element" => ~w(fire ice water lightning poison dark holy wind earth void),
-    "trigger_event" => ~w(damage_taken attack_landed limb_broken ko death turn_start turn_end crit_scored equip_item unequip_item item_used location_enter level_up battle_start battle_end boss_phase)
+    "trigger_event" => ~w(damage_taken attack_landed limb_broken ko death turn_start turn_end crit_scored equip_item unequip_item item_used location_enter level_up battle_start battle_end boss_phase),
+    "is_boss" => ~w(0 1),
+    "is_enemy" => ~w(0 1)
   }
 
   @fk_tables %{

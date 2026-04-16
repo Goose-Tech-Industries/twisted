@@ -103,6 +103,7 @@ defmodule TePhoenixWeb.Admin.ObjectivesLive do
               class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"><%= @editing["description"] %></textarea>
           </label>
 
+          <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="obj_settings" field_name="settings_json" schema={:objective_settings} label="Objective Settings" value={@editing["settings_json"]} />
           <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="obj_progress" field_name="on_progress_json" schema={:objective_callback} label="On Progress" value={@editing["on_progress_json"]} />
           <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="obj_complete" field_name="on_complete_json" schema={:objective_callback} label="On Complete" value={@editing["on_complete_json"]} />
           <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="obj_fail" field_name="on_fail_json" schema={:objective_callback} label="On Fail" value={@editing["on_fail_json"]} />

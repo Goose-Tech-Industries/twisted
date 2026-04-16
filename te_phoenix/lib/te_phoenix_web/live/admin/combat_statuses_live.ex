@@ -31,7 +31,9 @@ defmodule TePhoenixWeb.Admin.CombatStatusesLive do
      |> assign(:editing, nil)
      |> assign(:flash_msg, nil)
      |> assign(:stacking_modes, @stacking_modes)
-     |> assign(:categories, @categories)}
+     |> assign(:categories, @categories)
+     |> assign(:cure_tag_options, ~w(bleed poison burn freeze stun sleep silence blind confuse mind injury limb fire ice))
+     |> assign(:disabled_command_options, ~w(attack magic item defend flee skill combo))}
   end
 
   defp list_scripts do
@@ -124,16 +126,24 @@ defmodule TePhoenixWeb.Admin.CombatStatusesLive do
           <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="status_tick" field_name="tick_json" schema={:status_tick} label="Per-Turn Tick" value={@editing["tick_json"]} />
 
           <div class="grid grid-cols-2 gap-3">
-            <label class="block">
-              <span class="text-xs text-zinc-400">Cure Tags JSON</span>
-              <input name="cure_tags_json" value={@editing["cure_tags_json"]}
-                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono" />
-            </label>
-            <label class="block">
-              <span class="text-xs text-zinc-400">Disabled Commands JSON</span>
-              <input name="disabled_commands_json" value={@editing["disabled_commands_json"]}
-                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono" />
-            </label>
+            <div class="block">
+              <span class="text-xs text-zinc-400 block mb-1">Cure Tags</span>
+              <div class="flex flex-wrap gap-2">
+                <label :for={tag <- @cure_tag_options} class="flex items-center gap-1 text-xs">
+                  <input type="checkbox" name="cure_tags[]" value={tag} checked={tag in parse_list(@editing["cure_tags_json"])} />
+                  <span class="text-zinc-300"><%= tag %></span>
+                </label>
+              </div>
+            </div>
+            <div class="block">
+              <span class="text-xs text-zinc-400 block mb-1">Disabled Commands</span>
+              <div class="flex flex-wrap gap-2">
+                <label :for={cmd <- @disabled_command_options} class="flex items-center gap-1 text-xs">
+                  <input type="checkbox" name="disabled_commands[]" value={cmd} checked={cmd in parse_list(@editing["disabled_commands_json"])} />
+                  <span class="text-zinc-300"><%= cmd %></span>
+                </label>
+              </div>
+            </div>
           </div>
 
           <div class="grid grid-cols-3 gap-3">
@@ -312,8 +322,8 @@ defmodule TePhoenixWeb.Admin.CombatStatusesLive do
       max_stacks: to_int(Map.get(p, "max_stacks"), 1),
       effects: decode_map(Map.get(p, "effects_json")),
       tick: decode_map(Map.get(p, "tick_json")),
-      cure_tags: decode_list(Map.get(p, "cure_tags_json")),
-      disabled_commands: decode_list(Map.get(p, "disabled_commands_json")),
+      cure_tags: Map.get(p, "cure_tags", []) |> List.wrap(),
+      disabled_commands: Map.get(p, "disabled_commands", []) |> List.wrap(),
       on_apply_script_id: to_int_or_nil(Map.get(p, "on_apply_script_id")),
       on_tick_script_id: to_int_or_nil(Map.get(p, "on_tick_script_id")),
       on_expire_script_id: to_int_or_nil(Map.get(p, "on_expire_script_id")),
@@ -352,12 +362,14 @@ defmodule TePhoenixWeb.Admin.CombatStatusesLive do
     end
   end
 
-  defp decode_list(nil), do: []
-  defp decode_list(""), do: []
-  defp decode_list(s) do
+  defp parse_list(nil), do: []
+  defp parse_list(""), do: []
+  defp parse_list(s) when is_binary(s) do
     case Jason.decode(s) do
       {:ok, l} when is_list(l) -> l
       _ -> []
     end
   end
+  defp parse_list(l) when is_list(l), do: l
+  defp parse_list(_), do: []
 end

@@ -67,43 +67,32 @@ defmodule TePhoenixWeb.Admin.WavesLive do
               class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"><%= @editing["description"] %></textarea>
           </label>
 
-          <label class="block">
-            <span class="text-xs text-zinc-400">
-              Rounds JSON — array of wave objects with: wave, delay_seconds, spawns (npc_template, count, zone_key, interval_ms, boss)
-            </span>
+          <div class="block">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-xs text-zinc-400">
+                Rounds — array of wave objects
+              </span>
+              <button type="button" phx-click="add_wave_round"
+                class="text-xs text-amber-400 hover:text-amber-300 px-2 py-1 border border-amber-700 rounded">
+                + Quick Add Wave
+              </button>
+            </div>
             <textarea name="rounds_json" rows="8"
               class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["rounds_json"] %></textarea>
-          </label>
+            <p class="text-[10px] text-zinc-600 mt-1">
+              Format: [&lbrace;"wave": 1, "delay_seconds": 5, "spawns": [&lbrace;"npc_template": "key", "count": 3, "zone_key": "zone", "interval_ms": 1000, "boss": false&rbrace;]&rbrace;]
+            </p>
+          </div>
 
           <div class="grid grid-cols-2 gap-3">
-            <label class="block">
-              <span class="text-xs text-zinc-400">Scaling JSON (hp_mult_per_wave, atk_mult_per_wave, count_add_per_loop)</span>
-              <textarea name="scaling_json" rows="3"
-                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["scaling_json"] %></textarea>
-            </label>
-            <label class="block">
-              <span class="text-xs text-zinc-400">Settings JSON (auto_start, clear_condition: all_dead/timer, wave_interval_seconds)</span>
-              <textarea name="settings_json" rows="3"
-                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["settings_json"] %></textarea>
-            </label>
+            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_scaling" field_name="scaling_json" schema={:wave_scaling} label="Wave Scaling" value={@editing["scaling_json"]} />
+            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_settings" field_name="settings_json" schema={:wave_settings} label="Wave Settings" value={@editing["settings_json"]} />
           </div>
 
           <div class="grid grid-cols-3 gap-3">
-            <label class="block">
-              <span class="text-xs text-zinc-400">on_wave_start JSON</span>
-              <input name="on_wave_start_json" value={@editing["on_wave_start_json"]}
-                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono" />
-            </label>
-            <label class="block">
-              <span class="text-xs text-zinc-400">on_wave_clear JSON</span>
-              <input name="on_wave_clear_json" value={@editing["on_wave_clear_json"]}
-                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono" />
-            </label>
-            <label class="block">
-              <span class="text-xs text-zinc-400">on_sequence_complete JSON</span>
-              <input name="on_sequence_complete_json" value={@editing["on_sequence_complete_json"]}
-                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono" />
-            </label>
+            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_on_start" field_name="on_wave_start_json" schema={:objective_callback} label="On Wave Start" value={@editing["on_wave_start_json"]} />
+            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_on_clear" field_name="on_wave_clear_json" schema={:objective_callback} label="On Wave Clear" value={@editing["on_wave_clear_json"]} />
+            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_on_complete" field_name="on_sequence_complete_json" schema={:objective_callback} label="On Sequence Complete" value={@editing["on_sequence_complete_json"]} />
           </div>
 
           <div class="flex gap-2 pt-2">
@@ -147,6 +136,21 @@ defmodule TePhoenixWeb.Admin.WavesLive do
   @impl true
   def handle_event("new", _, socket), do: {:noreply, assign(socket, :editing, blank())}
   def handle_event("cancel", _, socket), do: {:noreply, assign(socket, :editing, nil)}
+
+  def handle_event("add_wave_round", _, socket) do
+    current = socket.assigns.editing["rounds_json"] || "[]"
+    rounds = case Jason.decode(current) do
+      {:ok, l} when is_list(l) -> l
+      _ -> []
+    end
+    next_wave = length(rounds) + 1
+    template = %{"wave" => next_wave, "delay_seconds" => 5, "spawns" => [
+      %{"npc_template" => "goblin", "count" => 3, "zone_key" => "entrance", "interval_ms" => 1000, "boss" => false}
+    ]}
+    updated = rounds ++ [template]
+    editing = Map.put(socket.assigns.editing, "rounds_json", Jason.encode!(updated, pretty: true))
+    {:noreply, assign(socket, :editing, editing)}
+  end
 
   def handle_event("edit", %{"key" => key}, socket) do
     case Registry.get(key) do
