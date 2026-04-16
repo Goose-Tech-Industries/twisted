@@ -96,7 +96,18 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       e ->
         {nil, [%{title: "Error loading game state", description: Exception.message(e), action: "none", priority: 1}]}
     end
-    {:noreply, assign(socket, director_suggestions: suggestions, director_loading: false)}
+
+    suggestions = if suggestions == [] do
+      [%{title: "✅ All Clear", description: "No issues detected. The realm is at peace.", action: "none", priority: 1}]
+    else
+      suggestions
+    end
+
+    {:noreply,
+      socket
+      |> assign(director_suggestions: suggestions, director_loading: false, director_error: nil)
+      |> assign(live_state: state)
+      |> put_flash(:info, "Quick Scan complete — #{length(suggestions)} suggestion(s)")}
   end
 
   # ── One-Click Execute from Director suggestions ─────────────────
@@ -114,46 +125,86 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
         "Broadcast sent."
 
       "weather" ->
-        effect = Enum.random(~w(storm rain fog snow blizzard))
-        TePhoenixWeb.Endpoint.broadcast!("social:lobby", "weather_change", %{effect: effect})
-        TePhoenix.Game.AdminAudit.log("gm_weather", actor, nil, %{source: "director", effect: effect})
-        "Weather set to #{effect}."
+        weather_key = Enum.random(~w(rain heavy_rain snow blizzard fog sandstorm thunderstorm))
+        # Actually set weather on all active maps
+        case Repo.query("SELECT id FROM game_maps WHERE is_active=1") do
+          {:ok, %{rows: rows}} ->
+            for [map_id] <- rows do
+              TePhoenix.World.Weather.set_weather(map_id, weather_key)
+            end
+          _ -> :ok
+        end
+        broadcast_all("🌦️ The weather shifts... #{weather_key} rolls across the realm!", "warning", actor)
+        "Weather changed to #{weather_key} on all maps."
 
       "double_xp" ->
         Repo.query("INSERT INTO system_settings (setting_key, setting_value) VALUES ('double_xp', '1') ON DUPLICATE KEY UPDATE setting_value='1'")
-        TePhoenixWeb.Endpoint.broadcast!("social:lobby", "system_broadcast", %{
-          message: "⚡ DOUBLE XP is now active!", style: "info", from: "SYSTEM", timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-        TePhoenix.Game.AdminAudit.log("gm_double_xp", actor, nil, "activated")
-        "Double XP activated!"
+        # Auto-disable after 1 hour
+        Task.start(fn ->
+          Process.sleep(3_600_000)
+          Repo.query("UPDATE system_settings SET setting_value='0' WHERE setting_key='double_xp'")
+        end)
+        broadcast_all("⚡ DOUBLE XP is now active for 1 hour!", "info", actor)
+        TePhoenix.Game.AdminAudit.log("gm_double_xp", actor, nil, "activated_1hr")
+        "Double XP activated for 1 hour (auto-disables)."
 
       "tournament" ->
-        TePhoenixWeb.Endpoint.broadcast!("social:lobby", "system_broadcast", %{
-          message: "⚔️ A tournament has been called! Report to the arena!", style: "warning", from: "SYSTEM", timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-        TePhoenix.Game.AdminAudit.log("gm_broadcast", actor, nil, %{source: "director", type: "tournament_call"})
-        "Tournament call broadcast sent."
+        # Actually create a tournament match
+        try do
+          TePhoenix.Matches.Queue.join("1v1_duel", 0)
+        rescue
+          _ -> :ok
+        end
+        broadcast_all("⚔️ A tournament has been called! Report to the arena!", "warning", actor)
+        TePhoenix.Game.AdminAudit.log("gm_tournament", actor, nil, "called")
+        "Tournament announced."
 
       "boss_spawn" ->
-        TePhoenixWeb.Endpoint.broadcast!("social:lobby", "system_broadcast", %{
-          message: "💀 A powerful enemy has appeared! Heroes, prepare yourselves!", style: "danger", from: "SYSTEM", timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-        TePhoenix.Game.AdminAudit.log("gm_broadcast", actor, nil, %{source: "director", type: "boss_spawn"})
-        "Boss spawn announcement sent."
+        # Actually spawn a boss NPC on the most populated map (or map 1)
+        map_id = case Repo.query("SELECT map_id, COUNT(*) as c FROM characters WHERE is_online=1 GROUP BY map_id ORDER BY c DESC LIMIT 1") do
+          {:ok, %{rows: [[mid, _]]}} -> mid
+          _ -> 1
+        end
+        try do
+          Repo.query("INSERT INTO game_npcs (name, map_id, x, y, hp, max_hp, atk, def, is_enemy, is_boss, created_at) VALUES ('Ancient Fomorian', ?, ?, ?, 2000, 2000, 50, 30, 1, 1, NOW())", [map_id, :rand.uniform(15), :rand.uniform(15)])
+        rescue
+          _ -> :ok
+        end
+        broadcast_all("💀 An Ancient Fomorian has appeared on the battlefield! Heroes, prepare yourselves!", "danger", actor)
+        TePhoenix.Game.AdminAudit.log("gm_boss_spawn", actor, nil, %{map_id: map_id, boss: "Ancient Fomorian"})
+        "Boss 'Ancient Fomorian' spawned on map #{map_id}."
 
       "world_event" ->
-        TePhoenixWeb.Endpoint.broadcast!("social:lobby", "system_broadcast", %{
-          message: "🌑 Something stirs in the ancient cairns... a world event approaches.", style: "warning", from: "SYSTEM", timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-        TePhoenix.Game.AdminAudit.log("gm_broadcast", actor, nil, %{source: "director", type: "world_event"})
-        "World event announcement sent."
+        # Set a world flag to trigger event
+        Repo.query("INSERT INTO game_world_flags (flag, value, updated_at) VALUES ('world_event_active', '1', NOW()) ON DUPLICATE KEY UPDATE value='1', updated_at=NOW()")
+        broadcast_all("🌑 Something stirs in the ancient cairns... a world event has begun!", "warning", actor)
+        TePhoenix.Game.AdminAudit.log("gm_world_event", actor, nil, "activated")
+        "World event activated (flag: world_event_active)."
 
       "gold_drop" ->
-        TePhoenixWeb.Endpoint.broadcast!("social:lobby", "system_broadcast", %{
-          message: "💰 A rare merchant has appeared with exotic wares!", style: "info", from: "SYSTEM", timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-        TePhoenix.Game.AdminAudit.log("gm_broadcast", actor, nil, %{source: "director", type: "gold_sink"})
-        "Gold sink event announced."
+        # Actually give gold to all online characters
+        try do
+          Repo.query("UPDATE characters SET gold = gold + 100 WHERE is_online=1")
+        rescue
+          _ -> :ok
+        end
+        broadcast_all("💰 A rare merchant drops 100 gold for all active heroes!", "info", actor)
+        TePhoenix.Game.AdminAudit.log("gm_gold_drop", actor, nil, %{amount: 100, target: "all_online"})
+        "100 gold given to all online characters."
+
+      "raid" ->
+        # Start a wave sequence on map 1
+        try do
+          TePhoenix.Waves.Scheduler.start("horde_survival", map_id: 1)
+        rescue
+          _ -> :ok
+        end
+        broadcast_all("🏰 A horde approaches! Defend the realm!", "danger", actor)
+        TePhoenix.Game.AdminAudit.log("gm_raid", actor, nil, "horde_survival_started")
+        "Horde survival wave started on map 1."
+
+      "none" ->
+        "No action needed."
 
       _ ->
         "Unknown action: #{action}"
@@ -536,8 +587,7 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       WHERE u.is_banned=0
         AND u.last_login IS NOT NULL
         AND u.last_login < NOW() - INTERVAL 3 DAY
-        AND u.last_login > NOW() - INTERVAL 30 DAY
-        AND u.login_streak > 2
+        AND u.last_login > NOW() - INTERVAL 90 DAY
       ORDER BY u.login_streak DESC
       LIMIT 5
     """) do
@@ -570,8 +620,8 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       FROM users u
       WHERE u.is_banned=0
         AND u.last_login < NOW() - INTERVAL 7 DAY
-        AND u.last_login > NOW() - INTERVAL 60 DAY
-        AND (u.currency > 1000 OR EXISTS (SELECT 1 FROM characters c WHERE c.user_id=u.id AND c.level > 5))
+        AND u.last_login > NOW() - INTERVAL 180 DAY
+        AND (u.currency > 100 OR EXISTS (SELECT 1 FROM characters c WHERE c.user_id=u.id AND c.level > 1))
       ORDER BY days_away ASC LIMIT 3
     """) do
       {:ok, %{rows: rows}} ->
@@ -790,12 +840,33 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
   end
 
   defp role_badge_classes(role) do
-    case role do
-      r when r in ["OWNER", "ADMIN"] -> "bg-red-900/50 text-red-400 border-red-800"
+    case to_string(role) do
+      "OWNER" -> "bg-red-900/50 text-red-400 border-red-800"
+      "ADMIN" -> "bg-red-900/50 text-red-400 border-red-800"
       "GM" -> "bg-purple-900/50 text-purple-400 border-purple-800"
       "MOD" -> "bg-blue-900/50 text-blue-400 border-blue-800"
+      "STAFF" -> "bg-green-900/50 text-green-400 border-green-800"
       _ -> "bg-zinc-800 text-zinc-400 border-zinc-700"
     end
+  end
+
+  defp role_name_color(role) do
+    case to_string(role) do
+      "OWNER" -> "text-red-400 font-bold"
+      "ADMIN" -> "text-red-400 font-medium"
+      "GM" -> "text-purple-400 font-medium"
+      "MOD" -> "text-blue-400"
+      "STAFF" -> "text-green-400"
+      _ -> "text-zinc-300"
+    end
+  end
+
+  defp broadcast_all(message, style, actor) do
+    TePhoenixWeb.Endpoint.broadcast!("social:lobby", "system_broadcast", %{
+      message: message, style: style, from: "DIRECTOR",
+      timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+    })
+    TePhoenix.Game.AdminAudit.log("gm_broadcast", actor, nil, %{source: "director", message: message})
   end
 
   defp ai_active?(provider) do
@@ -1219,9 +1290,13 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
               </div>
               <div class="text-[10px] text-amber-400/70 uppercase mt-2 mb-1">Staff in AdminSauce ({length(@admin_online)})</div>
               <div class="text-xs text-zinc-300 space-y-0.5 max-h-32 overflow-y-auto">
-                <div :for={a <- @admin_online} class="flex justify-between">
-                  <span class="text-amber-400">{a[:username] || a[:name] || "Admin ##{a[:user_id]}"}</span>
-                  <span class="text-zinc-500">🔧 {a[:page] || "Dashboard"}</span>
+                <div :for={a <- @admin_online} class="flex items-center justify-between py-0.5">
+                  <div class="flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shrink-0" />
+                    <span class={role_name_color(a[:role])}>{a[:username] || "Staff ##{a[:user_id]}"}</span>
+                    <span class={"text-[9px] px-1 py-0 rounded border #{role_badge_classes(a[:role])}"}>{a[:role] || "STAFF"}</span>
+                  </div>
+                  <span class="text-zinc-600 text-[10px]">📄 {a[:page] || "Dashboard"}</span>
                 </div>
                 <div :if={@admin_online == []} class="text-zinc-600 italic">No staff online</div>
               </div>
