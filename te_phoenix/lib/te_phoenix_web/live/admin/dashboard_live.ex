@@ -15,6 +15,7 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       engagement_score: 0, player_callouts: [], retention_risks: [],
       auto_pilot: TePhoenix.Game.AutoPilot.enabled?(),
       admin_online: [],
+      generated_content: nil,
       # Live state context
       live_state: nil,
       # Anomaly detection
@@ -112,9 +113,43 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
 
   # ── One-Click Execute from Director suggestions ─────────────────
 
+  # AI-generated content review modal
+  def handle_event("publish_generated", _params, socket) do
+    case socket.assigns[:generated_content] do
+      %{type: type, data: data} ->
+        case TePhoenix.AI.ContentGenerator.publish(type, data) do
+          {:ok, msg} ->
+            {:noreply, socket |> assign(generated_content: nil) |> put_flash(:info, "✅ #{msg}") |> load_stats()}
+          {:error, msg} ->
+            {:noreply, socket |> put_flash(:error, "Publish failed: #{msg}")}
+        end
+      _ ->
+        {:noreply, socket |> put_flash(:error, "Nothing to publish")}
+    end
+  end
+
+  def handle_event("discard_generated", _params, socket) do
+    {:noreply, assign(socket, generated_content: nil)}
+  end
+
   def handle_event("execute_action", %{"action" => action, "title" => title}, socket) do
     actor = %{id: socket.assigns[:session_user_id], name: socket.assigns[:session_username] || "GM"}
 
+    # AI content actions — generate and preview instead of immediate execute
+    ai_actions = ~w(boss_spawn create_quest create_npc create_item create_skill dungeon_raid)
+    if action in ai_actions do
+      case TePhoenix.AI.ContentGenerator.generate(action) do
+        {:ok, content} ->
+          {:noreply, assign(socket, generated_content: content) |> put_flash(:info, "AI generated content — review below")}
+        {:error, reason} ->
+          {:noreply, socket |> put_flash(:error, "Generation failed: #{reason}")}
+      end
+    else
+      execute_non_ai_action(action, title, actor, socket)
+    end
+  end
+
+  defp execute_non_ai_action(action, title, actor, socket) do
     result = case action do
       "broadcast" ->
         msg = "📢 #{title}"
@@ -1014,11 +1049,6 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
           </div>
           <div class="text-2xl font-bold font-mono text-green-400">{@online_count}</div>
           <div class="text-[10px] text-zinc-500 uppercase tracking-wide mt-0.5">Online Now</div>
-          <div :if={@admin_online != []} class="mt-1.5 space-y-0.5">
-            <div :for={a <- @admin_online} class="text-[10px]">
-              <.styled_name name={a[:username] || "?"} role={to_string(a[:role] || "")} chat_color={a[:chat_color]} class="text-[10px]" />
-            </div>
-          </div>
         </div>
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-center">
           <div class="text-2xl mb-1.5">&#x1F465;</div>
@@ -1134,6 +1164,33 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
         <div :if={@director_suggestions == [] && !@director_loading && !@director_error}
           class="text-xs text-zinc-600 py-6 text-center">
           Click <span class="text-amber-400">Ask AI</span> for AI-powered suggestions or <span class="text-zinc-400">Quick Scan</span> for rule-based analysis
+        </div>
+      </div>
+
+      <%!-- AI Generated Content Review Modal --%>
+      <div :if={@generated_content} class="bg-zinc-900 border-2 border-amber-600 rounded-xl p-5 animate-pulse-once">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-bold text-amber-400 uppercase tracking-wider flex items-center gap-2">
+            <span>🤖</span> AI Generated Content — Review Before Publishing
+          </h3>
+          <span class={"text-[10px] px-2 py-0.5 rounded bg-amber-900/50 text-amber-400 border border-amber-800"}>
+            {String.upcase(to_string(@generated_content.type))}
+          </span>
+        </div>
+        <div class="bg-zinc-950 border border-zinc-800 rounded p-4 mb-4 text-sm text-zinc-300 whitespace-pre-line font-mono">
+          {Phoenix.HTML.raw(String.replace(@generated_content.preview, "**", "<strong class=\"text-amber-400\">") |> String.replace("**", "</strong>"))}
+        </div>
+        <div class="flex gap-3">
+          <button phx-click="publish_generated" class="px-4 py-2 bg-green-700 hover:bg-green-600 text-white rounded text-sm font-bold">
+            ✅ Publish to Game
+          </button>
+          <button phx-click="discard_generated" class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-sm">
+            ✕ Discard
+          </button>
+          <button phx-click="execute_action" phx-value-action={@generated_content.type} phx-value-title="Regenerate"
+            class="px-4 py-2 bg-amber-800 hover:bg-amber-700 text-amber-200 rounded text-sm">
+            🔄 Regenerate
+          </button>
         </div>
       </div>
 
