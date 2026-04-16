@@ -229,7 +229,7 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
           _ -> 1
         end
         try do
-          Repo.query("INSERT INTO game_npcs (name, map_id, x, y, base_hp, base_atk, base_def, is_enemy, is_boss, is_active) VALUES ('Ancient Fomorian', ?, ?, ?, 2000, 50, 30, 1, 1, 1)", [map_id, :rand.uniform(15), :rand.uniform(15)])
+          Repo.query("INSERT INTO game_npcs (name, map_id, x, y, base_hp, base_atk, base_def, base_mo, base_md, base_speed, is_enemy, is_active, npc_level, icon, description) VALUES ('Ancient Fomorian', ?, ?, ?, 2000, 50, 30, 40, 25, 8, 1, 1, 20, '👹', 'A twisted fomorian lord risen from beneath the cairns')", [map_id, :rand.uniform(15), :rand.uniform(15)])
         rescue
           _ -> :ok
         end
@@ -1455,7 +1455,6 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
                 {suggestion.action}
               </span>
               <button phx-click="execute_action" phx-value-action={suggestion.action} phx-value-title={suggestion.title}
-                data-confirm={"Execute: #{suggestion.title}?"}
                 class="px-2 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded text-[10px] font-medium opacity-0 group-hover:opacity-100 transition-opacity">
                 ▶ Fire
               </button>
