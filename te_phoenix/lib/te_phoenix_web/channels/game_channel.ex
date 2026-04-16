@@ -1,0 +1,188 @@
+defmodule TePhoenixWeb.GameChannel do
+  @moduledoc """
+  Main game session channel. Replaces socket-game.js.
+  Topic format: "game:lobby" (single topic — all players join the same channel,
+  then use map-based PubSub for location-specific broadcasts).
+
+  Handles: join_game, select_character, move, teleport, fast_travel,
+  interact, disconnect, and delegates to sub-handler modules for
+  items, DM campaigns, world events, etc.
+  """
+
+  use Phoenix.Channel
+  require Logger
+
+  alias TePhoenix.Repo
+
+  alias TePhoenixWeb.Game.{
+    CoreHandler,
+    ItemHandler,
+    CharacterHandler,
+    WorldHandler,
+    DmHandler,
+    AiHandler,
+    LookupHandler,
+    NpcHandler,
+    ShopHandler
+  }
+
+  # ══════════════════════════════════════════════════════════════════
+  # JOIN — authenticates but doesn't start game session yet
+  # ══════════════════════════════════════════════════════════════════
+
+  @impl true
+  def join("game:lobby", _params, socket) do
+    user_id = socket.assigns.user_id
+
+    # Check ban
+    case Repo.query("SELECT is_banned FROM users WHERE id=?", [user_id]) do
+      {:ok, %{rows: [[1]]}} ->
+        push(socket, "force_disconnect", %{reason: "Your account has been banned."})
+        {:error, %{reason: "banned"}}
+      {:ok, %{rows: [[true]]}} ->
+        push(socket, "force_disconnect", %{reason: "Your account has been banned."})
+        {:error, %{reason: "banned"}}
+      _ ->
+        {:ok, %{user_id: user_id}, socket}
+    end
+  end
+
+  # ══════════════════════════════════════════════════════════════════
+  # CORE GAME EVENTS (delegated to CoreHandler)
+  # ══════════════════════════════════════════════════════════════════
+
+  @impl true
+  def handle_in("join_game", payload, socket),
+    do: CoreHandler.handle("join_game", payload, socket)
+
+  def handle_in("select_character", payload, socket),
+    do: CoreHandler.handle("join_game", payload, socket)  # alias
+
+  def handle_in("move", payload, socket),
+    do: CoreHandler.handle("move", payload, socket)
+
+  def handle_in("teleport", payload, socket),
+    do: CoreHandler.handle("teleport", payload, socket)
+
+  def handle_in("fast_travel", payload, socket),
+    do: CoreHandler.handle("fast_travel", payload, socket)
+
+  def handle_in("interact", payload, socket),
+    do: CoreHandler.handle("interact", payload, socket)
+
+  # ══════════════════════════════════════════════════════════════════
+  # ITEMS & EQUIPMENT
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("equip_item" = e, p, s), do: ItemHandler.handle(e, p, s)
+  def handle_in("unequip_item" = e, p, s), do: ItemHandler.handle(e, p, s)
+  def handle_in("drop_item" = e, p, s), do: ItemHandler.handle(e, p, s)
+  def handle_in("pickup_item" = e, p, s), do: ItemHandler.handle(e, p, s)
+  def handle_in("get_ground_items" = e, p, s), do: ItemHandler.handle(e, p, s)
+  def handle_in("use_item_on_map" = e, p, s), do: ItemHandler.handle(e, p, s)
+  def handle_in("use_capsule" = e, p, s), do: ItemHandler.handle(e, p, s)
+  def handle_in("use_ability" = e, p, s), do: ItemHandler.handle(e, p, s)
+  def handle_in("get_abilities" = e, p, s), do: ItemHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # CHARACTER (rest, respawn, AP, tutorial, preferences, fog)
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("request_respawn" = e, p, s), do: CharacterHandler.handle(e, p, s)
+  def handle_in("short_rest" = e, p, s), do: CharacterHandler.handle(e, p, s)
+  def handle_in("long_rest" = e, p, s), do: CharacterHandler.handle(e, p, s)
+  def handle_in("rest_at_inn" = e, p, s), do: CharacterHandler.handle(e, p, s)
+  def handle_in("distribute_ap" = e, p, s), do: CharacterHandler.handle(e, p, s)
+  def handle_in("tutorial_complete" = e, p, s), do: CharacterHandler.handle(e, p, s)
+  def handle_in("get_preferences" = e, p, s), do: CharacterHandler.handle(e, p, s)
+  def handle_in("save_preferences" = e, p, s), do: CharacterHandler.handle(e, p, s)
+  def handle_in("get_fog_exploration" = e, p, s), do: CharacterHandler.handle(e, p, s)
+  def handle_in("save_fog_exploration" = e, p, s), do: CharacterHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # WORLD EVENTS, STRUCTURES, PARTICLES
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("interact_object" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("spawn_map_particle" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("enter_structure" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("exit_structure" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("world_events_get_active" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("world_events_get_history" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("world_event_join" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("event_list" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("event_signup" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("event_cancel_signup" = e, p, s), do: WorldHandler.handle(e, p, s)
+  def handle_in("event_create" = e, p, s), do: WorldHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # AI GENERATION
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("ai_" <> _ = e, p, s), do: AiHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # DM CAMPAIGNS
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("dm_" <> _ = e, p, s), do: DmHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # LOOKUPS (bank, bounty, mounts, creatures, jobs, cards)
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("bank_get_items" = e, p, s), do: LookupHandler.handle(e, p, s)
+  def handle_in("bounty_get_tasks" = e, p, s), do: LookupHandler.handle(e, p, s)
+  def handle_in("mount_get_list" = e, p, s), do: LookupHandler.handle(e, p, s)
+  def handle_in("creature_get_list" = e, p, s), do: LookupHandler.handle(e, p, s)
+  def handle_in("job_get_list" = e, p, s), do: LookupHandler.handle(e, p, s)
+  def handle_in("card_get_collection" = e, p, s), do: LookupHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # SHOPS (buy, sell, browse)
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("shop_get_items" = e, p, s), do: ShopHandler.handle(e, p, s)
+  def handle_in("shop_buy_item" = e, p, s), do: ShopHandler.handle(e, p, s)
+  def handle_in("shop_sell_item" = e, p, s), do: ShopHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # NPC INTERACTIONS (dialogue, companions, training, sparring)
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("npc_talk" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("accept_npc_need" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("npc_menu_choice" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("companion_set_tactics" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("companion_dismiss" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("companion_get_affinity" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("companion_quest_accept" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("master_train" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("train" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("spar_request" = e, p, s), do: NpcHandler.handle(e, p, s)
+  def handle_in("spar_accept" = e, p, s), do: NpcHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # EVENT CHOICE (from EventRunner CHOICE actions)
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("event_choice", payload, socket) do
+    NpcHandler.handle("event_choice", payload, socket)
+  end
+
+  # Catch-all
+  def handle_in(event, _payload, socket) do
+    Logger.warning("Unknown game event: #{event}")
+    {:noreply, socket}
+  end
+
+  # ══════════════════════════════════════════════════════════════════
+  # TERMINATE (disconnect cleanup)
+  # ══════════════════════════════════════════════════════════════════
+
+  @impl true
+  def terminate(_reason, socket) do
+    CoreHandler.handle_disconnect(socket)
+    :ok
+  end
+end

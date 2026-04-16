@@ -1,0 +1,348 @@
+<div class="flex h-screen overflow-hidden">
+  <!-- Left Sidebar: Navigation -->
+  <nav class="w-56 bg-zinc-900/80 border-r border-zinc-800 flex flex-col shrink-0">
+    <div class="px-4 py-4 border-b border-zinc-800">
+      <h1 class="text-lg font-bold text-amber-400 flex items-center gap-2">
+        <span>✨</span> AdminSauce
+      </h1>
+      <p class="text-[10px] text-zinc-500 mt-0.5">Twisted Engine Control Panel</p>
+    </div>
+
+    <div class="flex-1 overflow-y-auto py-2">
+      <div class="px-4 py-1.5"><span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600/50">Overview</span></div>
+      <.nav_link href={~p"/sauce"} icon="chart" label="Dashboard" active={@active_tab == :dashboard} />
+      <.nav_link href={~p"/sauce/players"} icon="users" label="Players" active={@active_tab == :players} />
+      <.nav_link href={~p"/sauce/gm"} icon="megaphone" label="GM Tools & Notes" active={@active_tab == :gm_tools} />
+
+      <div class="px-4 py-1.5 mt-1"><span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600/50">World</span></div>
+      <.nav_link href={~p"/sauce/world"} icon="map" label="Maps, NPCs & Regions" active={@active_tab == :world} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:inventory)} href={~p"/sauce/content"} icon="box" label="Items, Shops & Loot" active={@active_tab == :content} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:objectives)} href={~p"/sauce/world/objectives"} icon="target" label="Objectives" active={@active_tab == :objectives} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:waves)} href={~p"/sauce/world/waves"} icon="zap" label="Wave Sequences" active={@active_tab == :waves} />
+
+      <div class="px-4 py-1.5 mt-1"><span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600/50">Characters & Combat</span></div>
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:combat)} href={~p"/sauce/combat"} icon="zap" label="Classes, Races & Skills" active={@active_tab == :combat} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:combat)} href={~p"/sauce/combat/statuses"} icon="flame" label="Status Effects" active={@active_tab == :combat_statuses} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:combat)} href={~p"/sauce/combat/rules"} icon="scale" label="Battle Rules" active={@active_tab == :combat_rules} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:matchmaking)} href={~p"/sauce/matches"} icon="users" label="Match Modes" active={@active_tab == :matches} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:achievements)} href={~p"/sauce/gameplay"} icon="trophy" label="Arenas & Achievements" active={@active_tab == :gameplay} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:scripting)} href={~p"/sauce/scripts"} icon="scroll" label="Visual Scripts" active={@active_tab == :scripts} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:magic)} href={~p"/sauce/magic"} icon="wand" label="Magic, Artifacts & Relics" active={@active_tab == :magic} />
+
+      <div class="px-4 py-1.5 mt-1"><span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600/50">Systems</span></div>
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:economy)} href={~p"/sauce/economy"} icon="chart" label="Economy" active={@active_tab == :economy} />
+      <.nav_link href={~p"/sauce/config"} icon="zap" label="Battle & Config" active={@active_tab == :config} />
+      <.nav_link href={~p"/sauce/campaigns"} icon="scroll" label="Rulesets & Scheduler" active={@active_tab == :campaigns} />
+      <.nav_link :if={TePhoenix.Capabilities.enabled?(:social)} href={~p"/sauce/social"} icon="shield" label="Moderation & Chat" active={@active_tab == :social} />
+
+      <div class="px-4 py-1.5 mt-1"><span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600/50">Admin</span></div>
+      <.nav_link href={~p"/sauce/settings"} icon="cog" label="Settings" active={@active_tab == :settings} />
+      <.nav_link href={~p"/sauce/roles"} icon="shield" label="Roles & Permissions" active={@active_tab == :roles} />
+      <.nav_link href={~p"/sauce/system"} icon="activity" label="System & Tools" active={@active_tab == :system} />
+      <.nav_link href={~p"/sauce/capabilities"} icon="cog" label="Capabilities" active={@active_tab == :capabilities} />
+      <.nav_link href={~p"/sauce/entities"} icon="table" label="Raw Tables" active={@active_tab == :entities} />
+    </div>
+
+    <div class="px-4 py-3 border-t border-zinc-800 text-[10px] text-zinc-600/40">
+      Twisted Engine v28 · AdminSauce
+    </div>
+  </nav>
+
+  <!-- Center: Main Content -->
+  <div class="flex-1 flex flex-col min-w-0">
+    <!-- Pinned Notes Strip -->
+    <div class="bg-yellow-900/15 border-b border-yellow-800/30 px-4 py-1.5 flex items-center gap-2 text-[11px] min-h-[32px] shrink-0">
+      <span class="text-yellow-500 shrink-0">📌</span>
+      <div class="flex-1 flex items-center gap-3 overflow-x-auto">
+        <div :for={note <- @pinned_notes} class="flex items-center gap-1 shrink-0 group">
+          <span class="text-yellow-200/80">{note.body}</span>
+          <span class="text-yellow-500/30 text-[9px]">— {note.author}</span>
+          <button phx-click="unpin_note" phx-value-id={note.id}
+            class="opacity-0 group-hover:opacity-100 text-yellow-500/40 hover:text-yellow-400 transition-opacity text-[10px] ml-0.5">✕</button>
+          <span class="text-yellow-800/40 ml-1">|</span>
+        </div>
+        <span :if={@pinned_notes == []} class="text-yellow-500/40">No pinned notes</span>
+      </div>
+      <button phx-click="toggle_notes" class="text-yellow-500/50 hover:text-yellow-400 shrink-0 text-sm">{if @notes_expanded, do: "▲", else: "+"}</button>
+    </div>
+    <form :if={@notes_expanded} phx-submit="add_pinned_note" class="bg-yellow-900/10 border-b border-yellow-800/20 px-4 py-2 flex gap-2 shrink-0">
+      <input type="text" name="body" value={@notes_input} phx-keyup="notes_input" phx-value-value={@notes_input}
+        placeholder="Add a pinned note for all staff..." autocomplete="off"
+        class="flex-1 px-3 py-1.5 bg-yellow-900/20 border border-yellow-800/30 rounded text-xs text-yellow-200 placeholder-yellow-500/30 focus:outline-none focus:border-yellow-600" />
+      <button type="submit" class="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 text-black rounded text-xs font-medium">Pin</button>
+    </form>
+
+    <!-- Shoutbox: VB-style staff chat under pinned notes -->
+    <div class="shrink-0 border-b border-zinc-800 bg-zinc-900/60">
+      <div class="flex items-center justify-between px-3 py-1">
+        <span class="text-[10px] font-bold uppercase tracking-wider text-zinc-500 flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+          Staff Shoutbox
+        </span>
+        <button phx-click="toggle_shoutbox" class="text-zinc-600 hover:text-zinc-400 text-[10px]">
+          {if @shoutbox_collapsed, do: "▼ Show", else: "▲ Hide"}
+        </button>
+      </div>
+      <div :if={!@shoutbox_collapsed}>
+        <div class="h-40 overflow-y-auto px-3 py-1 space-y-0.5">
+          <div :for={msg <- @chat_messages} class="text-[11px] leading-tight">
+            <span class="font-bold"><.styled_name name={"#{msg.sender_name}:"} role={msg.sender_role} chat_color={msg[:chat_color]} class="font-bold" /></span>
+            <span class="text-zinc-400 ml-1">{format_chat_body(msg.body)}</span>
+            <span class="text-zinc-700 text-[9px] ml-1">{format_chat_time(msg.created_at)}</span>
+          </div>
+          <div :if={@chat_messages == []} class="text-zinc-600 text-center py-2 text-[10px]">No messages yet — say something!</div>
+        </div>
+        <form phx-submit="send_chat" class="flex gap-1 px-3 py-1.5 border-t border-zinc-800/50"
+          onsubmit="setTimeout(() => this.querySelector('input').value = '', 10)">
+          <input type="text" name="body" value="" placeholder="Shout to all staff..."
+            autocomplete="off"
+            class="flex-1 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500" />
+          <button type="submit" class="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs">Send</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Page Content -->
+    <main class="flex-1 overflow-y-auto">
+      <div class="p-6">
+        <.flash_group flash={@flash} />
+        {@inner_content}
+      </div>
+    </main>
+  </div>
+
+  <!-- Right Dock: Staff Buddy List (AIM-style) -->
+  <aside class={[
+    "bg-zinc-900/80 border-l border-zinc-800 flex flex-col shrink-0 transition-all",
+    @staff_dock_open && "w-56",
+    !@staff_dock_open && "w-10"
+  ]}>
+    <!-- Dock toggle -->
+    <button phx-click="toggle_staff_dock"
+      class="px-2 py-3 border-b border-zinc-800 text-zinc-500 hover:text-zinc-300 flex items-center justify-center gap-1">
+      <span :if={@staff_dock_open} class="text-[10px] font-bold uppercase tracking-wider flex-1 text-left">Staff Online</span>
+      <span class="text-xs">{if @staff_dock_open, do: "›", else: "‹"}</span>
+    </button>
+
+    <!-- Collapsed: just dots -->
+    <div :if={!@staff_dock_open} class="flex-1 overflow-y-auto py-2 space-y-1.5">
+      <div :for={s <- @staff_list} class="flex justify-center py-0.5" title={"#{s.name} (#{s.role})"}>
+        <span class={[
+          "w-2.5 h-2.5 rounded-full",
+          s.online && status_dot_color(s.role),
+          !s.online && "bg-zinc-700"
+        ]}></span>
+      </div>
+    </div>
+
+    <!-- Expanded: full buddy list -->
+    <div :if={@staff_dock_open} class="flex-1 overflow-y-auto py-1">
+      <!-- Group Chats -->
+      <div class="px-3 py-1">
+        <div class="flex items-center justify-between">
+          <span class="text-[9px] font-bold uppercase tracking-widest text-zinc-600/50">Groups</span>
+          <button phx-click="toggle_create_group"
+            class={"text-xs transition-colors #{if @show_create_group, do: "text-amber-400", else: "text-zinc-600 hover:text-zinc-400"}"}>
+            {if @show_create_group, do: "✕", else: "+"}
+          </button>
+        </div>
+      </div>
+
+      <!-- Create Group Panel -->
+      <div :if={@show_create_group} class="px-3 pb-3 space-y-2">
+        <input type="text" value={@new_group_name} phx-keyup="new_group_name" phx-value-value={@new_group_name}
+          placeholder="Group name..." autocomplete="off"
+          class="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-[10px] text-zinc-300 focus:outline-none focus:border-indigo-500" />
+        <div class="text-[9px] text-zinc-600 uppercase tracking-wider">Select members:</div>
+        <div class="space-y-0.5 max-h-32 overflow-y-auto">
+          <button :for={s <- @staff_list}
+            :if={s.user_id != @session_user_id}
+            phx-click="toggle_group_member" phx-value-user_id={to_string(s.user_id)}
+            class={["w-full flex items-center gap-2 px-2 py-1 rounded text-xs text-left transition-colors",
+              MapSet.member?(@group_selected_members, s.user_id) && "bg-indigo-900/40 text-indigo-300",
+              !MapSet.member?(@group_selected_members, s.user_id) && "hover:bg-zinc-800/50 text-zinc-400"
+            ]}>
+            <span class={["w-3 h-3 rounded border flex items-center justify-center text-[8px] shrink-0",
+              MapSet.member?(@group_selected_members, s.user_id) && "bg-indigo-500 border-indigo-500 text-white",
+              !MapSet.member?(@group_selected_members, s.user_id) && "border-zinc-600"
+            ]}>
+              {if MapSet.member?(@group_selected_members, s.user_id), do: "✓", else: ""}
+            </span>
+            <.styled_name name={s.name} role={s.role} chat_color={s[:chat_color]} class="text-xs" />
+          </button>
+        </div>
+        <button :if={MapSet.size(@group_selected_members) > 0 && String.trim(@new_group_name) != ""}
+          phx-click="create_group" phx-value-name={@new_group_name}
+          class="w-full px-2 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-medium">
+          Create Group ({MapSet.size(@group_selected_members) + 1} members)
+        </button>
+        <div :if={MapSet.size(@group_selected_members) == 0 || String.trim(@new_group_name) == ""}
+          class="text-[10px] text-zinc-600 text-center py-1">
+          Enter a name and select members
+        </div>
+      </div>
+
+      <!-- Existing Groups -->
+      <div :for={ch <- @group_channels}
+        class="flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-800/50 cursor-pointer transition-colors text-xs group">
+        <span phx-click="open_group" phx-value-channel={ch} class="flex items-center gap-1.5 flex-1 min-w-0">
+          <span class="text-indigo-500/60">👥</span>
+          <span class="text-zinc-300 truncate">{group_display_name(ch)}</span>
+        </span>
+        <button phx-click="delete_group" phx-value-channel={ch}
+          data-confirm={"Delete this group and all messages?"}
+          class="text-zinc-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity text-[10px] shrink-0">✕</button>
+      </div>
+
+      <!-- Online section -->
+      <div class="px-3 py-1 mt-1">
+        <span class="text-[9px] font-bold uppercase tracking-widest text-zinc-600/50">
+          Online ({Enum.count(@staff_list, & &1.online)})
+        </span>
+      </div>
+      <div :for={s <- Enum.filter(@staff_list, & &1.online)}
+        class="flex items-center gap-2.5 px-3 py-2 hover:bg-zinc-800/50 cursor-pointer transition-colors group">
+        <div phx-click="open_dm" phx-value-username={s.name} phx-value-user_id={to_string(s.user_id)}
+          class="relative shrink-0">
+          <div class={"w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold #{role_name_color(s.role)}"}>
+            {String.first(s.name)}
+          </div>
+          <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-green-500 border border-zinc-900"></span>
+        </div>
+        <div phx-click="open_dm" phx-value-username={s.name} phx-value-user_id={to_string(s.user_id)}
+          class="min-w-0 flex-1">
+          <div class="truncate"><.styled_name name={s.name} role={s.role} chat_color={s[:chat_color]} class="text-xs font-medium" /></div>
+          <div class="text-[9px] text-zinc-600">{s.role}</div>
+        </div>
+        <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button phx-click="send_nudge" phx-value-user_id={to_string(s.user_id)}
+            class="text-zinc-700 hover:text-amber-400 text-[10px]" title="Nudge">⚡</button>
+          <span phx-click="open_dm" phx-value-username={s.name} phx-value-user_id={to_string(s.user_id)}
+            class="text-zinc-700 hover:text-indigo-400 text-[10px]">💬</span>
+        </div>
+      </div>
+
+      <!-- Offline section -->
+      <div :if={Enum.any?(@staff_list, &(!&1.online))} class="px-3 py-1 mt-2">
+        <span class="text-[9px] font-bold uppercase tracking-widest text-zinc-600/50">
+          Offline ({Enum.count(@staff_list, &(!&1.online))})
+        </span>
+      </div>
+      <div :for={s <- Enum.filter(@staff_list, &(!&1.online))}
+        phx-click="open_dm" phx-value-username={s.name} phx-value-user_id={to_string(s.user_id)}
+        class="flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-800/50 cursor-pointer transition-colors group opacity-50">
+        <div class="relative shrink-0">
+          <div class="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold text-zinc-500">
+            {String.first(s.name)}
+          </div>
+          <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-zinc-600 border border-zinc-900"></span>
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="truncate"><.styled_name name={s.name} role={s.role} chat_color={s[:chat_color]} class="text-xs font-medium opacity-50" /></div>
+          <div class="text-[9px] text-zinc-700">{s.role}</div>
+        </div>
+        <span class="text-zinc-700 group-hover:text-indigo-400 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">💬</span>
+      </div>
+
+      <div :if={@staff_list == []} class="px-3 py-4 text-center text-[10px] text-zinc-600">No staff found</div>
+    </div>
+
+    <!-- My status -->
+    <div :if={@staff_dock_open} class="px-3 py-2 border-t border-zinc-800 text-[10px] text-zinc-500 relative">
+      <div phx-click="toggle_status_menu" class="flex items-center gap-1.5 cursor-pointer hover:text-zinc-300 transition-colors">
+        <span class={[
+          "w-2 h-2 rounded-full shrink-0",
+          @my_status == "online" && "bg-green-500",
+          @my_status == "away" && "bg-yellow-500",
+          @my_status == "busy" && "bg-red-500",
+          @my_status == "invisible" && "bg-zinc-600"
+        ]}></span>
+        <span class="truncate">{@session_username}</span>
+        <span :if={@away_message != ""} class="text-yellow-500/60 truncate">— {@away_message}</span>
+        <span class="text-zinc-700 ml-auto">{@session_role}</span>
+      </div>
+      <!-- Status dropdown -->
+      <div :if={@show_status_menu} class="absolute bottom-full left-0 right-0 mb-1 mx-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl overflow-hidden z-50">
+        <button phx-click="set_status" phx-value-status="online"
+          class="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-zinc-300 hover:bg-zinc-700 transition-colors">
+          <span class="w-2 h-2 rounded-full bg-green-500"></span> Online
+        </button>
+        <div class="border-t border-zinc-700/50">
+          <button phx-click="set_status" phx-value-status="away"
+            class="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-zinc-300 hover:bg-zinc-700 transition-colors">
+            <span class="w-2 h-2 rounded-full bg-yellow-500"></span> Away
+          </button>
+          <div class="flex flex-wrap gap-1 px-3 pb-2">
+            <button :for={preset <- ~w(BRB Lunch AFK Meeting)} phx-click="set_away" phx-value-message={preset}
+              class="px-2 py-0.5 bg-zinc-700/50 hover:bg-yellow-900/40 text-[9px] text-zinc-400 hover:text-yellow-300 rounded transition-colors">
+              {preset}
+            </button>
+          </div>
+        </div>
+        <button phx-click="set_status" phx-value-status="busy"
+          class="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-zinc-300 hover:bg-zinc-700 transition-colors border-t border-zinc-700/50">
+          <span class="w-2 h-2 rounded-full bg-red-500"></span> Busy
+        </button>
+        <button phx-click="set_status" phx-value-status="invisible"
+          class="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-zinc-300 hover:bg-zinc-700 transition-colors border-t border-zinc-700/50">
+          <span class="w-2 h-2 rounded-full bg-zinc-600"></span> Invisible
+        </button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Pop-up DM Windows (Facebook/Myspace style, bottom of screen) -->
+<div class="fixed bottom-0 right-52 z-50 flex items-end gap-2">
+  <div :for={dm <- @open_dms}
+    data-dm-window
+    class="w-72 bg-zinc-900 border border-zinc-700 rounded-t-lg shadow-2xl flex flex-col">
+    <!-- DM title bar -->
+    <div class="flex items-center justify-between px-3 py-1.5 bg-indigo-900/60 rounded-t-lg border-b border-indigo-800/40">
+      <span class={"text-xs font-bold #{role_name_color(dm.target_role)}"}>{dm.target_name}</span>
+      <div class="flex gap-1">
+        <button phx-click="toggle_dm_minimize" phx-value-channel={dm.channel}
+          class="text-indigo-400 hover:text-indigo-200 text-[10px]">{if dm.minimized, do: "▲", else: "▼"}</button>
+        <button phx-click="close_dm" phx-value-channel={dm.channel}
+          class="text-indigo-400 hover:text-red-400 text-[10px]">✕</button>
+      </div>
+    </div>
+    <!-- DM body -->
+    <div :if={!dm.minimized} class="flex flex-col" style="height: 280px">
+      <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+        <div :for={msg <- dm.messages} class="text-[11px] group/msg relative">
+          <div class="flex items-center gap-1">
+            <span class="font-bold"><.styled_name name={msg.sender_name} role={msg.sender_role} chat_color={msg[:chat_color]} class="font-bold" /></span>
+            <span class="text-zinc-500 text-[9px]">{format_chat_time(msg.created_at)}</span>
+            <!-- Save button (Snapchat-style) -->
+            <button :if={msg[:id] && !msg[:saved]}
+              phx-click="save_message" phx-value-msg_id={msg[:id]}
+              class="text-zinc-700 hover:text-amber-400 text-[9px] opacity-0 group-hover/msg:opacity-100 transition-opacity ml-auto"
+              title="Save message">💾</button>
+            <span :if={msg[:saved]} class="text-amber-400 text-[9px] ml-auto" title="Saved">📌</span>
+          </div>
+          <div class={["text-zinc-300 mt-0.5", msg[:saved] && "border-l-2 border-amber-500/30 pl-1.5"]}>{format_chat_body(msg.body)}</div>
+        </div>
+        <div :if={dm.messages == []} class="text-zinc-600 text-center py-6 text-[10px]">Start of conversation</div>
+      </div>
+      <!-- Emoji picker grid -->
+      <div :if={@emoji_channel == dm.channel} class="border-t border-zinc-800 px-2 py-1.5">
+        <div class="grid grid-cols-10 gap-0.5">
+          <button :for={e <- ~w(😀 😂 😍 🤔 😎 🙄 😢 😡 🥳 🤣 👍 👎 ❤️ 🔥 ⚔️ 🛡️ 💀 ✨ 🎮 🏆 👋 🙏 💪 🎯 🐉 🧙 ⚡ 💰 🗡️ 🎲)}
+            type="button"
+            onclick={"document.querySelector('[data-dm-input=\"#{dm.channel}\"]').value += '#{e}'; document.querySelector('[data-dm-input=\"#{dm.channel}\"]').focus()"}
+            class="w-6 h-6 flex items-center justify-center text-sm hover:bg-zinc-700 rounded cursor-pointer">{e}</button>
+        </div>
+      </div>
+      <form phx-submit="send_dm" phx-value-channel={dm.channel} class="flex gap-1 p-2 border-t border-zinc-800"
+        onsubmit="setTimeout(() => this.querySelector('input').value = '', 10)">
+        <input type="text" name="body" placeholder="Message..." autocomplete="off"
+          data-dm-input={dm.channel}
+          class="flex-1 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500" />
+        <button type="button" phx-click="toggle_emoji" phx-value-channel={dm.channel}
+          class={"px-1.5 py-1 rounded text-sm hover:bg-zinc-700 transition-colors #{if @emoji_channel == dm.channel, do: "bg-zinc-700", else: ""}"}>😊</button>
+        <button type="submit" class="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px]">▶</button>
+      </form>
+    </div>
+  </div>
+</div>
