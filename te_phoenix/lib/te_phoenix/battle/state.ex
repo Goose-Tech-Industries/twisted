@@ -14,7 +14,7 @@ defmodule TePhoenix.Battle.State do
   use GenServer
   require Logger
 
-  alias TePhoenix.Battle.{Combatant, Settings, StatusEffects, Triggers, Projectiles}
+  alias TePhoenix.Battle.{Combatant, Settings, StatusEffects, Triggers, Projectiles, Respawn}
 
   # ── State struct ────────────────────────────────────────────────
 
@@ -389,10 +389,16 @@ defmodule TePhoenix.Battle.State do
 
   @impl true
   def handle_info(:turn_timeout, state) do
-    # Auto-defend on timeout (configurable)
     Logger.info("Battle #{state.id}: Turn timeout for char #{state.turn_char_id}")
     state = advance_turn(state)
     state = maybe_start_turn_timer(state)
+    {:noreply, state}
+  end
+
+  def handle_info({:respawn, char_id}, state) do
+    {state, result} = Respawn.execute_respawn(state, char_id)
+    state = merge_result_into_log(state, result)
+    state = rebuild_turn_queue(state)
     {:noreply, state}
   end
 

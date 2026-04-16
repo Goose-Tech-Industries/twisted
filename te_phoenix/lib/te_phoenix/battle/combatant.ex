@@ -147,6 +147,10 @@ defmodule TePhoenix.Battle.Combatant do
     # end. Skills with remaining > 0 are gated in combat.ex dispatch.
     cooldowns: %{},
 
+    # Boss phase tracking (nil = not a boss)
+    boss_npc_id: nil,
+    boss_current_phase: 0,
+
     # Real-time combat state
     rt_target: nil,
     rt_queued_ability: nil,

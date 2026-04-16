@@ -12,7 +12,7 @@ defmodule TePhoenix.Battle.Damage do
     Weapon triangle → Passives → Elemental reactions → Post-damage effects
   """
 
-  alias TePhoenix.Battle.{Combatant, State, Formula, StatusEffects, Triggers, Systems}
+  alias TePhoenix.Battle.{Combatant, State, Formula, StatusEffects, Triggers, Systems, BossPhases, Respawn}
 
   @doc """
   Resolve damage from a command or direct damage effect.
@@ -361,6 +361,11 @@ defmodule TePhoenix.Battle.Damage do
               |> Map.put(actor.char_id, actor)
               |> Map.put(target.char_id, target)
             }
+
+            # ── Boss phase transition check ──────────────────────
+            target = Map.get(state.combatants, target.char_id, target)
+            {state, target, result} = BossPhases.check_phase_transition(state, target, result)
+            state = put_in(state.combatants[target.char_id], target)
 
             # ── Trigger: attack_landed (post-hit hooks) ─────────
             atk_ctx = %{attacker: actor, victim: target, damage: damage, crit: crit, elements: elements, element: List.first(elements)}
@@ -862,6 +867,9 @@ defmodule TePhoenix.Battle.Damage do
     ctx = %{attacker: actor, victim: target, nonlethal: event == "ko"}
     {state, result} = Triggers.fire(event, state, ctx, result)
     target = Map.get(state.combatants, target.char_id, target)
+
+    # Schedule respawn if the mode supports it
+    {state, result} = Respawn.on_death(state, target, result)
 
     {state, target, result}
   end
