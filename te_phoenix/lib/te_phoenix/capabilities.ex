@@ -218,6 +218,18 @@ defmodule TePhoenix.Capabilities do
         genres: [:rpg, :vn, :adventure, :tactics, :roguelike, :rts, :tower_defense]
       },
       %{
+        id: :strategy_economy,
+        name: "Strategy Economy",
+        description: "Tick-based resource production, building upgrades, army training, food upkeep, army-vs-army combat. MSWar/OGame/Tribal Wars/4X style.",
+        version: "1.0.0",
+        default_enabled: false,
+        provides: [:passive_economy, :building_upgrades, :army_training, :army_combat],
+        requires: [],
+        db_tables: ~w(game_strategy_buildings game_player_buildings game_strategy_units game_player_armies game_player_resources),
+        ui_panels: [:strategy_editor],
+        genres: [:rts, :strategy, :idle, :four_x]
+      },
+      %{
         id: :matchmaking,
         name: "Matchmaking & Lobbies",
         description: "Queue-based matchmaking, lobby ready-check, match lifecycle with timed phases and post-match rewards.",

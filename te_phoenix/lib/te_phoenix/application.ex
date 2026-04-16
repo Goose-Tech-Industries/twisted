@@ -37,6 +37,8 @@ defmodule TePhoenix.Application do
       # Wave/spawn scheduler (TD waves, MOBA minions, horde survival)
       TePhoenix.Waves.Registry,
       TePhoenix.Waves.Scheduler,
+      # Strategy economy (MSWar/OGame/Tribal Wars: buildings, armies, upkeep)
+      TePhoenix.Strategy.EconomyTicker,
       # Match lifecycle (queue → lobby → play → results)
       TePhoenix.Matches.Registry,
       TePhoenix.Matches.Queue,
