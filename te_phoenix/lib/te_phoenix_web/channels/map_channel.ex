@@ -31,9 +31,23 @@ defmodule TePhoenixWeb.MapChannel do
   """
   use Phoenix.Channel
   alias TePhoenix.Repo
+  alias TePhoenix.World.Vision
   require Logger
 
   @staff_roles ~w(ADMIN GM MOD STAFF OWNER)
+
+  # ETS table for vision profiles keyed by {map_id, char_id}.
+  # Created once at module load; if the table already exists the
+  # rescue clause silently continues.
+  @vision_table :map_channel_vision
+
+  def vision_table, do: @vision_table
+
+  def init_vision_table do
+    :ets.new(@vision_table, [:named_table, :public, :set, read_concurrency: true])
+  rescue
+    ArgumentError -> :ok
+  end
 
   # ── Join ───────────────────────────────────────────────────────
 
@@ -93,6 +107,24 @@ defmodule TePhoenixWeb.MapChannel do
     # Tell tickers this map has a connected player
     TePhoenix.Objectives.Ticker.watch_map(map_id)
 
+    # Subscribe to entity-position broadcasts that need vision filtering
+    Phoenix.PubSub.subscribe(TePhoenix.PubSub, "map:#{map_id}:entity_positions")
+
+    # Initialize vision profile for this player.
+    # Default: 5-tile circle radius, no stealth detection.
+    char_id = socket.assigns[:char_id] || socket.assigns[:user_id]
+    vision = %{
+      vision_radius: 5,
+      vision_type: "circle",
+      detection_power: 0,
+      x: 0,
+      y: 0
+    }
+
+    init_vision_table()
+    if char_id, do: :ets.insert(@vision_table, {{map_id, char_id}, vision})
+
+    socket = assign(socket, :vision, vision)
     {:noreply, socket}
   end
 
@@ -230,6 +262,38 @@ defmodule TePhoenixWeb.MapChannel do
     {:noreply, socket}
   end
 
+  # ── Vision-filtered entity broadcasts ────────────────────────
+  #
+  # Any subsystem that moves entities publishes to `map:{id}:entity_positions`.
+  # Each message is `{:entity_position, entity_id, %{x, y, stealth_level, ...}}`.
+  # We only push to this player if their vision profile can see the entity.
+
+  def handle_info({:entity_position, entity_id, entity_data}, socket) do
+    push_if_visible(socket, "entity_position", %{
+      entity_id: entity_id,
+      x: entity_data[:x] || entity_data[:grid_x] || 0,
+      y: entity_data[:y] || entity_data[:grid_y] || 0,
+      data: entity_data
+    }, entity_data)
+
+    {:noreply, socket}
+  end
+
+  # Batch version: a list of entities at once (e.g. tick snapshot).
+  def handle_info({:entity_positions_batch, entities}, socket) do
+    visible = filter_entities_for_player(entities, socket.assigns[:vision])
+
+    if visible != [] do
+      push(socket, "entity_positions_batch", %{
+        entities: Enum.map(visible, fn {eid, data} ->
+          %{entity_id: eid, x: data[:x] || 0, y: data[:y] || 0, data: data}
+        end)
+      })
+    end
+
+    {:noreply, socket}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # ── Editor ops ────────────────────────────────────────────────
@@ -342,6 +406,34 @@ defmodule TePhoenixWeb.MapChannel do
     {:noreply, socket}
   end
 
+  # ── Vision updates ─────────────────────────────────────────────
+  #
+  # The client sends `update_vision` whenever the player moves or their
+  # vision profile changes (e.g. equipped a lantern → bigger radius,
+  # entered a detection zone, etc.). We update both the socket assign
+  # and the ETS table so other subsystems can query vision state.
+
+  def handle_in("update_vision", params, socket) do
+    map_id = socket.assigns.map_id
+    char_id = socket.assigns[:char_id] || socket.assigns[:user_id]
+    old_vision = socket.assigns[:vision] || %{}
+
+    vision = %{
+      vision_radius: to_number(params["vision_radius"], old_vision[:vision_radius] || 5),
+      vision_type: params["vision_type"] || old_vision[:vision_type] || "circle",
+      detection_power: to_number(params["detection_power"], old_vision[:detection_power] || 0),
+      x: to_number(params["x"], old_vision[:x] || 0),
+      y: to_number(params["y"], old_vision[:y] || 0),
+      cone_angle: to_number(params["cone_angle"], old_vision[:cone_angle]),
+      cone_direction: params["cone_direction"] || old_vision[:cone_direction]
+    }
+
+    init_vision_table()
+    if char_id, do: :ets.insert(@vision_table, {{map_id, char_id}, vision})
+
+    {:reply, {:ok, %{}}, assign(socket, :vision, vision)}
+  end
+
   # ── Fallback ──────────────────────────────────────────────────
 
   def handle_in(event, _payload, socket) do
@@ -363,4 +455,59 @@ defmodule TePhoenixWeb.MapChannel do
         "GUEST"
     end
   end
+
+  # ── Vision helpers ───────────────────────────────────────────
+
+  @doc """
+  Push an event to the socket only if the player can see the entity at
+  `entity_position`. Uses the Vision module for the actual geometry check.
+  """
+  def push_if_visible(socket, event, payload, entity_position) do
+    viewer = socket.assigns[:vision] || %{vision_radius: 5, vision_type: "circle", x: 0, y: 0}
+
+    case Vision.can_see?(viewer, entity_position) do
+      {:visible, _reason} -> push(socket, event, payload)
+      {:hidden, _reason} -> :skip
+    end
+  end
+
+  @doc """
+  Filter a list of `{entity_id, entity_data}` tuples to only those
+  visible to the given player vision profile. Returns the visible subset.
+  """
+  def filter_entities_for_player(entities, nil), do: entities
+
+  def filter_entities_for_player(entities, vision) do
+    Enum.filter(entities, fn {_id, data} ->
+      case Vision.can_see?(vision, data) do
+        {:visible, _} -> true
+        _ -> false
+      end
+    end)
+  end
+
+  @doc """
+  Look up a player's current vision profile from the ETS table.
+  Returns the vision map or nil if not found.
+  """
+  def get_vision(map_id, char_id) do
+    init_vision_table()
+
+    case :ets.lookup(@vision_table, {map_id, char_id}) do
+      [{{^map_id, ^char_id}, vision}] -> vision
+      _ -> nil
+    end
+  end
+
+  defp to_number(nil, default), do: default
+  defp to_number(v, _default) when is_number(v), do: v
+
+  defp to_number(v, default) when is_binary(v) do
+    case Float.parse(v) do
+      {f, _} -> if f == trunc(f), do: trunc(f), else: f
+      :error -> default
+    end
+  end
+
+  defp to_number(_, default), do: default
 end

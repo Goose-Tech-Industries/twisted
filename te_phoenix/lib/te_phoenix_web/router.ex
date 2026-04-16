@@ -216,6 +216,8 @@ defmodule TePhoenixWeb.Router do
       live "/world/map-connections", MapConnectionsLive, :index
       live "/world/objectives", ObjectivesLive, :index
       live "/world/waves", WavesLive, :index
+      live "/dialogue", DialogueTreeLive, :index
+      live "/quests", QuestDesignerLive, :index
       live "/scripts", ScriptListLive, :index
       live "/scripts/:id/edit", ScriptEditorLive, :edit
       live "/matches", MatchModesLive, :index
