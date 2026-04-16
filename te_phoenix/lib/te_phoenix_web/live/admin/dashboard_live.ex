@@ -135,17 +135,33 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
   def handle_event("execute_action", %{"action" => action, "title" => title}, socket) do
     actor = %{id: socket.assigns[:session_user_id], name: socket.assigns[:session_username] || "GM"}
 
-    # AI content actions — generate and preview instead of immediate execute
-    ai_actions = ~w(boss_spawn create_quest create_npc create_item create_skill dungeon_raid)
-    if action in ai_actions do
-      case TePhoenix.AI.ContentGenerator.generate(action) do
-        {:ok, content} ->
-          {:noreply, assign(socket, generated_content: content) |> put_flash(:info, "AI generated content — review below")}
-        {:error, reason} ->
-          {:noreply, socket |> put_flash(:error, "Generation failed: #{reason}")}
-      end
-    else
-      execute_non_ai_action(action, title, actor, socket)
+    # AI content actions — generate and preview instead of immediate execute.
+    # Only trigger AI generation if it's a content type that benefits from it.
+    # Quick Scan's "create_X" actions redirect to editors instead (handled in execute_non_ai_action).
+    ai_actions = ~w(boss_spawn dungeon_raid)
+    generate_actions = ~w(create_quest create_npc create_item create_skill)
+
+    cond do
+      action in ai_actions ->
+        case TePhoenix.AI.ContentGenerator.generate(action) do
+          {:ok, content} ->
+            {:noreply, assign(socket, generated_content: content) |> put_flash(:info, "AI generated content — review below")}
+          {:error, reason} ->
+            {:noreply, socket |> put_flash(:error, "Generation failed: #{reason}")}
+        end
+
+      action in generate_actions ->
+        # Try AI first, fall back to redirect if AI fails or takes too long
+        case TePhoenix.AI.ContentGenerator.generate(action) do
+          {:ok, content} ->
+            {:noreply, assign(socket, generated_content: content) |> put_flash(:info, "AI generated content — review below")}
+          {:error, _} ->
+            # Redirect to the editor as fallback
+            execute_non_ai_action(action, title, actor, socket)
+        end
+
+      true ->
+        execute_non_ai_action(action, title, actor, socket)
     end
   end
 
@@ -160,17 +176,21 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
         "Broadcast sent."
 
       "weather" ->
-        weather_key = Enum.random(~w(rain heavy_rain snow blizzard fog sandstorm thunderstorm))
-        # Actually set weather on all active maps
-        case Repo.query("SELECT id FROM game_maps WHERE is_active=1") do
-          {:ok, %{rows: rows}} ->
-            for [map_id] <- rows do
-              TePhoenix.World.Weather.set_weather(map_id, weather_key)
-            end
+        weather_key = Enum.random(~w(rain heavy_rain snow blizzard fog sandstorm thunderstorm clear))
+        try do
+          TePhoenix.World.Weather.ensure_tables()
+          case Repo.query("SELECT id FROM game_maps WHERE is_active=1") do
+            {:ok, %{rows: rows}} when rows != [] ->
+              for [map_id] <- rows do
+                TePhoenix.World.Weather.set_weather(map_id, weather_key)
+              end
+            _ -> :ok
+          end
+        rescue
           _ -> :ok
         end
         broadcast_all("🌦️ The weather shifts... #{weather_key} rolls across the realm!", "warning", actor)
-        "Weather changed to #{weather_key} on all maps."
+        "Weather changed to #{weather_key}."
 
       "double_xp" ->
         Repo.query("INSERT INTO system_settings (setting_key, setting_value) VALUES ('double_xp', '1') ON DUPLICATE KEY UPDATE setting_value='1'")
@@ -228,15 +248,18 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
         "100 gold given to all online characters."
 
       "raid" ->
-        # Start a wave sequence on map 1
-        try do
-          TePhoenix.Waves.Scheduler.start("horde_survival", map_id: 1)
+        raid_result = try do
+          case TePhoenix.Waves.Scheduler.start("horde_survival", map_id: 1) do
+            {:ok, wave} -> "Wave #{wave} started"
+            {:error, reason} -> "Could not start: #{inspect(reason)}"
+            _ -> "Attempted"
+          end
         rescue
-          _ -> :ok
+          e -> "Error: #{Exception.message(e)}"
         end
         broadcast_all("🏰 A horde approaches! Defend the realm!", "danger", actor)
         TePhoenix.Game.AdminAudit.log("gm_raid", actor, nil, "horde_survival_started")
-        "Horde survival wave started on map 1."
+        "Raid: #{raid_result}. Broadcast sent."
 
       "none" ->
         "No action needed."

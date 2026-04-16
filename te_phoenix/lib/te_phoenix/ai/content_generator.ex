@@ -263,6 +263,24 @@ defmodule TePhoenix.AI.ContentGenerator do
 
   defp publish_event(_data), do: {:ok, "Event noted."}
 
+  defp fix_truncated_json(text) do
+    # Count open/close braces and brackets
+    opens = String.graphemes(text) |> Enum.count(&(&1 == "{"))
+    closes = String.graphemes(text) |> Enum.count(&(&1 == "}"))
+    open_brackets = String.graphemes(text) |> Enum.count(&(&1 == "["))
+    close_brackets = String.graphemes(text) |> Enum.count(&(&1 == "]"))
+
+    # Truncate any trailing partial values (cut at last complete key-value)
+    text = case Regex.run(~r/^(.*[\}\]\"\d])\s*,?\s*"?[^"]*$/, text, capture: :all_but_first) do
+      [clean] when opens > closes -> clean
+      _ -> text
+    end
+
+    # Close missing brackets/braces
+    text = text <> String.duplicate("]", max(0, open_brackets - close_brackets))
+    text <> String.duplicate("}", max(0, opens - closes))
+  end
+
   # ── AI call ─────────────────────────────────────────────────────
 
   defp call_ai(prompt) do
@@ -274,16 +292,32 @@ defmodule TePhoenix.AI.ContentGenerator do
       {:error, "No AI API key configured. Set ai_api_key in Settings."}
     else
       case Req.post("https://api.anthropic.com/v1/messages",
-        json: %{model: model, max_tokens: 500, temperature: 0.9, messages: [%{role: "user", content: prompt}]},
+        json: %{model: model, max_tokens: 1024, temperature: 0.9, messages: [%{role: "user", content: prompt}]},
         headers: [{"x-api-key", api_key}, {"anthropic-version", "2023-06-01"}],
-        receive_timeout: 20_000
+        receive_timeout: 30_000
       ) do
         {:ok, %Req.Response{status: 200, body: body}} ->
           text = get_in(body, ["content", Access.at(0), "text"]) |> to_string() |> String.trim()
-          cleaned = text |> String.replace(~r/```json\n?/, "") |> String.replace(~r/```\n?/, "") |> String.trim()
+          # Clean markdown fences and extract JSON
+          cleaned = text
+            |> String.replace(~r/```json\s*\n?/, "")
+            |> String.replace(~r/```\s*\n?/, "")
+            |> String.trim()
+
+          # Try to fix truncated JSON by closing open braces/brackets
+          cleaned = fix_truncated_json(cleaned)
+
           case Jason.decode(cleaned) do
             {:ok, json} -> {:ok, json}
-            _ -> {:error, "AI returned invalid JSON: #{String.slice(text, 0, 200)}"}
+            _ ->
+              # Last resort: try extracting just the first valid JSON object
+              case Regex.run(~r/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/, cleaned) do
+                [match] -> case Jason.decode(match) do
+                  {:ok, json} -> {:ok, json}
+                  _ -> {:error, "AI returned invalid JSON. Try again — sometimes AI needs a second attempt."}
+                end
+                _ -> {:error, "AI returned invalid JSON. Try again."}
+              end
           end
         {:ok, %Req.Response{status: s}} -> {:error, "AI returned status #{s}"}
         {:error, e} -> {:error, "AI request failed: #{inspect(e)}"}
