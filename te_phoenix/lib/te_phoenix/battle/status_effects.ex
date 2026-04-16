@@ -46,7 +46,15 @@ defmodule TePhoenix.Battle.StatusEffects do
         {combatant, append_log(result, "Unknown status: #{key}")}
 
       def ->
-        do_apply(combatant, def, result, opts)
+        # Status immunity check — combatant.block_statuses is a list of
+        # status keys that can never be applied (racial immunity, equipment, etc.)
+        blocked = Map.get(combatant, :block_statuses, []) || []
+
+        if to_string(key) in blocked do
+          {combatant, append_log(result, "#{combatant.name} is immune to #{def.name}!")}
+        else
+          do_apply(combatant, def, result, opts)
+        end
     end
   end
 
@@ -161,7 +169,9 @@ defmodule TePhoenix.Battle.StatusEffects do
   countdown, expiry. Returns `{combatant, result}`.
   """
   def tick(combatant, result) do
-    statuses = Map.get(combatant, :statuses, []) || []
+    statuses =
+      (Map.get(combatant, :statuses, []) || [])
+      |> Enum.sort_by(fn s -> -(s[:priority] || 0) end)
 
     Enum.reduce(statuses, {combatant, result, []}, fn status, {c, r, kept} ->
       {c, r} = apply_tick_effect(c, status, r)
@@ -256,7 +266,9 @@ defmodule TePhoenix.Battle.StatusEffects do
       }
   """
   def compute_modifiers(combatant) do
-    statuses = Map.get(combatant, :statuses, []) || []
+    # Merge traits (permanent pseudo-statuses) with active statuses
+    traits = Map.get(combatant, :traits, []) || []
+    statuses = (Map.get(combatant, :statuses, []) || []) ++ traits
 
     init = %{
       atk_mult: 1.0,

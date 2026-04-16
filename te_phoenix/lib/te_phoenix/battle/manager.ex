@@ -200,15 +200,49 @@ defmodule TePhoenix.Battle.Manager do
 
   @doc "End a battle, distribute rewards"
   def end_battle(battle_id, winner_team) do
+    state = State.get_state(battle_id)
     State.finish(battle_id, winner_team)
 
     # Distribute rewards (XP, gold, quest credit, win/loss records)
     TePhoenix.Battle.Rewards.distribute(battle_id, winner_team)
 
+    # Duel wager payout: if battle has a wager, award double to winner
+    pay_duel_wager(state, winner_team)
+
+    # Log to battle logger if enabled
+    try do
+      TePhoenix.Battle.BattleLogger.log_battle(battle_id, state, winner_team)
+    rescue
+      _ -> nil
+    end
+
     # Stop the GenServer after a delay (let clients receive final state)
     Process.send_after(self(), {:stop_battle, battle_id}, 5000)
 
     :ok
+  end
+
+  defp pay_duel_wager(state, winner_team) do
+    wager = Map.get(state, :duel_wager, 0)
+    if wager > 0 do
+      # Find winning human players
+      winner_members = Map.get(state.teams, winner_team, [])
+      Enum.each(winner_members, fn char_id ->
+        combatant = Map.get(state.combatants, char_id)
+        if combatant && !combatant.is_ai && combatant.user_id do
+          payout = wager * 2
+          try do
+            Repo.query!("UPDATE users SET currency=currency+? WHERE id=?", [payout, combatant.user_id])
+            TePhoenixWeb.Endpoint.broadcast!("user:#{char_id}", "notification", %{
+              type: "success",
+              text: "You won the duel wager! +#{payout} gold!"
+            })
+          rescue
+            _ -> nil
+          end
+        end
+      end)
+    end
   end
 
   # ══════════════════════════════════════════════════════════════════

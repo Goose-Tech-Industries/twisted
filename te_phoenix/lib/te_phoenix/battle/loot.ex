@@ -324,7 +324,13 @@ defmodule TePhoenix.Battle.Loot do
 
             combatants = Map.put(state.combatants, actor.char_id, actor)
             combatants = if target, do: Map.put(combatants, target.char_id, target), else: combatants
-            {%{state | combatants: combatants}, result}
+            state = %{state | combatants: combatants}
+
+            # Fire limit_break trigger
+            lb_ctx = %{attacker: actor, victim: target, limit_name: limit.name}
+            {state, result} = TePhoenix.Battle.Triggers.fire("limit_break_fired", state, lb_ctx, result)
+
+            {state, result}
         end
     end
   end

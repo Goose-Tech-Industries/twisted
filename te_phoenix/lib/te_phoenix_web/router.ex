@@ -29,6 +29,13 @@ defmodule TePhoenixWeb.Router do
   # PUBLIC (no auth required)
   # ══════════════════════════════════════════════════════════════════
 
+  # Public character API (no auth required)
+  scope "/api", TePhoenixWeb do
+    pipe_through :api
+
+    get "/character/:id", CharacterApiController, :show
+  end
+
   scope "/api/auth", TePhoenixWeb do
     pipe_through :api
 
@@ -203,6 +210,7 @@ defmodule TePhoenixWeb.Router do
       live "/entities", EntityManagerLive, :index
       live "/players", PlayerManagerLive, :index
       live "/players/:id", PlayerProfileLive, :show
+      live "/characters/create", CharacterCreateLive, :new
       live "/world", WorldHubLive, :index
       live "/world/maps/:id/edit", MapEditorLive, :edit
       live "/world/map-connections", MapConnectionsLive, :index

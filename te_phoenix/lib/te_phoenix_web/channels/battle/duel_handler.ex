@@ -88,6 +88,12 @@ defmodule TePhoenixWeb.Battle.DuelHandler do
         # Start the battle
         case Manager.create_battle(duel.challenger_id, char_id, :pvp) do
           {:ok, battle_id} ->
+            # Store wager on battle state for payout on end
+            if duel.wager_amount > 0 do
+              battle_state = TePhoenix.Battle.State.get_state(battle_id)
+              TePhoenix.Battle.State.replace_state(battle_id, Map.put(battle_state, :duel_wager, duel.wager_amount))
+            end
+
             # Both players will join the battle channel topic
             TePhoenixWeb.Endpoint.broadcast!(
               "user:#{duel.challenger_id}",

@@ -84,6 +84,16 @@ defmodule TePhoenix.Battle.Rewards do
     share_xp = max(1, trunc(base_xp / party_size * region_xp_mult * sys_xp_mult * event_xp_mult))
     share_gold = max(0, trunc(base_gold / party_size * region_gold_mult * sys_gold_mult * event_gold_mult))
 
+    # XP scaling by opponent level vs party average level
+    avg_player_level = if surviving_players != [] do
+      Enum.reduce(surviving_players, 0, fn {_id, c}, acc -> acc + (c[:level] || 1) end) / length(surviving_players)
+    else
+      1
+    end
+    target_level = if top_enemy, do: top_enemy[:level] || 1, else: 1
+    level_ratio = max(0.5, min(2.0, target_level / max(1, avg_player_level)))
+    share_xp = trunc(share_xp * level_ratio)
+
     # 7. Award each surviving player
     Enum.each(surviving_players, fn {char_id, winner} ->
       # Per-player status effect multipliers
@@ -284,6 +294,8 @@ defmodule TePhoenix.Battle.Rewards do
           end
 
           Logger.info("Character #{char_id} leveled up to #{new_level}!")
+          # Fire level_up trigger event
+          TePhoenixWeb.Endpoint.broadcast!("user:#{char_id}", "trigger_event", %{event: "level_up", new_level: new_level})
           true
         rescue
           _ -> false

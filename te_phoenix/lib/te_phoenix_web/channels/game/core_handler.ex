@@ -590,6 +590,9 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     npcs = MapData.get_npcs(new_map_id)
     push(socket, "npc_list", npcs)
 
+    # Fire location_enter trigger event
+    TePhoenixWeb.Endpoint.broadcast!("user:#{char_id}", "trigger_event", %{event: "location_enter", map_id: new_map_id})
+
     # Announce arrival
     updated_player = PlayerRegistry.get(char_id)
     TePhoenixWeb.Endpoint.broadcast!("map:#{new_map_id}", "player_joined", updated_player)

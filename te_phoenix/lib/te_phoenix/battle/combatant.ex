@@ -155,6 +155,18 @@ defmodule TePhoenix.Battle.Combatant do
     reactions_remaining: 1,
     equipped_reactions: [],
 
+    # Status immunity (vrde blockstatus)
+    block_statuses: [],
+
+    # Limit break gauge (0-100, fills on damage taken)
+    limit_gauge: 0.0,
+    limit_pts: 1.0,
+    dmg_pts: 100.0,
+    auto_revive_available: true,
+
+    # Traits / handicaps (permanent pseudo-statuses)
+    traits: [],
+
     # Real-time combat state
     rt_target: nil,
     rt_queued_ability: nil,

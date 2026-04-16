@@ -361,6 +361,14 @@ defmodule TePhoenix.Battle.StatusDefaults do
 
       # Burn removed by freeze, freeze removed by fire (element interplay)
       %{
+        key: "limit_gauge_on_damage",
+        name: "Limit Gauge Fill on Damage",
+        trigger: "damage_taken",
+        condition: %{},
+        effect: %{"increment_limit_gauge" => true, "to" => "victim"},
+        priority: 50
+      },
+      %{
         key: "fire_melts_freeze",
         name: "Fire element melts Freeze",
         trigger: "damage_taken",

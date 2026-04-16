@@ -140,12 +140,46 @@ defmodule TePhoenix.Battle.Triggers do
       end
 
     state_result =
+      if effect["increment_limit_gauge"] == true do
+        increment_limit(state_result, effect, ctx)
+      else
+        state_result
+      end
+
+    state_result =
       case effect["script_id"] do
         sid when is_integer(sid) -> run_script_effect(state_result, ctx, sid)
         _ -> state_result
       end
 
     state_result
+  end
+
+  defp increment_limit({state, result}, effect, ctx) do
+    target_name = effect["to"] || "victim"
+    actor = resolve_actor(target_name, ctx, state)
+
+    if actor do
+      damage = ctx[:damage] || 0
+      dmg_pts = Map.get(actor, :dmg_pts, 100.0)
+      limit_pts = Map.get(actor, :limit_pts, 1.0)
+      gain = if dmg_pts > 0, do: damage / dmg_pts * limit_pts, else: 0
+      new_gauge = min(100.0, (Map.get(actor, :limit_gauge, 0.0) || 0) + gain)
+      actor = Map.put(actor, :limit_gauge, new_gauge)
+      state = put_in(state.combatants[actor.char_id], actor)
+
+      if new_gauge >= 100.0 do
+        result = %{result |
+          log: ["💥 #{actor.name}'s limit break is ready!" | result.log],
+          actions: [%{type: :limit_ready, char_id: actor.char_id} | result.actions]
+        }
+        {state, result}
+      else
+        {state, result}
+      end
+    else
+      {state, result}
+    end
   end
 
   # ── Individual effect implementations ────────────────────────────

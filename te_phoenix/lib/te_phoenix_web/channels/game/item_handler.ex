@@ -41,6 +41,8 @@ defmodule TePhoenixWeb.Game.ItemHandler do
                 else
                   Repo.query!("DELETE FROM character_items WHERE id=?", [inv_id])
                 end
+                # Fire equip trigger event
+                TePhoenixWeb.Endpoint.broadcast!("user:#{char_id}", "trigger_event", %{event: "equip_item", item_id: item_id, slot: slot_key})
                 %{success: true, message: "Equipped!"}
               end
             _ -> %{success: false, message: "Item not found."}
@@ -63,6 +65,8 @@ defmodule TePhoenixWeb.Game.ItemHandler do
         {:ok, %{rows: [[item_id]]}} ->
           Repo.query!("INSERT INTO character_items (character_id, item_id, quantity) VALUES (?,?,1) ON DUPLICATE KEY UPDATE quantity=quantity+1", [char_id, item_id])
           Repo.query!("DELETE FROM character_equipment WHERE character_id=? AND slot_key=?", [char_id, slot_key])
+          # Fire unequip trigger event
+          TePhoenixWeb.Endpoint.broadcast!("user:#{char_id}", "trigger_event", %{event: "unequip_item", item_id: item_id, slot: slot_key})
           %{success: true, message: "Unequipped."}
         _ -> %{success: false, message: "Nothing there."}
       end
@@ -166,7 +170,28 @@ defmodule TePhoenixWeb.Game.ItemHandler do
     {:noreply, socket}
   end
 
-  def handle("use_item_on_map", %{"itemId" => _item_id}, socket) do
+  def handle("use_item", %{"itemId" => item_id} = payload, socket) do
+    char_id = socket.assigns[:char_id]
+    if is_nil(char_id), do: {:noreply, socket}
+
+    target_id = Map.get(payload, "targetId") || Map.get(payload, "target_id")
+
+    case TePhoenix.Game.ItemUse.use_item(char_id, item_id, target_id) do
+      {:ok, result} ->
+        push(socket, "item_used", %{
+          success: true,
+          item_name: result.item_name,
+          item_icon: result.item_icon,
+          effects: result.effects
+        })
+      {:error, reason} ->
+        push(socket, "item_used", %{success: false, message: reason})
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle("use_item_on_map", %{"itemId" => item_id}, socket) do
     char_id = socket.assigns[:char_id]
     p = PlayerRegistry.get(char_id)
     if is_nil(p), do: {:noreply, socket}
@@ -188,6 +213,8 @@ defmodule TePhoenixWeb.Game.ItemHandler do
         {:ok, responses} -> Enum.each(responses, fn r -> push(socket, "event_action", r) end)
         _ -> nil
       end
+      # Fire item_used trigger event
+      TePhoenixWeb.Endpoint.broadcast!("user:#{char_id}", "trigger_event", %{event: "item_used", item_id: item_id})
     end
 
     {:noreply, socket}

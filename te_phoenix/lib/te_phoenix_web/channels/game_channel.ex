@@ -79,6 +79,7 @@ defmodule TePhoenixWeb.GameChannel do
   def handle_in("drop_item" = e, p, s), do: ItemHandler.handle(e, p, s)
   def handle_in("pickup_item" = e, p, s), do: ItemHandler.handle(e, p, s)
   def handle_in("get_ground_items" = e, p, s), do: ItemHandler.handle(e, p, s)
+  def handle_in("use_item" = e, p, s), do: ItemHandler.handle(e, p, s)
   def handle_in("use_item_on_map" = e, p, s), do: ItemHandler.handle(e, p, s)
   def handle_in("use_capsule" = e, p, s), do: ItemHandler.handle(e, p, s)
   def handle_in("use_ability" = e, p, s), do: ItemHandler.handle(e, p, s)

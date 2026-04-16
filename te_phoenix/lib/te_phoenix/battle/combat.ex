@@ -458,12 +458,31 @@ defmodule TePhoenix.Battle.Combat do
     chance = min(95, base_chance + speed_bonus)
 
     if :rand.uniform(100) <= chance do
+      # Award partial XP/gold based on remaining HP percentage
+      hp_pct = actor.current_hp / max(1, actor.max_hp)
+      flee_xp = trunc(10 * hp_pct)
+      flee_gold = trunc(5 * hp_pct)
+      if flee_xp > 0 do
+        try do
+          Repo.query!("UPDATE characters SET experience=experience+? WHERE id=?", [flee_xp, actor.char_id])
+        rescue
+          _ -> nil
+        end
+      end
+      if flee_gold > 0 and actor.user_id do
+        try do
+          Repo.query!("UPDATE users SET currency=currency+? WHERE id=?", [flee_gold, actor.user_id])
+        rescue
+          _ -> nil
+        end
+      end
+
       actor = %{actor | current_hp: 0, knocked_out: true}
       state = %{state | combatants: Map.put(state.combatants, actor.char_id, actor)}
 
       result = %{result |
-        log: ["🏃 #{actor.name} flees the battle!" | result.log],
-        actions: [%{type: :flee, actor: actor.name, success: true} | result.actions]
+        log: ["🏃 #{actor.name} flees the battle! (Partial rewards: #{flee_xp} XP, #{flee_gold} gold)" | result.log],
+        actions: [%{type: :flee, actor: actor.name, success: true, xp: flee_xp, gold: flee_gold} | result.actions]
       }
       {state, result}
     else
@@ -523,7 +542,22 @@ defmodule TePhoenix.Battle.Combat do
             {state, %{result | log: [reason | result.log]}}
 
           true ->
-            resolve_skill_after_gate(state, actor, target, skill, effects, opts, result)
+            # Validate target matches skill's target_mode
+            target_mode = Map.get(effects, "target_mode", "enemy")
+            valid_target? = case target_mode do
+              "self" -> target != nil and target.char_id == actor.char_id
+              "ally" -> target != nil and target.team_id == actor.team_id
+              "enemy" -> target != nil and target.team_id != actor.team_id
+              "all" -> true
+              "none" -> true
+              _ -> true
+            end
+
+            if not valid_target? do
+              {state, %{result | log: ["#{actor.name}'s #{skill.name} requires a valid #{target_mode} target!" | result.log]}}
+            else
+              resolve_skill_after_gate(state, actor, target, skill, effects, opts, result)
+            end
         end
     end
   end

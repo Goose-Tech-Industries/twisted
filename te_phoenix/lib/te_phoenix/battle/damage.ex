@@ -311,7 +311,7 @@ defmodule TePhoenix.Battle.Damage do
                 crit_prefix = if crit, do: "💥 CRITICAL! ", else: ""
                 r = %{result |
                   log: ["#{crit_prefix}#{target.name} takes #{damage} damage!" | [log_text | result.log]],
-                  actions: [%{type: :damage, target: target.name, amount: damage, crit: crit, elements: elements} | result.actions]
+                  actions: [%{type: :damage, target: target.name, amount: damage, crit: crit, elements: elements, sound: settings[:hit_sound]} | result.actions]
                 }
                 {r, target}
               end
@@ -362,6 +362,21 @@ defmodule TePhoenix.Battle.Damage do
                 {target, result}
               else
                 {target, result}
+              end
+
+            # ── Auto-revive check (one per battle) ─────────────
+            {state, target, result} =
+              if target.current_hp <= 0 and Map.get(target, :auto_revive_available, false) do
+                revived_hp = max(1, div(target.max_hp, 2))
+                target = %{target | current_hp: revived_hp, auto_revive_available: false, knocked_out: false}
+                result = %{result |
+                  log: ["✨ #{target.name} auto-revives at 50% HP!" | result.log],
+                  actions: [%{type: :auto_revive, target: target.name} | result.actions]
+                }
+                state = %{state | combatants: Map.put(state.combatants, target.char_id, target)}
+                {state, target, result}
+              else
+                {state, target, result}
               end
 
             # ── Death / knockout check ──────────────────────────
