@@ -34,7 +34,8 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
       creating: false,
       form_data: %{},
       form_errors: [],
-      saga_form: nil
+      saga_form: nil,
+      show_form: false
     ) |> load_tab()}
   end
 
@@ -67,7 +68,73 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
     end
   end
 
-  # ── Generic CRUD events for action_windows, modifiers, dm_campaigns tabs ──
+  # ── CRUD for all tabs ────────────────────────────────────────────
+
+  def handle_event("new_record", _params, socket) do
+    form = Map.new(socket.assigns.columns -- ["id", "created_at", "updated_at"], fn col -> {col, ""} end)
+    {:noreply, assign(socket, creating: true, editing: nil, form_data: form)}
+  end
+
+  def handle_event("edit_record", %{"id" => id}, socket) do
+    table = current_table_for_tab(socket.assigns.tab)
+    case Repo.query("SELECT * FROM #{table} WHERE id = ?", [to_int(id)]) do
+      {:ok, %{rows: [row], columns: cols}} ->
+        form = Enum.zip(cols, row) |> Map.new()
+        {:noreply, assign(socket, editing: id, creating: false, form_data: form)}
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_record", _params, socket) do
+    {:noreply, assign(socket, creating: false, editing: nil, form_data: %{})}
+  end
+
+  def handle_event("delete_record", %{"id" => id}, socket) do
+    table = current_table_for_tab(socket.assigns.tab)
+    Repo.query("DELETE FROM #{table} WHERE id = ?", [to_int(id)])
+    {:noreply, assign(socket, creating: false, editing: nil) |> load_tab()}
+  end
+
+  def handle_event("save_new_record", %{"record" => params}, socket) do
+    table = current_table_for_tab(socket.assigns.tab)
+    cols = Map.keys(params) |> Enum.reject(&(&1 in ["id", "created_at", "updated_at"]))
+    col_str = Enum.map(cols, &"`#{&1}`") |> Enum.join(", ")
+    placeholders = Enum.map(cols, fn _ -> "?" end) |> Enum.join(", ")
+    vals = Enum.map(cols, &Map.get(params, &1, ""))
+
+    Repo.query("INSERT INTO #{table} (#{col_str}) VALUES (#{placeholders})", vals)
+    {:noreply, assign(socket, creating: false, form_data: %{}) |> load_tab()}
+  rescue
+    e ->
+      {:noreply, socket |> put_flash(:error, "Create failed: #{Exception.message(e)}")}
+  end
+
+  def handle_event("save_edit_record", %{"record" => params}, socket) do
+    table = current_table_for_tab(socket.assigns.tab)
+    id = socket.assigns.editing
+    cols = Map.keys(params) |> Enum.reject(&(&1 in ["id", "created_at", "updated_at"]))
+    set_str = Enum.map(cols, &"`#{&1}` = ?") |> Enum.join(", ")
+    vals = Enum.map(cols, &Map.get(params, &1, ""))
+
+    Repo.query("UPDATE #{table} SET #{set_str} WHERE id = ?", vals ++ [to_int(id)])
+    {:noreply, assign(socket, editing: nil, form_data: %{}) |> load_tab()}
+  rescue
+    e ->
+      {:noreply, socket |> put_flash(:error, "Save failed: #{Exception.message(e)}")}
+  end
+
+  defp current_table_for_tab(tab) do
+    %{
+      "rulesets" => "game_campaign_rulesets",
+      "campaigns" => "game_dm_campaigns",
+      "scheduler" => "game_scheduled_tasks",
+      "action_windows" => "game_action_windows",
+      "modifiers" => "game_ruleset_modifiers"
+    }[tab] || "game_campaign_rulesets"
+  end
+
+  # ── Generic CRUD events for action_windows, modifiers tabs ──
   def handle_event("new", _, s) do
     defaults = for {c, m} <- (s.assigns[:column_types] || %{}), c != "id", into: %{}, do: {c, m.default || ""}
     {:noreply, assign(s, creating: true, editing: nil, form_data: defaults, form_errors: [])}
@@ -414,6 +481,10 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
             class="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-200 focus:border-amber-500 focus:outline-none" />
         </form>
         <span class="text-xs text-zinc-600">{@total} records</span>
+        <button :if={@tab != "scheduler" and not @creating and @editing == nil} phx-click="new_record"
+          class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded-lg text-sm transition">
+          + New {tab_label(@tab)}
+        </button>
         <div class="ml-auto flex items-center gap-2">
           <button phx-click="prev_page" disabled={@page <= 1}
             class="px-2 py-1 bg-zinc-800 text-zinc-400 rounded text-xs hover:bg-zinc-700 disabled:opacity-30">Prev</button>
@@ -423,6 +494,24 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
         </div>
       </div>
 
+      <%!-- Create/Edit Form --%>
+      <div :if={@creating or @editing != nil} class="mb-6 p-4 border border-amber-700 rounded bg-zinc-950">
+        <h3 class="text-sm font-bold text-amber-400 mb-3">{if @creating, do: "Create New", else: "Edit"} {tab_label(@tab)}</h3>
+        <form phx-submit={if @creating, do: "save_new_record", else: "save_edit_record"} class="space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div :for={col <- @columns -- ["id", "created_at", "updated_at"]} class="flex flex-col gap-1">
+              <label class="text-xs font-bold text-zinc-500 uppercase">{col}</label>
+              <input type="text" name={"record[#{col}]"} value={(@form_data || %{})[col] || ""}
+                class="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-200" />
+            </div>
+          </div>
+          <div class="flex gap-2 pt-2">
+            <button type="submit" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded text-sm">Save</button>
+            <button type="button" phx-click="cancel_record" class="px-4 py-2 bg-zinc-800 text-zinc-400 rounded text-sm">Cancel</button>
+          </div>
+        </form>
+      </div>
+
       <!-- Data Table -->
       <div class="bg-zinc-900 border border-zinc-800 rounded-xl overflow-x-auto">
         <table class="w-full">
@@ -430,7 +519,7 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
             <tr class="border-b border-zinc-800 text-left">
               <th :for={col <- @columns}
                 class="px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500 whitespace-nowrap">{col}</th>
-              <th :if={@tab == "scheduler"} class="px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500 w-20">Toggle</th>
+              <th class="px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500 w-24">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -438,18 +527,20 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
               <td :for={col <- @columns} class="px-3 py-2 text-sm text-zinc-300 max-w-[200px] truncate whitespace-nowrap">
                 {format_cell(col, row[col])}
               </td>
-              <td :if={@tab == "scheduler"} class="px-3 py-2">
-                <button phx-click="toggle_task" phx-value-id={row["id"]}
-                  class={["text-xs px-2 py-1 rounded",
-                    row["is_enabled"] == 1 && "bg-green-900/50 text-green-400 hover:bg-green-800/50",
-                    row["is_enabled"] != 1 && "bg-zinc-800 text-zinc-500 hover:bg-zinc-700"]}>
+              <td class="px-3 py-2 flex gap-2">
+                <button phx-click="edit_record" phx-value-id={row["id"]} class="text-xs text-amber-500 hover:text-amber-400">Edit</button>
+                <button phx-click="delete_record" phx-value-id={row["id"]} data-confirm={"Delete ##{row["id"]}?"} class="text-xs text-red-500 hover:text-red-400">Del</button>
+                <button :if={@tab == "scheduler"} phx-click="toggle_task" phx-value-id={row["id"]}
+                  class={["text-xs px-2 py-0.5 rounded",
+                    row["is_enabled"] == 1 && "bg-green-900/50 text-green-400",
+                    row["is_enabled"] != 1 && "bg-zinc-800 text-zinc-500"]}>
                   {if row["is_enabled"] == 1, do: "On", else: "Off"}
                 </button>
               </td>
             </tr>
           </tbody>
         </table>
-        <div :if={@rows == []} class="p-8 text-center text-zinc-600 text-sm">No records found</div>
+        <div :if={@rows == []} class="p-8 text-center text-zinc-600 text-sm">No records yet. Click <strong>+ New</strong> to create one.</div>
       </div>
       <% end %>
     </div>
@@ -502,10 +593,15 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
         </div>
       </div>
 
-      <!-- Manual Saga Creation -->
-      <div class="flex justify-end -mt-2 mb-2">
+      <!-- Manual Saga Creation — equal prominence to AI -->
+      <div class="flex items-center gap-3 mb-4">
         <button phx-click="toggle_manual_saga"
-          class="text-xs text-zinc-500 hover:text-amber-400">{if @saga_manual_mode, do: "Cancel", else: "or create manually →"}</button>
+          class={["px-4 py-2 rounded text-sm font-bold transition-colors",
+            @saga_manual_mode && "bg-zinc-700 text-zinc-300",
+            !@saga_manual_mode && "bg-emerald-700 hover:bg-emerald-600 text-white"]}>
+          {if @saga_manual_mode, do: "✕ Cancel Manual Create", else: "✍️ Create Saga Manually"}
+        </button>
+        <span class="text-xs text-zinc-500">No AI required — full control over name, chapters, villain, and story.</span>
       </div>
 
       <div :if={@saga_manual_mode} class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-4">
