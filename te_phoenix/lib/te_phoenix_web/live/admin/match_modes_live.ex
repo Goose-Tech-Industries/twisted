@@ -75,22 +75,16 @@ defmodule TePhoenixWeb.Admin.MatchModesLive do
             <textarea name="description" rows="2" class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"><%= @editing["description"] %></textarea>
           </label>
           <div class="grid grid-cols-2 gap-3">
-            <label class="block">
-              <span class="text-xs text-zinc-400">Win Conditions JSON (type: last_standing / objective / score / timer)</span>
-              <textarea name="win_conditions_json" rows="3" class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["win_conditions_json"] %></textarea>
-            </label>
-            <label class="block">
-              <span class="text-xs text-zinc-400">Rewards JSON (xp_win/loss, gold_win/loss, rank_win/loss)</span>
-              <textarea name="rewards_json" rows="3" class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["rewards_json"] %></textarea>
-            </label>
+            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="match_win" field_name="win_conditions_json" schema={:match_win_condition} label="Win Condition" value={@editing["win_conditions_json"]} />
+            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="match_rewards" field_name="rewards_json" schema={:match_rewards} label="Rewards" value={@editing["rewards_json"]} />
           </div>
           <div class="grid grid-cols-2 gap-3">
             <label class="block">
-              <span class="text-xs text-zinc-400">Map Pool JSON (array of map IDs)</span>
+              <span class="text-xs text-zinc-400">Map Pool (comma-separated map IDs)</span>
               <input name="map_pool_json" value={@editing["map_pool_json"]} class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono" />
             </label>
             <label class="block">
-              <span class="text-xs text-zinc-400">Settings JSON</span>
+              <span class="text-xs text-zinc-400">Settings JSON (advanced)</span>
               <textarea name="settings_json" rows="2" class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["settings_json"] %></textarea>
             </label>
           </div>

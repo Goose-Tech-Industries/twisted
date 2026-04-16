@@ -120,21 +120,8 @@ defmodule TePhoenixWeb.Admin.CombatStatusesLive do
               class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"><%= @editing["description"] %></textarea>
           </label>
 
-          <label class="block">
-            <span class="text-xs text-zinc-400">
-              Effects JSON — flat map of modifiers (atk_mult, def_mult, speed_mult, dodge_floor, dodge_ceiling, prevent_action, prevent_magic, damage_taken_mult, advantage, disadvantage, drop_weapon, …)
-            </span>
-            <textarea name="effects_json" rows="4"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["effects_json"] %></textarea>
-          </label>
-
-          <label class="block">
-            <span class="text-xs text-zinc-400">
-              Tick JSON — {"{\"kind\":\"dot_pct_max\",\"amount\":0.03}"} / hot_pct_max / dot_flat / mp_regen_flat / custom+script_id
-            </span>
-            <textarea name="tick_json" rows="3"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["tick_json"] %></textarea>
-          </label>
+          <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="status_effects" field_name="effects_json" schema={:status_effects} label="Stat Modifiers" value={@editing["effects_json"]} />
+          <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="status_tick" field_name="tick_json" schema={:status_tick} label="Per-Turn Tick" value={@editing["tick_json"]} />
 
           <div class="grid grid-cols-2 gap-3">
             <label class="block">

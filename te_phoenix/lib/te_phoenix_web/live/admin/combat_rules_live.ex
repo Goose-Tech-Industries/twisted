@@ -99,30 +99,23 @@ defmodule TePhoenixWeb.Admin.CombatRulesLive do
               class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"><%= @editing["description"] %></textarea>
           </label>
 
-          <label class="block">
-            <span class="text-xs text-zinc-400">
-              Condition JSON — optional match keys: limb / element / crit / nonlethal / has_status / hp_below_pct / hp_above_pct / team
-            </span>
-            <textarea name="condition_json" rows="3"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["condition_json"] %></textarea>
-          </label>
+          <.live_component
+            module={TePhoenixWeb.Components.RuleBuilder}
+            id="condition_builder"
+            field_name="condition_json"
+            schema={:battle_rule_condition}
+            label="IF (conditions)"
+            value={@editing["condition_json"]}
+          />
 
-          <label class="block">
-            <span class="text-xs text-zinc-400">
-              Effect JSON — any subset of: apply_status / remove_status / damage_flat / heal_pct_max / knockout / queue_event / script_id. "to" = self | victim | attacker | target
-            </span>
-            <textarea name="effect_json" rows="4"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["effect_json"] %></textarea>
-          </label>
-
-          <div :if={@scripts != []} class="text-xs text-zinc-500">
-            <span class="text-zinc-400">Available visual-script graphs (copy id into effect_json as <code class="text-amber-400">"script_id": N</code>):</span>
-            <ul class="mt-1 ml-4 list-disc">
-              <%= for s <- @scripts do %>
-                <li>#<%= s.id %> — <%= s.name %></li>
-              <% end %>
-            </ul>
-          </div>
+          <.live_component
+            module={TePhoenixWeb.Components.RuleBuilder}
+            id="effect_builder"
+            field_name="effect_json"
+            schema={:battle_rule_effect}
+            label="THEN (effects)"
+            value={@editing["effect_json"]}
+          />
 
           <div class="flex gap-2 pt-2">
             <button type="submit" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">

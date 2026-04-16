@@ -99,13 +99,7 @@ defmodule TePhoenixWeb.Admin.SurfacesLive do
             </label>
           </div>
 
-          <label class="block">
-            <span class="text-xs text-zinc-400">
-              Reacts With JSON — map of surface_key to product_key, e.g. {"\"water\":\"steam\",\"oil\":\"fire\""}
-            </span>
-            <textarea name="reacts_with_json" rows="3"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["reacts_with_json"] %></textarea>
-          </label>
+          <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="surf_reacts" field_name="reacts_with_json" schema={:surface_reaction} label="Reacts With" value={@editing["reacts_with_json"]} />
 
           <div class="flex gap-2 pt-2">
             <button type="submit" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">

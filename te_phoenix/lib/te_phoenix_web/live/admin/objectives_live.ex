@@ -103,29 +103,9 @@ defmodule TePhoenixWeb.Admin.ObjectivesLive do
               class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"><%= @editing["description"] %></textarea>
           </label>
 
-          <label class="block">
-            <span class="text-xs text-zinc-400">on_progress JSON (fires each tick / advance)</span>
-            <textarea name="on_progress_json" rows="2"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["on_progress_json"] %></textarea>
-          </label>
-
-          <label class="block">
-            <span class="text-xs text-zinc-400">on_complete JSON (fires when objective is done)</span>
-            <textarea name="on_complete_json" rows="2"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["on_complete_json"] %></textarea>
-          </label>
-
-          <label class="block">
-            <span class="text-xs text-zinc-400">on_fail JSON (fires on failure)</span>
-            <textarea name="on_fail_json" rows="2"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["on_fail_json"] %></textarea>
-          </label>
-
-          <label class="block">
-            <span class="text-xs text-zinc-400">Settings JSON (type-specific config: max_interactors, skill_check_interval, capture_radius, etc.)</span>
-            <textarea name="settings_json" rows="3"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["settings_json"] %></textarea>
-          </label>
+          <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="obj_progress" field_name="on_progress_json" schema={:objective_callback} label="On Progress" value={@editing["on_progress_json"]} />
+          <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="obj_complete" field_name="on_complete_json" schema={:objective_callback} label="On Complete" value={@editing["on_complete_json"]} />
+          <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="obj_fail" field_name="on_fail_json" schema={:objective_callback} label="On Fail" value={@editing["on_fail_json"]} />
 
           <div class="flex gap-2 pt-2">
             <button type="submit" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
