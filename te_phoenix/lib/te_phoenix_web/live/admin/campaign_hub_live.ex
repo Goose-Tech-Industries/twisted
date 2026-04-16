@@ -3,6 +3,7 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
 
   alias TePhoenix.Repo
   alias TePhoenix.Game.SagaEngine
+  alias TePhoenixWeb.Admin.{SmartFields, FieldDescriptions}
 
   @tabs ~w(rulesets campaigns scheduler sagas action_windows modifiers)
 
@@ -500,9 +501,29 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
         <form phx-submit={if @creating, do: "save_new_record", else: "save_edit_record"} class="space-y-3">
           <div class="grid grid-cols-2 gap-3">
             <div :for={col <- @columns -- ["id", "created_at", "updated_at"]} class="flex flex-col gap-1">
-              <label class="text-xs font-bold text-zinc-500 uppercase">{col}</label>
-              <input type="text" name={"record[#{col}]"} value={(@form_data || %{})[col] || ""}
-                class="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-200" />
+              <label class="text-xs font-bold text-zinc-500 uppercase">{humanize_col(col)}</label>
+              <%= case SmartFields.smart_type(col) do %>
+                <% {:enum, options} -> %>
+                  <select name={"record[#{col}]"} class="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-200">
+                    <option value="">(select)</option>
+                    <%= for opt <- options do %>
+                      <option value={opt} selected={to_string((@form_data || %{})[col]) == opt}>{opt}</option>
+                    <% end %>
+                  </select>
+                <% {:fk, table} -> %>
+                  <select name={"record[#{col}]"} class="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-200">
+                    <option value="">(none)</option>
+                    <%= for opt <- SmartFields.fk_options(table) do %>
+                      <option value={opt.id} selected={to_string((@form_data || %{})[col]) == to_string(opt.id)}>{opt.name} (#{opt.id})</option>
+                    <% end %>
+                  </select>
+                <% :textarea -> %>
+                  <textarea name={"record[#{col}]"} rows="3" class="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-200">{(@form_data || %{})[col] || ""}</textarea>
+                <% _ -> %>
+                  <input type="text" name={"record[#{col}]"} value={(@form_data || %{})[col] || ""}
+                    class="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-200" />
+              <% end %>
+              <p :if={FieldDescriptions.get(col)} class="text-[10px] text-zinc-600 leading-snug">{FieldDescriptions.get(col)}</p>
             </div>
           </div>
           <div class="flex gap-2 pt-2">
@@ -545,6 +566,10 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
       <% end %>
     </div>
     """
+  end
+
+  defp humanize_col(col) do
+    col |> String.replace("_json", "") |> String.replace("_id", "") |> String.replace("_", " ") |> String.split(" ") |> Enum.map(&String.capitalize/1) |> Enum.join(" ")
   end
 
   defp tab_label("rulesets"), do: "Rulesets"

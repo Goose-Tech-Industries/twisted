@@ -9,7 +9,7 @@ defmodule TePhoenixWeb.Admin.HubCrudComponents do
   """
   use Phoenix.Component
   import TePhoenixWeb.Admin.CrudHelpers, only: [format_cell: 1, field_type: 2]
-  alias TePhoenixWeb.Admin.SmartFields
+  alias TePhoenixWeb.Admin.{SmartFields, FieldDescriptions}
 
   def hub_page(assigns) do
     ~H"""
@@ -61,6 +61,7 @@ defmodule TePhoenixWeb.Admin.HubCrudComponents do
               <div :for={col <- @editable_cols} class={smart_col_class(col)}>
                 <label class="text-xs font-bold text-zinc-500 uppercase tracking-wider">{humanize(col)}</label>
                 <.smart_field col={col} val={@form_data[col] || ""} ftype={field_type(@column_types, col)} />
+                <p :if={FieldDescriptions.get(col)} class="text-[10px] text-zinc-600 mt-0.5 leading-snug">{FieldDescriptions.get(col)}</p>
               </div>
             </div>
             <div class="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-800">
