@@ -290,7 +290,7 @@ defmodule TePhoenix.Game.GameDirector do
     end
   end
 
-  defp round_num(%Decimal{} = d), do: Decimal.to_integer(d)
+  defp round_num(%Decimal{} = d), do: d |> Decimal.round(0) |> Decimal.to_integer()
   defp round_num(f) when is_float(f), do: round(f)
   defp round_num(i) when is_integer(i), do: i
   defp round_num(_), do: 0

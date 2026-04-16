@@ -443,7 +443,7 @@ defmodule TePhoenix.Party.CardPacks do
       )
 
       {avg_rating, count} = stats
-      avg_float = if avg_rating, do: Decimal.to_float(avg_rating) |> Float.round(2), else: 0.0
+      avg_float = if avg_rating, do: Decimal.to_float(Decimal.round(avg_rating, 2)) |> Float.round(2), else: 0.0
 
       Repo.update!(Pack.changeset(pack, %{rating: avg_float, rating_count: count}))
       {:ok, %{rating: avg_float, count: count}}

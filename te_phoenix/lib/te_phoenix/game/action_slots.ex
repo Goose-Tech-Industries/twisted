@@ -122,7 +122,7 @@ defmodule TePhoenix.Game.ActionSlots do
 
     {multiplier, flat} = Enum.reduce(mods, {1.0, 0}, fn mod, {mult, flat} ->
       if is_nil(mod["action_type"]) or mod["action_type"] == action_type do
-        m = if mod["multiplier"], do: Decimal.to_float(mod["multiplier"]), else: 1.0
+        m = if mod["multiplier"], do: Decimal.to_float(Decimal.round(mod["multiplier"], 4)), else: 1.0
         f = mod["flat_bonus"] || 0
         {mult * m, flat + f}
       else

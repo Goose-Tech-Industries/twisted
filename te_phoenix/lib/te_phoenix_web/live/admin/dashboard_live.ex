@@ -44,8 +44,15 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
   end
 
   def handle_info({:director_error, error}, socket) do
-    {:noreply, assign(socket, director_loading: false, director_error: error)}
+    msg = if is_binary(error), do: error, else: inspect(error)
+    {:noreply, assign(socket, director_loading: false, director_error: "AI error: #{msg}")}
   end
+
+  def handle_info(:narrative_timeout, %{assigns: %{narrative_loading: true}} = socket) do
+    {:noreply, assign(socket, narrative_loading: false, narrative: "Narrative generation timed out. Check your AI API key in Settings → ai_api_key.")}
+  end
+
+  def handle_info(:narrative_timeout, socket), do: {:noreply, socket}
 
   # Chat messages for mood pulse (from PubSub subscription to social:lobby)
   def handle_info(%Phoenix.Socket.Broadcast{event: "chat_msg", payload: %{text: text, from: from}}, socket) do
@@ -80,8 +87,14 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
   end
 
   def handle_event("director_fallback", _params, socket) do
-    state = GameDirector.gather_state()
-    suggestions = GameDirector.fallback_suggestions(state)
+    {state, suggestions} = try do
+      state = GameDirector.gather_state()
+      suggestions = GameDirector.fallback_suggestions(state)
+      {state, suggestions}
+    rescue
+      e ->
+        {nil, [%{title: "Error loading game state", description: Exception.message(e), action: "none", priority: 1}]}
+    end
     {:noreply, assign(socket, director_suggestions: suggestions, director_loading: false)}
   end
 
@@ -152,8 +165,13 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     if socket.assigns.live_state do
       {:noreply, assign(socket, live_state: nil)}
     else
-      state = GameDirector.gather_state()
-      {:noreply, assign(socket, live_state: state)}
+      try do
+        state = GameDirector.gather_state()
+        {:noreply, assign(socket, live_state: state) |> put_flash(:info, "Live state loaded — #{state.online_count} players online")}
+      rescue
+        e ->
+          {:noreply, socket |> put_flash(:error, "Failed to load game state: #{Exception.message(e)}")}
+      end
     end
   end
 
@@ -161,9 +179,17 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     socket = assign(socket, narrative_loading: true)
     pid = self()
     Task.start(fn ->
-      text = generate_narrative_thread()
-      send(pid, {:narrative_result, text})
+      try do
+        text = generate_narrative_thread()
+        send(pid, {:narrative_result, text})
+      rescue
+        e -> send(pid, {:narrative_result, "Narrative generation failed: #{Exception.message(e)}"})
+      catch
+        _, e -> send(pid, {:narrative_result, "Narrative generation failed: #{inspect(e)}"})
+      end
     end)
+    # Timeout fallback — if AI takes too long, show an error after 30s
+    Process.send_after(self(), :narrative_timeout, 30_000)
     {:noreply, socket}
   end
 
