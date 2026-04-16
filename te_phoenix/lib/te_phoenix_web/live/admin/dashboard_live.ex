@@ -210,7 +210,21 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
         "Unknown action: #{action}"
     end
 
-    {:noreply, put_flash(socket, :info, result)}
+    # For content-creation actions, redirect to the relevant editor
+    redirect_path = case action do
+      "create_quest" -> "/sauce/quests"
+      "create_npc" -> "/sauce/world"
+      "create_item" -> "/sauce/content"
+      "create_skill" -> "/sauce/combat"
+      "create_map" -> "/sauce/world"
+      _ -> nil
+    end
+
+    if redirect_path do
+      {:noreply, socket |> put_flash(:info, result) |> push_navigate(to: redirect_path)}
+    else
+      {:noreply, put_flash(socket, :info, result)}
+    end
   end
 
   def handle_event("toggle_live_state", _params, socket) do
@@ -1364,21 +1378,30 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
             Online ({@online_count})
           </h3>
           <div class="space-y-3 max-h-64 overflow-y-auto">
-            <div :if={@online_by_map == []} class="text-sm text-zinc-600 py-6 text-center">
-              No players online
+            <%!-- Staff in AdminSauce --%>
+            <div :if={@admin_online != []}>
+              <p class="text-[10px] text-amber-400/70 uppercase tracking-wider mb-1">🔧 AdminSauce</p>
+              <div :for={a <- @admin_online} class="flex items-center justify-between py-1.5 border-b border-zinc-800/50 last:border-0">
+                <span class="flex items-center gap-2 text-sm">
+                  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                  <.styled_name name={a[:username] || "Staff"} role={to_string(a[:role] || "")} chat_color={a[:chat_color]} class="text-sm" />
+                </span>
+                <span class={"text-[10px] px-1.5 py-0.5 rounded border #{role_badge_classes(a[:role])}"}>{a[:role]}</span>
+              </div>
             </div>
+            <%!-- Game client players by map --%>
             <div :for={{map_name, players} <- @online_by_map}>
-              <p class="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">{map_name}</p>
-              <div
-                :for={p <- players}
-                class="flex items-center justify-between py-1.5 border-b border-zinc-800/50 last:border-0"
-              >
+              <p class="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">🗺️ {map_name}</p>
+              <div :for={p <- players} class="flex items-center justify-between py-1.5 border-b border-zinc-800/50 last:border-0">
                 <span class="flex items-center gap-2 text-sm text-zinc-300">
                   <span class="w-1.5 h-1.5 rounded-full bg-green-500" />
                   {p.name}
                 </span>
                 <span class="text-xs text-zinc-500 font-mono">Lv{p.level}</span>
               </div>
+            </div>
+            <div :if={@online_by_map == [] and @admin_online == []} class="text-sm text-zinc-600 py-6 text-center">
+              No one online
             </div>
           </div>
         </div>

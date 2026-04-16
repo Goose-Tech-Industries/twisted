@@ -179,12 +179,14 @@ defmodule TePhoenix.Game.GameDirector do
   end
 
   defp http_post(url, body, headers \\ [{"content-type", "application/json"}]) do
-    case :httpc.request(:post, {String.to_charlist(url), Enum.map(headers, fn {k,v} -> {String.to_charlist(k), String.to_charlist(v)} end), ~c"application/json", String.to_charlist(body)}, [{:timeout, 15_000}], []) do
-      {:ok, {{_, 200, _}, _, resp_body}} ->
-        Jason.decode(to_string(resp_body))
-      {:ok, {{_, code, _}, _, resp_body}} ->
+    case Req.post(url, body: body, headers: headers, receive_timeout: 20_000) do
+      {:ok, %Req.Response{status: 200, body: resp_body}} when is_binary(resp_body) ->
+        Jason.decode(resp_body)
+      {:ok, %Req.Response{status: 200, body: resp_body}} when is_map(resp_body) ->
+        {:ok, resp_body}
+      {:ok, %Req.Response{status: code, body: resp_body}} ->
         require Logger
-        Logger.warning("GameDirector HTTP #{code}: #{to_string(resp_body) |> String.slice(0, 200)}")
+        Logger.warning("GameDirector HTTP #{code}: #{inspect(resp_body) |> String.slice(0, 200)}")
         nil
       {:error, reason} ->
         require Logger
@@ -289,11 +291,11 @@ defmodule TePhoenix.Game.GameDirector do
 
   defp add_content_suggestions(suggestions) do
     checks = [
-      {"game_npcs WHERE is_enemy=1", 0, %{title: "⚠️ No Enemies", description: "You have no enemy NPCs! Players can't battle. Create some enemies first.", action: "none", priority: 5}},
-      {"game_skills", 0, %{title: "⚠️ No Skills", description: "No skills defined yet. Characters need abilities to fight.", action: "none", priority: 5}},
-      {"game_items", 0, %{title: "⚠️ No Items", description: "No items in the game. Add weapons, armor, and consumables.", action: "none", priority: 4}},
-      {"game_quest_defs", 0, %{title: "📝 No Quests", description: "No quests designed. Create some to give players goals.", action: "none", priority: 3}},
-      {"game_maps WHERE is_active=1", 1, %{title: "🗺️ Only 1 Map", description: "Consider creating more maps to give players areas to explore.", action: "none", priority: 2}}
+      {"game_npcs WHERE is_enemy=1", 0, %{title: "⚠️ No Enemies", description: "You have no enemy NPCs! Players can't battle. Click Fire to go create some.", action: "create_npc", priority: 5}},
+      {"game_skills", 0, %{title: "⚠️ No Skills", description: "No skills defined yet. Characters need abilities to fight. Click Fire to create skills.", action: "create_skill", priority: 5}},
+      {"game_items", 0, %{title: "⚠️ No Items", description: "No items in the game. Add weapons, armor, and consumables. Click Fire to go to items.", action: "create_item", priority: 4}},
+      {"game_quest_defs", 0, %{title: "📝 No Quests", description: "No quests designed. Create some to give players goals. Click Fire to open Quest Designer.", action: "create_quest", priority: 3}},
+      {"game_maps WHERE is_active=1", 1, %{title: "🗺️ Only 1 Map", description: "Consider creating more maps to give players areas to explore. Click Fire to go to maps.", action: "create_map", priority: 2}}
     ]
 
     Enum.reduce(checks, suggestions, fn {table, threshold, suggestion}, acc ->
