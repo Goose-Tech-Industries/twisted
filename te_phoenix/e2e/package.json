@@ -1,0 +1,12 @@
+{
+  "name": "te-phoenix-e2e",
+  "private": true,
+  "scripts": {
+    "test": "npx playwright test",
+    "test:headed": "npx playwright test --headed",
+    "report": "npx playwright show-report"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.59.1"
+  }
+}
