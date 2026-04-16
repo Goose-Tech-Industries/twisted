@@ -214,6 +214,7 @@ defmodule TePhoenixWeb.Router do
       live "/combat", CombatHubLive, :index
       live "/combat/statuses", CombatStatusesLive, :index
       live "/combat/rules", CombatRulesLive, :index
+      live "/combat/bosses", BossPhasesLive, :index
       live "/content", ContentHubLive, :index
       live "/social", SocialHubLive, :index
       live "/campaigns", CampaignHubLive, :index
