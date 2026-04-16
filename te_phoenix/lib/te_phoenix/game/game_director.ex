@@ -286,7 +286,25 @@ defmodule TePhoenix.Game.GameDirector do
     suggestions = [%{title: "🏰 Start a Raid", description: "Launch a horde survival wave sequence — great for engagement and testing combat",
       action: "raid", priority: 2} | suggestions]
 
-    suggestions |> Enum.sort_by(& &1.priority, :desc) |> Enum.take(8)
+    suggestions
+    |> filter_by_capabilities()
+    |> Enum.sort_by(& &1.priority, :desc)
+    |> Enum.take(8)
+  end
+
+  defp filter_by_capabilities(suggestions) do
+    Enum.filter(suggestions, fn s ->
+      case s.action do
+        a when a in ~w(tournament boss_spawn create_npc create_skill) ->
+          TePhoenix.Capabilities.enabled?(:combat)
+        "raid" -> TePhoenix.Capabilities.enabled?(:waves)
+        "create_quest" -> TePhoenix.Capabilities.enabled?(:quests)
+        "create_item" -> TePhoenix.Capabilities.enabled?(:inventory)
+        _ -> true
+      end
+    end)
+  rescue
+    _ -> suggestions
   end
 
   defp add_content_suggestions(suggestions) do

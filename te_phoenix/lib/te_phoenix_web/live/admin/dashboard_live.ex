@@ -25,7 +25,11 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       # Narrative thread
       narrative: nil, narrative_loading: false,
       # Mood pulse
-      mood_buffer: [], mood_score: nil
+      mood_buffer: [], mood_score: nil,
+      # Weather picker
+      show_weather_picker: false, weather_maps: [],
+      # Content health
+      content_health: []
     )
 
     if connected?(socket) do
@@ -176,21 +180,9 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
         "Broadcast sent."
 
       "weather" ->
-        weather_key = Enum.random(~w(rain heavy_rain snow blizzard fog sandstorm thunderstorm clear))
-        try do
-          TePhoenix.World.Weather.ensure_tables()
-          case Repo.query("SELECT id FROM game_maps WHERE is_active=1") do
-            {:ok, %{rows: rows}} when rows != [] ->
-              for [map_id] <- rows do
-                TePhoenix.World.Weather.set_weather(map_id, weather_key)
-              end
-            _ -> :ok
-          end
-        rescue
-          _ -> :ok
-        end
-        broadcast_all("🌦️ The weather shifts... #{weather_key} rolls across the realm!", "warning", actor)
-        "Weather changed to #{weather_key}."
+        # Open weather picker instead of random
+        send(self(), :open_weather_picker)
+        "Opening weather picker..."
 
       "double_xp" ->
         Repo.query("INSERT INTO system_settings (setting_key, setting_value) VALUES ('double_xp', '1') ON DUPLICATE KEY UPDATE setting_value='1'")
@@ -232,9 +224,17 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       "world_event" ->
         # Set a world flag to trigger event
         Repo.query("INSERT INTO game_world_flags (flag, value, updated_at) VALUES ('world_event_active', '1', NOW()) ON DUPLICATE KEY UPDATE value='1', updated_at=NOW()")
+        # Also broadcast to all map channels so clients receive it
+        case Repo.query("SELECT id FROM game_maps WHERE is_active=1") do
+          {:ok, %{rows: rows}} ->
+            for [map_id] <- rows do
+              Phoenix.PubSub.broadcast(TePhoenix.PubSub, "map:#{map_id}:world_flags", {:world_flag, "world_event_active", "1"})
+            end
+          _ -> :ok
+        end
         broadcast_all("🌑 Something stirs in the ancient cairns... a world event has begun!", "warning", actor)
         TePhoenix.Game.AdminAudit.log("gm_world_event", actor, nil, "activated")
-        "World event activated (flag: world_event_active)."
+        "World event activated — flag broadcast to all maps."
 
       "gold_drop" ->
         # Actually give gold to all online characters
@@ -325,6 +325,41 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       TePhoenix.Game.AutoPilot.enable()
       {:noreply, assign(socket, auto_pilot: true) |> put_flash(:info, "Auto-Pilot enabled. Safe events will fire every 10 min.")}
     end
+  end
+
+  # ── Weather Picker ──────────────────────────────────────────────
+
+  def handle_event("open_weather_picker", _params, socket) do
+    maps = case Repo.query("SELECT id, name FROM game_maps WHERE is_active=1 ORDER BY name") do
+      {:ok, %{rows: rows}} -> Enum.map(rows, fn [id, name] -> %{id: id, name: name} end)
+      _ -> []
+    end
+    {:noreply, assign(socket, show_weather_picker: true, weather_maps: maps)}
+  end
+
+  def handle_event("apply_weather", %{"weather" => weather, "map_id" => map_id_str}, socket) do
+    map_id = String.to_integer(map_id_str)
+    TePhoenix.World.Weather.ensure_tables()
+    TePhoenix.World.Weather.set_weather(map_id, weather)
+    map_name = case Repo.query("SELECT name FROM game_maps WHERE id=?", [map_id]) do
+      {:ok, %{rows: [[n]]}} -> n
+      _ -> "Map #{map_id}"
+    end
+    actor = %{id: socket.assigns[:session_user_id], name: socket.assigns[:session_username] || "GM"}
+    broadcast_all("🌦️ Weather changed to #{weather} in #{map_name}!", "info", actor)
+    {:noreply, assign(socket, show_weather_picker: false) |> put_flash(:info, "Weather set to #{weather} on #{map_name}")}
+  end
+
+  def handle_event("close_weather_picker", _params, socket) do
+    {:noreply, assign(socket, show_weather_picker: false)}
+  end
+
+  def handle_info(:open_weather_picker, socket) do
+    maps = case Repo.query("SELECT id, name FROM game_maps WHERE is_active=1 ORDER BY name") do
+      {:ok, %{rows: rows}} -> Enum.map(rows, fn [id, name] -> %{id: id, name: name} end)
+      _ -> []
+    end
+    {:noreply, assign(socket, show_weather_picker: true, weather_maps: maps)}
   end
 
   # ── Data loading ──────────────────────────────────────────────
@@ -510,7 +545,8 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       player_callouts: player_callouts,
       retention_risks: retention_risks,
       anomalies: detect_anomalies(online_players),
-      peak_hours: load_peak_hours()
+      peak_hours: load_peak_hours(),
+      content_health: compute_content_health()
     )
   end
 
@@ -829,6 +865,48 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       end
     }
   end
+
+  # ── Content Health ─────────────────────────────────────────────
+
+  defp compute_content_health do
+    checks = [
+      {"Maps", "game_maps WHERE is_active=1"},
+      {"NPCs", "game_npcs WHERE is_active=1"},
+      {"Enemies", "game_npcs WHERE is_enemy=1"},
+      {"Items", "game_items"},
+      {"Skills", "game_skills"},
+      {"Quests", "game_quest_defs WHERE enabled=1"},
+      {"Classes", "game_classes"},
+      {"Races", "game_races"}
+    ]
+
+    Enum.map(checks, fn {label, table} ->
+      count = case Repo.query("SELECT COUNT(*) FROM #{table}") do
+        {:ok, %{rows: [[c]]}} -> safe_int(c)
+        _ -> 0
+      end
+      status = cond do
+        count == 0 -> :missing
+        count < 3 -> :low
+        true -> :good
+      end
+      %{label: label, count: count, status: status}
+    end)
+  rescue
+    _ -> []
+  end
+
+  # ── Weather Icon Helper ──────────────────────────────────────────
+
+  defp weather_icon("clear"), do: "☀️"
+  defp weather_icon("rain"), do: "🌧️"
+  defp weather_icon("heavy_rain"), do: "⛈️"
+  defp weather_icon("snow"), do: "🌨️"
+  defp weather_icon("blizzard"), do: "❄️"
+  defp weather_icon("fog"), do: "🌫️"
+  defp weather_icon("sandstorm"), do: "🏜️"
+  defp weather_icon("thunderstorm"), do: "⚡"
+  defp weather_icon(_), do: "🌤️"
 
   # ── Narrative Thread ─────────────────────────────────────────────
 
@@ -1213,6 +1291,28 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
           <button phx-click="execute_action" phx-value-action={@generated_content.type} phx-value-title="Regenerate"
             class="px-4 py-2 bg-amber-800 hover:bg-amber-700 text-amber-200 rounded text-sm">
             🔄 Regenerate
+          </button>
+        </div>
+      </div>
+
+      <%!-- Weather Picker --%>
+      <div :if={@show_weather_picker} class="bg-zinc-900 border-2 border-cyan-700 rounded-xl p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-bold text-cyan-400">🌦️ Set Weather</h3>
+          <button phx-click="close_weather_picker" class="text-zinc-500 hover:text-zinc-300 text-sm">✕</button>
+        </div>
+        <div class="grid grid-cols-4 gap-2 mb-3">
+          <button :for={w <- ~w(clear rain heavy_rain snow blizzard fog sandstorm thunderstorm)}
+            phx-click="apply_weather" phx-value-weather={w} phx-value-map_id={to_string(List.first(@weather_maps, %{id: 1}).id)}
+            class="px-3 py-2 bg-zinc-800 hover:bg-cyan-900/50 border border-zinc-700 hover:border-cyan-600 rounded text-xs text-zinc-300 text-center">
+            {weather_icon(w)} {w}
+          </button>
+        </div>
+        <div :if={length(@weather_maps) > 1} class="text-xs text-zinc-500 mb-2">Apply to specific map:</div>
+        <div :if={length(@weather_maps) > 1} class="flex flex-wrap gap-1">
+          <button :for={m <- @weather_maps} phx-click="apply_weather" phx-value-weather="rain" phx-value-map_id={to_string(m.id)}
+            class="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-[10px] text-zinc-400">
+            {m.name}
           </button>
         </div>
       </div>
@@ -1669,6 +1769,24 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
               <span class="text-[10px] text-zinc-600 shrink-0">{format_datetime(action.timestamp)}</span>
             </div>
             <div :if={@recent_admin_actions == []} class="text-xs text-zinc-600 py-4 text-center">No recent GM actions</div>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Content Health --%>
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+        <h3 class="text-sm font-medium text-zinc-300 flex items-center gap-2 mb-3">
+          <span>📋</span> Content Health
+        </h3>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-1">
+          <div :for={c <- @content_health} class="flex items-center justify-between py-1 px-2 rounded text-xs">
+            <span class="text-zinc-400">{c.label}</span>
+            <span class={[
+              "font-mono font-bold",
+              c.status == :good && "text-green-400",
+              c.status == :low && "text-yellow-400",
+              c.status == :missing && "text-red-400"
+            ]}>{c.count}</span>
           </div>
         </div>
       </div>

@@ -208,10 +208,13 @@ defmodule TePhoenix.Waves.Registry do
   defp decode_json(_, d), do: d
 
   defp seed_defaults_if_empty do
-    case Repo.query("SELECT COUNT(*) FROM #{@table}") do
-      {:ok, %{rows: [[0]]}} ->
-        Enum.each(TePhoenix.Waves.Defaults.defs(), &persist/1)
-      _ -> :ok
+    # Seed any missing default defs (not just when table is empty)
+    for d <- TePhoenix.Waves.Defaults.defs() do
+      key = d[:key] || d["key"]
+      case Repo.query("SELECT COUNT(*) FROM #{@table} WHERE `key` = ?", [key]) do
+        {:ok, %{rows: [[0]]}} -> persist(d)
+        _ -> :ok
+      end
     end
   rescue
     _ -> :ok
