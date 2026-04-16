@@ -14,6 +14,7 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
       director_suggestions: [], director_loading: false, director_error: nil,
       engagement_score: 0, player_callouts: [], retention_risks: [],
       auto_pilot: TePhoenix.Game.AutoPilot.enabled?(),
+      admin_online: [],
       # Live state context
       live_state: nil,
       # Anomaly detection
@@ -207,7 +208,9 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
 
   defp load_stats(socket) do
     online_players = PlayerRegistry.all()
-    online_count = length(online_players)
+    # Include admins currently in AdminSauce
+    admin_online = TePhoenix.Game.AdminPresence.all()
+    online_count = length(online_players) + length(admin_online)
 
     total_users = query_count("SELECT COUNT(*) FROM users")
     total_chars = query_count("SELECT COUNT(*) FROM characters")
@@ -355,6 +358,7 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
 
     assign(socket,
       online_count: online_count,
+      admin_online: admin_online,
       online_by_map: online_by_map,
       map_population: map_population,
       total_users: total_users,
@@ -766,17 +770,19 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     model = config["model"] || config[:model] || ""
 
     if provider == "anthropic" and api_key != "" do
-      url = "https://api.anthropic.com/v1/messages"
       m = if model != "", do: model, else: "claude-haiku-4-5-20251001"
-      headers = [{"x-api-key", api_key}, {"anthropic-version", "2023-06-01"}, {"content-type", "application/json"}]
-      body = Jason.encode!(%{model: m, max_tokens: 200, temperature: 0.9, messages: [%{role: "user", content: prompt}]})
-      case :httpc.request(:post, {~c"#{url}", Enum.map(headers, fn {k,v} -> {String.to_charlist(k), String.to_charlist(v)} end), ~c"application/json", String.to_charlist(body)}, [{:timeout, 15_000}], []) do
-        {:ok, {{_, 200, _}, _, resp}} ->
-          case Jason.decode(to_string(resp)) do
-            {:ok, json} -> {:ok, get_in(json, ["content", Access.at(0), "text"]) |> to_string() |> String.trim()}
-            _ -> nil
-          end
-        _ -> nil
+
+      case Req.post("https://api.anthropic.com/v1/messages",
+        json: %{model: m, max_tokens: 200, temperature: 0.9, messages: [%{role: "user", content: prompt}]},
+        headers: [{"x-api-key", api_key}, {"anthropic-version", "2023-06-01"}],
+        receive_timeout: 15_000
+      ) do
+        {:ok, %Req.Response{status: 200, body: body}} ->
+          {:ok, get_in(body, ["content", Access.at(0), "text"]) |> to_string() |> String.trim()}
+        {:ok, %Req.Response{status: status, body: body}} ->
+          {:error, "AI returned status #{status}: #{inspect(body)}"}
+        {:error, e} ->
+          {:error, "AI request failed: #{inspect(e)}"}
       end
     else
       nil
@@ -1203,13 +1209,21 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
         <div :if={@live_state} class="px-5 pb-4 border-t border-zinc-800">
           <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3">
             <div>
-              <div class="text-[10px] text-zinc-500 uppercase mb-1">Online ({@live_state.online_count})</div>
+              <div class="text-[10px] text-zinc-500 uppercase mb-1">Players Online ({@live_state.online_count})</div>
               <div class="text-xs text-zinc-300 space-y-0.5 max-h-32 overflow-y-auto">
                 <div :for={m <- @live_state.by_map} class="flex justify-between">
                   <span>{m.name}</span>
                   <span class="text-zinc-500">{m.count}p · Lv{Enum.join(m.levels, ",")}</span>
                 </div>
-                <div :if={@live_state.by_map == []} class="text-zinc-600 italic">Empty</div>
+                <div :if={@live_state.by_map == []} class="text-zinc-600 italic">No game-client players</div>
+              </div>
+              <div class="text-[10px] text-amber-400/70 uppercase mt-2 mb-1">Staff in AdminSauce ({length(@admin_online)})</div>
+              <div class="text-xs text-zinc-300 space-y-0.5 max-h-32 overflow-y-auto">
+                <div :for={a <- @admin_online} class="flex justify-between">
+                  <span class="text-amber-400">{a[:username] || a[:name] || "Admin ##{a[:user_id]}"}</span>
+                  <span class="text-zinc-500">🔧 {a[:page] || "Dashboard"}</span>
+                </div>
+                <div :if={@admin_online == []} class="text-zinc-600 italic">No staff online</div>
               </div>
             </div>
             <div>
