@@ -150,10 +150,36 @@ defmodule TePhoenix.Battle.BossPhases do
   # ── Phase entry ─────────────────────────────────────────────────
 
   defp enter_phase(state, combatant, phase_def, result) do
-    Logger.info("Boss #{combatant.name} enters #{phase_def.name} (phase #{phase_def.phase})")
+    old_name = combatant.name
+    Logger.info("Boss #{old_name} enters #{phase_def.name} (phase #{phase_def.phase})")
 
     combatant = Map.put(combatant, :boss_current_phase, phase_def.phase)
     on_enter = phase_def.on_enter || %{}
+
+    # ── Full transformation (Broly → Super Broly, Sephiroth → Safer) ──
+    # The "transform" block swaps the combatant's entire identity:
+    # new name, sprite, HP pool, moveset, weaknesses, size, elements.
+    # Everything is optional — omit fields to keep the current value.
+    #
+    # Example on_enter JSON:
+    #   "transform": {
+    #     "name": "Super Broly",
+    #     "icon": "👹",
+    #     "sprite_url": "/sprites/super_broly.png",
+    #     "new_max_hp": 5000,
+    #     "restore_hp_pct": 1.0,
+    #     "stat_overrides": {"atk": 80, "def": 50, "speed": 30, "mo": 40, "md": 35},
+    #     "weaknesses": ["ice", "holy"],
+    #     "weapon_elements": ["fire", "dark"],
+    #     "moveset_skill_ids": [101, 102, 103],
+    #     "combo_arts": [{"name": "Final Crash", "sequence_str": "H,H,L,R", "damage_formula": "ATK*5"}],
+    #     "limb_hp": {"head": 200, "torso": 300, "left_arm": 150, "right_arm": 150, "left_leg": 150, "right_leg": 150},
+    #     "grid_size": 2,
+    #     "animation": "transform_burst",
+    #     "clear_statuses": true,
+    #     "clear_cooldowns": true
+    #   }
+    combatant = apply_transformation(combatant, on_enter)
 
     # Apply statuses
     {combatant, result} = apply_phase_statuses(combatant, on_enter, result)
@@ -176,16 +202,29 @@ defmodule TePhoenix.Battle.BossPhases do
     # Dialogue
     result = maybe_add_dialogue(result, combatant, on_enter)
 
-    # Broadcast
+    # Determine display name (may have changed via transform)
+    display_name = combatant.name
+    transform_data = on_enter["transform"]
+
+    # Broadcast — includes full transform payload for client rendering
     result = %{result |
-      log: ["⚠️ #{combatant.name} enters #{phase_def.name}!" | result.log],
+      log: [
+        if(display_name != old_name,
+          do: "🔥 #{old_name} transforms into #{display_name}!",
+          else: "⚠️ #{display_name} enters #{phase_def.name}!")
+        | result.log
+      ],
       actions: [%{
         type: :boss_phase,
-        boss: combatant.name,
+        boss: display_name,
+        old_name: old_name,
         phase: phase_def.phase,
         name: phase_def.name,
         music: on_enter["music"],
-        visual: on_enter["visual"]
+        visual: on_enter["visual"],
+        transform: transform_data,
+        sprite_url: transform_data && transform_data["sprite_url"],
+        animation: transform_data && transform_data["animation"]
       } | result.actions]
     }
 
@@ -205,6 +244,89 @@ defmodule TePhoenix.Battle.BossPhases do
       {state, combatant, result}
     end
   end
+
+  # ── Full form transformation ──────────────────────────────────────
+
+  defp apply_transformation(combatant, %{"transform" => nil}), do: combatant
+  defp apply_transformation(combatant, %{"transform" => t}) when is_map(t) do
+    combatant
+    |> maybe_set(:name, t["name"])
+    |> maybe_set(:icon, t["icon"])
+    |> maybe_set(:sprite_url, t["sprite_url"])
+    |> transform_hp(t)
+    |> transform_stats(t)
+    |> maybe_set(:weaknesses, t["weaknesses"])
+    |> maybe_set(:weapon_elements, t["weapon_elements"])
+    |> maybe_set(:combo_arts, t["combo_arts"])
+    |> transform_limbs(t)
+    |> transform_moveset(t)
+    |> maybe_clear_statuses(t)
+    |> maybe_clear_cooldowns(t)
+  end
+  defp apply_transformation(combatant, _), do: combatant
+
+  defp maybe_set(c, _key, nil), do: c
+  defp maybe_set(c, key, val), do: Map.put(c, key, val)
+
+  defp transform_hp(combatant, t) do
+    case t["new_max_hp"] do
+      nil ->
+        combatant
+
+      new_max when is_number(new_max) ->
+        restore_pct = t["restore_hp_pct"] || 1.0
+        new_hp = max(1, trunc(new_max * restore_pct))
+        %{combatant | max_hp: trunc(new_max), current_hp: new_hp}
+    end
+  end
+
+  defp transform_stats(combatant, t) do
+    case t["stat_overrides"] do
+      nil -> combatant
+      %{} = overrides when map_size(overrides) == 0 -> combatant
+      overrides ->
+        combatant
+        |> maybe_override_stat(:atk, overrides["atk"])
+        |> maybe_override_stat(:def, overrides["def"])
+        |> maybe_override_stat(:mo, overrides["mo"])
+        |> maybe_override_stat(:md, overrides["md"])
+        |> maybe_override_stat(:speed, overrides["speed"])
+        |> maybe_override_stat(:luck, overrides["luck"])
+    end
+  end
+
+  defp maybe_override_stat(c, _key, nil), do: c
+  defp maybe_override_stat(c, key, val) when is_number(val), do: Map.put(c, key, trunc(val))
+  defp maybe_override_stat(c, _key, _), do: c
+
+  defp transform_limbs(combatant, t) do
+    case t["limb_hp"] do
+      nil -> combatant
+      %{} = limbs when map_size(limbs) > 0 ->
+        %{combatant | limb_hp: limbs, wound_levels: %{}}
+      _ -> combatant
+    end
+  end
+
+  defp transform_moveset(combatant, t) do
+    case t["moveset_skill_ids"] do
+      nil -> combatant
+      ids when is_list(ids) -> Map.put(combatant, :skills, ids)
+      _ -> combatant
+    end
+  end
+
+  defp maybe_clear_statuses(combatant, %{"clear_statuses" => true}) do
+    Map.put(combatant, :statuses, [])
+  end
+  defp maybe_clear_statuses(combatant, _), do: combatant
+
+  defp maybe_clear_cooldowns(combatant, %{"clear_cooldowns" => true}) do
+    Map.put(combatant, :cooldowns, %{})
+  end
+  defp maybe_clear_cooldowns(combatant, _), do: combatant
+
+  # ── Phase status application ────────────────────────────────────
 
   defp apply_phase_statuses(combatant, on_enter, result) do
     statuses = on_enter["apply_status"] || []
