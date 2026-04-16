@@ -393,13 +393,13 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
   defp safe_int(v) when is_integer(v), do: v
   defp safe_int(v) when is_float(v), do: round(v)
   defp safe_int(v) when is_binary(v), do: String.to_integer(v)
-  defp safe_int(%Decimal{} = d), do: Decimal.to_integer(d)
+  defp safe_int(%Decimal{} = d), do: d |> Decimal.round(0) |> Decimal.to_integer()
   defp safe_int(_), do: 0
 
   defp safe_float(nil), do: 0.0
   defp safe_float(v) when is_float(v), do: Float.round(v, 1)
   defp safe_float(v) when is_integer(v), do: v / 1
-  defp safe_float(%Decimal{} = d), do: Decimal.to_float(d) |> Float.round(1)
+  defp safe_float(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_float()
   defp safe_float(_), do: 0.0
 
   defp format_gold(amount) when amount >= 1_000_000,
