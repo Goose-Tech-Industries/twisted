@@ -12,7 +12,7 @@ defmodule TePhoenix.Battle.Damage do
     Weapon triangle → Passives → Elemental reactions → Post-damage effects
   """
 
-  alias TePhoenix.Battle.{Combatant, State, Formula, StatusEffects, Triggers, Systems, BossPhases, Respawn}
+  alias TePhoenix.Battle.{Combatant, State, Formula, StatusEffects, Triggers, Systems, BossPhases, Respawn, Tactics, Reactions}
 
   @doc """
   Resolve damage from a command or direct damage effect.
@@ -210,6 +210,25 @@ defmodule TePhoenix.Battle.Damage do
           damage =
             if target.stance == "GUARD", do: trunc(damage * 0.5), else: damage
 
+          # ── Tactical modifiers (cover, flanking, elevation, LOS) ─
+          tactics = Tactics.calculate(state, actor, target)
+
+          # LOS check for ranged attacks (melee always has LOS)
+          range = Map.get(effects, "range", 1)
+          if range > 1 and not tactics.los and not Map.get(effects, "ignore_los", false) do
+            result = %{result | log: ["⛔ No line of sight to #{target.name}!" | result.log]}
+            state = %{state | combatants: state.combatants |> Map.put(actor.char_id, actor) |> Map.put(target.char_id, target)}
+            {state, result}
+          else
+
+          # Apply cover (ranged only) + flanking + elevation
+          damage =
+            if range > 1 do
+              trunc(damage * tactics.cover * tactics.flanking * tactics.elevation)
+            else
+              trunc(damage * tactics.flanking * tactics.elevation)
+            end
+
           # ── Active defense (dodge/block/counter) ──────────────
           # Dodge floor from statuses (e.g. haste) + ki-ranged bonus on
           # ranged/magic attacks. Both purely data-driven.
@@ -362,6 +381,11 @@ defmodule TePhoenix.Battle.Damage do
               |> Map.put(target.char_id, target)
             }
 
+            # ── Defender reactions (counter, reflect, evasion) ────
+            target_for_react = Map.get(state.combatants, target.char_id, target)
+            react_ctx = %{attacker: actor, victim: target_for_react, damage: damage, damage_type: Map.get(effects, "type", "physical"), element: List.first(elements), range: Map.get(effects, "range", 1)}
+            {state, result} = Reactions.check_reactions(state, target_for_react, "damage_taken", react_ctx, result)
+
             # ── Boss phase transition check ──────────────────────
             target = Map.get(state.combatants, target.char_id, target)
             {state, target, result} = BossPhases.check_phase_transition(state, target, result)
@@ -374,7 +398,8 @@ defmodule TePhoenix.Battle.Damage do
             {state, result}
           end
         end
-      end
+      end  # end LOS check
+    end
     end
   end
 

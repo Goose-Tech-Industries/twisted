@@ -151,6 +151,10 @@ defmodule TePhoenix.Battle.Combatant do
     boss_npc_id: nil,
     boss_current_phase: 0,
 
+    # Reactions (auto-counter, auto-potion, opportunity attacks)
+    reactions_remaining: 1,
+    equipped_reactions: [],
+
     # Real-time combat state
     rt_target: nil,
     rt_queued_ability: nil,

@@ -374,7 +374,23 @@ defmodule TePhoenix.Battle.Settings do
     # DB are gated: can't re-use until cooldown expires. Haste/slow
     # status effects modify the tick rate via cooldown_rate_mult.
     enable_cooldowns: true,
-    cooldown_global_mult: 1.0
+    cooldown_global_mult: 1.0,
+
+    # Tactical grid combat (cover, LOS, flanking, elevation)
+    enable_los: false,
+    enable_cover: false,
+    cover_half_reduction: 0.25,
+    cover_three_quarter_reduction: 0.50,
+    enable_flanking: false,
+    flanking_side_bonus: 0.15,
+    flanking_rear_bonus: 0.25,
+    enable_elevation_combat: false,
+    elevation_high_ground_bonus: 0.10,
+    elevation_low_ground_penalty: 0.10,
+
+    # Reactions (auto-counter, auto-potion, opportunity attacks, baton pass)
+    enable_reactions: false,
+    reactions_per_turn: 1
   }
 
   @doc "Returns default settings map"

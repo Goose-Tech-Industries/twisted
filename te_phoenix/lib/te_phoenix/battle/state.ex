@@ -14,7 +14,7 @@ defmodule TePhoenix.Battle.State do
   use GenServer
   require Logger
 
-  alias TePhoenix.Battle.{Combatant, Settings, StatusEffects, Triggers, Projectiles, Respawn}
+  alias TePhoenix.Battle.{Combatant, Settings, StatusEffects, Triggers, Projectiles, Respawn, Surfaces, Reactions}
 
   # ── State struct ────────────────────────────────────────────────
 
@@ -542,7 +542,11 @@ defmodule TePhoenix.Battle.State do
 
       # Advance projectiles in flight
       {state, proj_result} = Projectiles.tick_projectiles(state)
-      merge_result_into_log(state, proj_result)
+      state = merge_result_into_log(state, proj_result)
+
+      # Tick surface effects (damage, status, duration countdown)
+      {state, surf_result} = Surfaces.tick(state)
+      merge_result_into_log(state, surf_result)
     else
       _ -> state
     end
@@ -551,6 +555,10 @@ defmodule TePhoenix.Battle.State do
   defp run_turn_start_hooks(state) do
     with char_id when not is_nil(char_id) <- state.turn_char_id,
          %Combatant{} = c <- Map.get(state.combatants, char_id) do
+      # Reset reaction charges for the new turn's actor
+      c = Reactions.reset_charges(c)
+      state = put_in(state.combatants[char_id], c)
+
       ctx = %{victim: c, attacker: nil}
       {state, result} = Triggers.fire("turn_start", state, ctx, %{log: [], actions: []})
       merge_result_into_log(state, result)
