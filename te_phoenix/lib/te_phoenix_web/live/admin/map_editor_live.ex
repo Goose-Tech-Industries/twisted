@@ -65,8 +65,8 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
          |> assign(:brush_tile_id, 0)
          |> assign(:brush_size, 1)
          |> assign(:canvas_tile_size, @default_canvas_tile_size)
-         |> assign(:viewport_w, @default_viewport_w)
-         |> assign(:viewport_h, @default_viewport_h)
+         |> assign(:viewport_w, map.width)
+         |> assign(:viewport_h, map.height)
          |> assign(:dirty?, false)
          |> assign(:save_status, nil)
          |> assign(:undo_stack, undo)
@@ -93,11 +93,12 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
          |> assign(:event_palette_open, false)
          |> assign(:hover_tile, nil)
          |> assign(:inspector_open, true)
+         |> assign(:show_grid, false)
          |> assign(:play_mode, false)
          |> assign(:play_x, div(map.width, 2))
          |> assign(:play_y, div(map.height, 2))
-         |> assign(:cam_x, div(map.width, 2))
-         |> assign(:cam_y, div(map.height, 2))
+         |> assign(:cam_x, div(map.width - 1, 2))
+         |> assign(:cam_y, div(map.height - 1, 2))
          |> assign(:spawn_zones, load_spawn_zones(map.id))
          |> assign(:sound_zones, load_sound_zones(map.id))
          |> assign(:tile_anims, load_tile_anims(map))
@@ -345,6 +346,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
         "bsp" -> MapEditorTemplates.bsp_dungeon(map.width, map.height, seed: seed)
         "cave" -> MapEditorTemplates.ca_cave(map.width, map.height, seed: seed)
         "maze" -> MapEditorTemplates.maze(map.width, map.height, seed: seed)
+        "town" -> MapEditorTemplates.town(map.width, map.height, seed: seed)
         _ -> nil
       end
 
@@ -908,6 +910,92 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   def handle_event("inspector:toggle", _params, socket),
     do: {:noreply, assign(socket, :inspector_open, !socket.assigns.inspector_open)}
 
+  # ── Grid toggle ──
+  def handle_event("toggle_grid", _params, socket) do
+    {:noreply, assign(socket, :show_grid, !Map.get(socket.assigns, :show_grid, false))}
+  end
+
+  # ── Right-click eyedropper ──
+  def handle_event("eyedrop_tile", %{"x" => x, "y" => y}, socket) do
+    tx = to_int(x)
+    ty = to_int(y)
+    map = socket.assigns.map
+    layer = socket.assigns.active_layer
+    layer_data = map.layers[layer] || []
+    idx = ty * map.width + tx
+    tile_id = Enum.at(layer_data, idx) || 0
+    {:noreply, assign(socket, :brush_tile_id, tile_id)}
+  end
+
+  # ── Pan camera ──
+  def handle_event("pan", %{"dx" => dx, "dy" => dy}, socket) do
+    cam_x = (socket.assigns.cam_x || 0) + (dx || 0)
+    cam_y = (socket.assigns.cam_y || 0) + (dy || 0)
+    map = socket.assigns.map
+    cam_x = max(0, min(cam_x, map.width - 1))
+    cam_y = max(0, min(cam_y, map.height - 1))
+    {:noreply,
+     socket
+     |> assign(:cam_x, cam_x)
+     |> assign(:cam_y, cam_y)
+     |> push_event("map:state", render_state(map, %{socket.assigns | cam_x: cam_x, cam_y: cam_y}))}
+  end
+
+  # ── Room/building tool ──
+  # Creates a walled room with floor and optional door.
+  # wall_tile = tile ID for walls, floor_tile = tile ID for floor
+  def handle_event("room:create", %{"x1" => x1, "y1" => y1, "x2" => x2, "y2" => y2} = params, socket) do
+    ax = min(to_int(x1), to_int(x2))
+    ay = min(to_int(y1), to_int(y2))
+    bx = max(to_int(x1), to_int(x2))
+    by = max(to_int(y1), to_int(y2))
+    wall_tile = to_int(params["wall_tile"] || "1")
+    floor_tile = to_int(params["floor_tile"] || "4")
+    door_side = params["door_side"] || "south"
+    map = socket.assigns.map
+
+    # Build the room: walls around perimeter, floor inside
+    ground = map.layers["ground"] || List.duplicate(0, map.width * map.height)
+    passability = map.layers["passability"] || List.duplicate(0, map.width * map.height)
+
+    {ground, passability} = Enum.reduce(ay..by, {ground, passability}, fn y, {g, p} ->
+      Enum.reduce(ax..bx, {g, p}, fn x, {g2, p2} ->
+        idx = y * map.width + x
+        is_wall = x == ax || x == bx || y == ay || y == by
+        tile = if is_wall, do: wall_tile, else: floor_tile
+        pass = if is_wall, do: 1, else: 0
+        {List.replace_at(g2, idx, tile), List.replace_at(p2, idx, pass)}
+      end)
+    end)
+
+    # Add door (walkable gap in the wall)
+    door_pos = case door_side do
+      "north" -> {div(ax + bx, 2), ay}
+      "south" -> {div(ax + bx, 2), by}
+      "east" -> {bx, div(ay + by, 2)}
+      "west" -> {ax, div(ay + by, 2)}
+      _ -> {div(ax + bx, 2), by}
+    end
+
+    {dx, dy} = door_pos
+    door_idx = dy * map.width + dx
+    ground = List.replace_at(ground, door_idx, floor_tile)
+    passability = List.replace_at(passability, door_idx, 0)
+
+    updated_layers = map.layers
+      |> Map.put("ground", ground)
+      |> Map.put("passability", passability)
+    updated_map = %{map | layers: updated_layers}
+
+    commit_op(socket, "room", %{x1: ax, y1: ay, x2: bx, y2: by, wall: wall_tile, floor: floor_tile})
+
+    {:noreply,
+     socket
+     |> assign(:map, updated_map)
+     |> assign(:dirty?, true)
+     |> push_event("map:state", render_state(updated_map, socket.assigns))}
+  end
+
   def handle_event("resize:apply", %{"new_w" => nw, "new_h" => nh, "anchor" => anchor}, socket) do
     new_w = clamp(to_int(nw), 5, 200)
     new_h = clamp(to_int(nh), 5, 200)
@@ -1429,9 +1517,9 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-full">
+    <div class="flex" style="height: calc(100vh - 40px); margin: -1rem -1.5rem;">
       <!-- Left: Layer panel -->
-      <div class="w-52 bg-zinc-900/80 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
+      <div class="w-48 bg-zinc-900/80 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
         <div class="px-3 py-2 border-b border-zinc-800">
           <a href={~p"/sauce/world"} class="text-[10px] text-zinc-500 hover:text-zinc-300">
             ← Back to Maps
@@ -1464,9 +1552,9 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
       </div>
 
       <!-- Center: Toolbar + Canvas -->
-      <div class="flex-1 flex flex-col min-w-0">
+      <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
         <!-- Top toolbar -->
-        <div class="flex items-center gap-1 px-3 py-2 bg-zinc-900/80 border-b border-zinc-800 shrink-0">
+        <div class="flex flex-wrap items-center gap-1 px-3 py-1.5 bg-zinc-900/80 border-b border-zinc-800 shrink-0">
           <button :for={tool <- @tools}
             phx-click="select_tool" phx-value-tool={tool.key}
             title={tool.label}
@@ -1574,6 +1662,12 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
               ⬆ Tiled
               <input type="file" accept="application/json,.tmj" id="map-import-tiled-input" class="hidden" />
             </label>
+            <button phx-click="toggle_grid" title="Toggle grid (G)"
+              class={["px-2 py-1.5 rounded text-xs transition-colors",
+                Map.get(assigns, :show_grid, false) && "bg-amber-600 text-black font-bold",
+                !Map.get(assigns, :show_grid, false) && "bg-zinc-800 hover:bg-zinc-700 text-zinc-300"]}>
+              # Grid
+            </button>
             <button :if={!@play_mode} phx-click="play:start" title="Playtest in editor (P)"
               class="px-3 py-1.5 rounded text-xs bg-emerald-700 hover:bg-emerald-600 text-white font-bold">
               ▶ Play
@@ -1620,7 +1714,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
       </div>
 
       <!-- Right: Brush palette -->
-      <aside class="w-56 bg-zinc-900/80 border-l border-zinc-800 flex flex-col shrink-0 overflow-hidden">
+      <aside class="w-48 bg-zinc-900/80 border-l border-zinc-800 flex flex-col shrink-0 overflow-hidden">
         <div class="px-3 py-2 border-b border-zinc-800">
           <span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Brush Palette</span>
           <form phx-change="palette_search" class="mt-2">
@@ -1679,7 +1773,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
             <section>
               <h4 class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Procedural — replaces entire map</h4>
               <div class="grid grid-cols-3 gap-3">
-                <button :for={gen <- [%{kind: "bsp", label: "BSP Dungeon", icon: "🏰", desc: "Rooms + corridors"}, %{kind: "cave", label: "Cave (CA)", icon: "🕳️", desc: "Organic chambers"}, %{kind: "maze", label: "Perfect Maze", icon: "🌀", desc: "Single-path puzzles"}]}
+                <button :for={gen <- [%{kind: "bsp", label: "BSP Dungeon", icon: "🏰", desc: "Rooms + corridors"}, %{kind: "cave", label: "Cave (CA)", icon: "🕳️", desc: "Organic chambers"}, %{kind: "maze", label: "Perfect Maze", icon: "🌀", desc: "Single-path puzzles"}, %{kind: "town", label: "Town", icon: "🏘️", desc: "Buildings, paths, well"}]}
                   phx-click="templates:generate" phx-value-kind={gen.kind}
                   class="p-3 bg-zinc-800 hover:bg-amber-900/40 rounded border border-zinc-700 hover:border-amber-600 text-left transition-colors">
                   <div class="text-2xl mb-1">{gen.icon}</div>
@@ -1927,7 +2021,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
       </div>
 
       <!-- Cell inspector / object & event list (right of canvas, slides over palette) -->
-      <div :if={@inspector_open} class="absolute right-60 bottom-4 w-72 bg-zinc-900/95 border border-zinc-700 rounded-lg shadow-xl text-xs z-30 max-h-[50vh] overflow-y-auto">
+      <div :if={@inspector_open} class="absolute left-4 bottom-4 w-64 bg-zinc-900/95 border border-zinc-700 rounded-lg shadow-xl text-xs z-30 max-h-[40vh] overflow-y-auto">
         <div class="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
           <span class="text-[10px] font-bold uppercase tracking-widest text-amber-400">Inspector</span>
           <button phx-click="inspector:toggle" class="text-zinc-500 hover:text-zinc-200">✕</button>
@@ -1958,24 +2052,47 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
               <li :for={ev <- Enum.take(@events, 20)} class="flex items-center justify-between text-[10px]">
                 <span class="text-zinc-400">
                   {ev.kind} @ ({ev.x},{ev.y})
-                  <span :if={ev.script_id} class="text-amber-400 ml-1">📜#{ev.script_id}</span>
+                  <span :if={ev.script_id} class="text-amber-400 ml-1">S#{ev.script_id}</span>
                 </span>
                 <span class="flex items-center gap-1">
                   <button phx-click="event:open_picker" phx-value-id={ev.id}
-                    class="text-amber-500 hover:text-amber-300" title="Link script">📜</button>
+                    class="text-amber-500 hover:text-amber-300" title="Link script">S</button>
                   <button phx-click="event:delete" phx-value-id={ev.id}
-                    class="text-red-500 hover:text-red-300">×</button>
+                    class="text-red-500 hover:text-red-300">x</button>
                 </span>
               </li>
             </ul>
+          </div>
+
+          <div class="border-t border-zinc-800 pt-2">
+            <div class="text-[10px] uppercase text-zinc-500 mb-1">Spawn Zones ({length(@spawn_zones)})</div>
+            <ul class="space-y-1 max-h-24 overflow-y-auto">
+              <li :for={z <- @spawn_zones} class="flex items-center justify-between text-[10px]">
+                <span class="text-green-400">({z.rect.x1},{z.rect.y1})-({z.rect.x2},{z.rect.y2})</span>
+                <button phx-click="spawn_zone:delete" phx-value-id={z.id}
+                  class="text-red-500 hover:text-red-300">x</button>
+              </li>
+            </ul>
+            <div :if={@spawn_zones == []} class="text-[10px] text-zinc-600 italic">None</div>
+          </div>
+
+          <div class="border-t border-zinc-800 pt-2">
+            <div class="text-[10px] uppercase text-zinc-500 mb-1">Sound Zones ({length(@sound_zones)})</div>
+            <ul class="space-y-1 max-h-24 overflow-y-auto">
+              <li :for={z <- @sound_zones} class="flex items-center justify-between text-[10px]">
+                <span class="text-blue-400">({z.rect.x1},{z.rect.y1})-({z.rect.x2},{z.rect.y2})</span>
+                <button phx-click="sound_zone:delete" phx-value-id={z.id}
+                  class="text-red-500 hover:text-red-300">x</button>
+              </li>
+            </ul>
+            <div :if={@sound_zones == []} class="text-[10px] text-zinc-600 italic">None</div>
           </div>
         </div>
       </div>
 
       <!-- Event → script picker modal -->
       <div :if={@event_picker_target}
-           class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"
-           phx-click="event:picker_close">
+           class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
         <div class="w-[480px] max-h-[70vh] bg-zinc-900 border border-zinc-700 rounded-lg flex flex-col overflow-hidden"
              phx-click-away="event:picker_close">
           <div class="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
@@ -2008,8 +2125,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
       <!-- Pending spawn zone modal -->
       <div :if={@pending_zone && @pending_zone.kind == "spawn_zone"}
-           class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"
-           phx-click="zone:cancel">
+           class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
         <div class="w-[520px] bg-zinc-900 border border-zinc-700 rounded-lg flex flex-col overflow-hidden"
              phx-click-away="zone:cancel">
           <div class="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
@@ -2051,8 +2167,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
       <!-- Pending sound zone modal -->
       <div :if={@pending_zone && @pending_zone.kind == "sound_zone"}
-           class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"
-           phx-click="zone:cancel">
+           class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
         <div class="w-[480px] bg-zinc-900 border border-zinc-700 rounded-lg flex flex-col overflow-hidden"
              phx-click-away="zone:cancel">
           <div class="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
@@ -3126,13 +3241,14 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
         if Map.get(assigns, :play_mode, false) do
           Map.get(assigns, :play_x, div(map.width, 2))
         else
-          Map.get(assigns, :cam_x, div(map.width, 2))
+          # In edit mode, use (vpW-1)/2 so tiles start at pixel 0
+          (Map.get(assigns, :viewport_w, map.width) - 1) / 2.0
         end,
       camY:
         if Map.get(assigns, :play_mode, false) do
           Map.get(assigns, :play_y, div(map.height, 2))
         else
-          Map.get(assigns, :cam_y, div(map.height, 2))
+          (Map.get(assigns, :viewport_h, map.height) - 1) / 2.0
         end,
       viewportW: Map.get(assigns, :viewport_w, @default_viewport_w),
       viewportH: Map.get(assigns, :viewport_h, @default_viewport_h),

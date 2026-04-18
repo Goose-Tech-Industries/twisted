@@ -10,7 +10,12 @@ defmodule TePhoenix.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      releases: [
+        te_phoenix: [
+          strip_beams: false
+        ]
+      ]
     ]
   end
 

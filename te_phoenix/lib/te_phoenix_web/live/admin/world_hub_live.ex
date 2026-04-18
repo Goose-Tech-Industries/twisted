@@ -118,7 +118,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
         ]
       )
     else
-      Repo.query(
+      result = Repo.query(
         "INSERT INTO game_maps (name, description, width, height, ambient_dark, min_level, region_id, is_active, render_mode, fog_of_war) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
           data["name"], data["description"], to_int(data["width"]), to_int(data["height"]),
@@ -126,9 +126,29 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
           to_int(data["is_active"]), data["render_mode"], to_int(data["fog_of_war"])
         ]
       )
-    end
 
-    {:noreply, assign(socket, editing_id: nil, creating: false, form_data: %{}) |> load_maps_list() |> load_tab()}
+      # Redirect to the editor for the newly created map
+      case result do
+        {:ok, %{last_insert_id: new_id}} when new_id > 0 ->
+          w = to_int(data["width"])
+          h = to_int(data["height"])
+          empty = Jason.encode!(%{
+            "ground" => List.duplicate(0, w * h),
+            "overlay" => List.duplicate(-1, w * h),
+            "passability" => List.duplicate(0, w * h),
+            "fringe" => List.duplicate(-1, w * h),
+            "elevation" => List.duplicate(0, w * h)
+          })
+          Repo.query("UPDATE game_maps SET layers_json = ?, schema_version = 2 WHERE id = ?", [empty, new_id])
+
+          {:noreply,
+            socket
+            |> assign(editing_id: nil, creating: false, form_data: %{})
+            |> push_navigate(to: ~p"/sauce/world/maps/#{new_id}/edit")}
+        _ ->
+          {:noreply, assign(socket, editing_id: nil, creating: false, form_data: %{}) |> load_maps_list() |> load_tab()}
+      end
+    end
   end
 
   def handle_event("delete_map", %{"id" => id}, socket) do
@@ -720,7 +740,8 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
                   <td class="px-3 py-2 text-sm">{active_badge(row["is_active"])}</td>
                   <td class="px-3 py-2 text-sm">
                     <div class="flex gap-1">
-                      <button phx-click="edit_map" phx-value-id={row["id"]} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded text-xs transition-colors">Edit</button>
+                      <a href={~p"/sauce/world/maps/#{row["id"]}/edit"} class="px-2 py-1 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs transition-colors">Open Editor</a>
+                      <button phx-click="edit_map" phx-value-id={row["id"]} class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded text-xs transition-colors">Settings</button>
                       <button phx-click="delete_map" phx-value-id={row["id"]} data-confirm="Delete this map? This cannot be undone." class="px-2 py-1 bg-red-900/50 hover:bg-red-800 text-red-300 rounded text-xs transition-colors">Del</button>
                     </div>
                   </td>

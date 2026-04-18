@@ -47,8 +47,15 @@ export const TwistedCanvas = {
     this.viewportH = viewportH
     this.lastState = null
 
+    // Pixi init calls container.innerHTML="" which destroys sibling overlays.
+    // Wrap the renderer in its own sub-div so overlays survive.
+    this.pixiWrapper = document.createElement("div")
+    this.pixiWrapper.style.cssText = "position:absolute;inset:0;z-index:1;"
+    el.style.position = "relative"
+    el.appendChild(this.pixiWrapper)
+
     this.renderer = new TwistedRenderer({
-      container: el,
+      container: this.pixiWrapper,
       canvasMode,
       renderMode,
       tileSize,
@@ -65,8 +72,6 @@ export const TwistedCanvas = {
       },
     })
 
-    // Canvas dimensions in CSS pixels. Use the element's layout size or
-    // fall back to explicit viewport-derived math.
     const step = tileSize + 1
     const initW = viewportW * step
     const initH = viewportH * step
@@ -77,11 +82,64 @@ export const TwistedCanvas = {
     // Pixi handles rendering; pointer events come from the DOM element.
     // Screen→tile math lives in the renderer so every projection (classic,
     // iso, hex, side-scroll, 2.5D, first-person) inverts correctly.
+    // ── Grid overlay ──
+    this.showGrid = false
+    this.gridOverlay = document.createElement("canvas")
+    this.gridOverlay.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:7;image-rendering:pixelated;"
+    el.appendChild(this.gridOverlay)
+
+    this.drawGrid = () => {
+      const state = this.lastState
+      const gc = this.gridOverlay
+      if (!state || !this.showGrid) { gc.style.display = "none"; return }
+      gc.style.display = "block"
+      const ts = this.tileSize
+      const step = ts + 1
+      const w = state.viewportW * step
+      const h = state.viewportH * step
+      gc.width = w; gc.height = h
+      const ctx = gc.getContext("2d")
+      if (!ctx) return
+      ctx.clearRect(0, 0, w, h)
+      ctx.strokeStyle = "rgba(255,255,255,0.12)"
+      ctx.lineWidth = 1
+      for (let x = 0; x <= w; x += step) {
+        ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, h); ctx.stroke()
+      }
+      for (let y = 0; y <= h; y += step) {
+        ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); ctx.stroke()
+      }
+    }
+
+    this.handleEvent("toggle_grid", () => {
+      this.showGrid = !this.showGrid
+      this.drawGrid()
+    })
+
+    // ── Zoom/pan state ──
+    this.zoomLevel = 1.0
+    this.panning = false
+    this.panStart = null
+
     this.handlePointerDown = (e) => {
-      const rect = el.getBoundingClientRect()
-      const localX = e.clientX - rect.left
-      const localY = e.clientY - rect.top
+      const canvas = this.pixiWrapper ? this.pixiWrapper.querySelector("canvas") : null
+      const target = canvas || this.pixiWrapper || el
+      const rect = target.getBoundingClientRect()
+      const localX = (e.clientX - rect.left) / this.zoomLevel
+      const localY = (e.clientY - rect.top) / this.zoomLevel
       const hit = this.renderer.screenToTile(localX, localY)
+
+      // Debug: show click info (remove after fixing)
+      console.log("[CLICK]", {
+        client: [e.clientX, e.clientY],
+        rect: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)],
+        local: [Math.round(localX), Math.round(localY)],
+        canvasInternal: canvas ? [canvas.width, canvas.height] : "no canvas",
+        dpr: window.devicePixelRatio,
+        zoom: this.zoomLevel,
+        tile: hit ? [hit.tileX, hit.tileY] : "null",
+      })
+
       if (!hit) return
       this.pushEventTo(el, "tile_click", { x: hit.tileX, y: hit.tileY })
     }
@@ -91,9 +149,24 @@ export const TwistedCanvas = {
     this.preview = { kind: null, anchor: null, rect: null }
 
     this.handlePointerMove = (e) => {
-      const rect = el.getBoundingClientRect()
-      const localX = e.clientX - rect.left
-      const localY = e.clientY - rect.top
+      // Pan with middle mouse or space+drag
+      if (this.panning && this.panStart) {
+        const dx = e.clientX - this.panStart.x
+        const dy = e.clientY - this.panStart.y
+        this.panStart = { x: e.clientX, y: e.clientY }
+        // Move camera by dx/dy converted to tile units
+        const step = (this.tileSize + 1) * this.zoomLevel
+        if (step > 0) {
+          this.pushEventTo(el, "pan", { dx: -dx / step, dy: -dy / step })
+        }
+        return
+      }
+
+      const canvas = this.pixiWrapper ? this.pixiWrapper.querySelector("canvas") : null
+      const target = canvas || this.pixiWrapper || el
+      const rect = target.getBoundingClientRect()
+      const localX = (e.clientX - rect.left) / this.zoomLevel
+      const localY = (e.clientY - rect.top) / this.zoomLevel
       const hit = this.renderer.screenToTile(localX, localY)
       const tx = hit ? hit.tileX : null
       const ty = hit ? hit.tileY : null
@@ -118,21 +191,78 @@ export const TwistedCanvas = {
       this.handlePointerDown(e)
     }
 
-    this.handlePointerUp = () => {
+    this.handlePointerUp = (e) => {
       this.dragging = false
+      this.panning = false
+      this.panStart = null
     }
 
     this.handlePointerDownDrag = (e) => {
+      // Middle mouse button = pan
+      if (e.button === 1) {
+        e.preventDefault()
+        this.panning = true
+        this.panStart = { x: e.clientX, y: e.clientY }
+        return
+      }
+      // Right-click = eyedropper (pick tile)
+      if (e.button === 2) {
+        e.preventDefault()
+        const canvas = this.pixiWrapper ? this.pixiWrapper.querySelector("canvas") : null
+        const target = canvas || this.pixiWrapper || el
+        const rect = target.getBoundingClientRect()
+        const localX = (e.clientX - rect.left) / this.zoomLevel
+        const localY = (e.clientY - rect.top) / this.zoomLevel
+        const hit = this.renderer.screenToTile(localX, localY)
+        if (hit) {
+          this.pushEventTo(el, "eyedrop_tile", { x: hit.tileX, y: hit.tileY })
+        }
+        return
+      }
       if (e.button !== 0) return
+      // Space+left click = pan
+      if (this._spaceHeld) {
+        this.panning = true
+        this.panStart = { x: e.clientX, y: e.clientY }
+        return
+      }
       this.dragging = true
       this.handlePointerDown(e)
     }
 
-    el.addEventListener("pointerdown", this.handlePointerDownDrag)
-    el.addEventListener("pointermove", this.handlePointerMove)
+    // Prevent context menu on right-click (eyedropper takes over)
+    this.handleContextMenu = (e) => { e.preventDefault() }
+    this.pixiWrapper.addEventListener("contextmenu", this.handleContextMenu)
+
+    // Mouse wheel = zoom
+    this.handleWheel = (e) => {
+      e.preventDefault()
+      const delta = e.deltaY > 0 ? -0.1 : 0.1
+      this.zoomLevel = Math.max(0.25, Math.min(3.0, this.zoomLevel + delta))
+      el.style.transform = `scale(${this.zoomLevel})`
+      el.style.transformOrigin = "top left"
+      this.drawGrid()
+    }
+    el.addEventListener("wheel", this.handleWheel, { passive: false })
+
+    // Attach pointer events to the pixiWrapper. Once Pixi creates its canvas
+    // inside the wrapper, pointer events bubble up to the wrapper.
+    this.pixiWrapper.addEventListener("pointerdown", this.handlePointerDownDrag)
+    this.pixiWrapper.addEventListener("pointermove", this.handlePointerMove)
+    this._pointerTarget = this.pixiWrapper
+
     window.addEventListener("pointerup", this.handlePointerUp)
 
+    this._spaceHeld = false
+
     this.handleKeyDown = (e) => {
+      // Track space for space+drag pan
+      if (e.key === " " || e.code === "Space") {
+        this._spaceHeld = true
+        e.preventDefault()
+        return
+      }
+
       // Ignore keyboard shortcuts while an input/textarea has focus
       const target = e.target
       const inForm = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
@@ -160,11 +290,40 @@ export const TwistedCanvas = {
         }
       }
 
+      // Zoom shortcuts
+      if (e.key === "=" || e.key === "+") {
+        this.zoomLevel = Math.min(3.0, this.zoomLevel + 0.25)
+        el.style.transform = `scale(${this.zoomLevel})`
+        el.style.transformOrigin = "top left"
+        this.drawGrid()
+        return
+      }
+      if (e.key === "-") {
+        this.zoomLevel = Math.max(0.25, this.zoomLevel - 0.25)
+        el.style.transform = `scale(${this.zoomLevel})`
+        el.style.transformOrigin = "top left"
+        this.drawGrid()
+        return
+      }
+      if (e.key === "0") {
+        this.zoomLevel = 1.0
+        el.style.transform = "scale(1)"
+        this.drawGrid()
+        return
+      }
+
       // Single-letter tool shortcuts (no modifier keys)
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        const shortcutKeys = ["b","f","r","x","i","m","a","g","p","B","F","R","X","I","M","A","G","P"]
+        const shortcutKeys = ["b","f","r","x","i","m","a","p","B","F","R","X","I","M","A","P"]
         if (shortcutKeys.includes(e.key)) {
           this.pushEventTo(el, "shortcut", { key: e.key })
+          return
+        }
+        // Grid toggle
+        if (e.key === "g" || e.key === "G") {
+          this.showGrid = !this.showGrid
+          this.drawGrid()
+          this.pushEventTo(el, "toggle_grid", {})
           return
         }
       }
@@ -188,6 +347,13 @@ export const TwistedCanvas = {
     }
     window.addEventListener("keydown", this.handleKeyDown)
 
+    this.handleKeyUp = (e) => {
+      if (e.key === " " || e.code === "Space") {
+        this._spaceHeld = false
+      }
+    }
+    window.addEventListener("keyup", this.handleKeyUp)
+
     // ── LiveView → Canvas event plumbing ──
     this.handleEvent("map:state", (state) => {
       this.lastState = state
@@ -203,6 +369,8 @@ export const TwistedCanvas = {
     this.handleEvent("map:set_canvas_mode", ({ mode }) => {
       if (this.renderer) this.renderer.setCanvasMode(mode)
       this.playMode = mode === "play"
+      // Show minimap only in play mode
+      if (this.minimap) this.minimap.style.display = this.playMode ? "block" : "none"
     })
 
     // Remote cursors — render simple colored circles at other users' positions.
@@ -304,14 +472,14 @@ export const TwistedCanvas = {
       if (tiled) tiled.addEventListener("change", this.tiledImportHandler)
     }, 0)
 
-    // ── Minimap overlay ──
+    // ── Minimap overlay (only shown in play mode) ──
     this.minimap = document.createElement("canvas")
     this.minimap.width = 120
     this.minimap.height = 120
     this.minimap.style.cssText = `
       position:absolute;right:6px;top:6px;z-index:11;
       border:1px solid #525252;background:#000;image-rendering:pixelated;
-      cursor:pointer;
+      cursor:pointer;display:none;
     `
     this.minimap.title = "Minimap — click to recenter"
     el.appendChild(this.minimap)
@@ -511,6 +679,7 @@ export const TwistedCanvas = {
           height:${br.sy - tl.sy - 1}px;
           border:1px dashed ${color};
           background:${color}18;
+          pointer-events:none;
         `
         const tag = document.createElement("div")
         tag.textContent = label
@@ -572,10 +741,14 @@ export const TwistedCanvas = {
   },
 
   destroyed() {
-    if (this.handlePointerDownDrag) this.el.removeEventListener("pointerdown", this.handlePointerDownDrag)
-    if (this.handlePointerMove) this.el.removeEventListener("pointermove", this.handlePointerMove)
+    const target = this._pointerTarget || this.pixiWrapper || this.el
+    if (this.handlePointerDownDrag) target.removeEventListener("pointerdown", this.handlePointerDownDrag)
+    if (this.handlePointerMove) target.removeEventListener("pointermove", this.handlePointerMove)
     if (this.handlePointerUp) window.removeEventListener("pointerup", this.handlePointerUp)
     if (this.handleKeyDown) window.removeEventListener("keydown", this.handleKeyDown)
+    if (this.handleKeyUp) window.removeEventListener("keyup", this.handleKeyUp)
+    if (this.handleContextMenu) this.el.removeEventListener("contextmenu", this.handleContextMenu)
+    if (this.handleWheel) this.el.removeEventListener("wheel", this.handleWheel)
     if (this.importInputHandler) {
       const input = document.getElementById("map-import-input")
       if (input) input.removeEventListener("change", this.importInputHandler)
