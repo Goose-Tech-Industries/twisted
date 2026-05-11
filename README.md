@@ -1,208 +1,187 @@
-# Twisted Engine — Monorepo
+# Twisted Engine
 
-Full-stack dark Celtic fantasy RPG.  
-Backend: Express + Socket.IO + MySQL (`/te`)  
-Frontend: Next.js 16 + shadcn/tailwind (`/ui`)
+Browser-based MMO RPG engine for dark Celtic fantasy games. Single repo,
+multiple deployable pieces. The admin tooling (AdminSauce) lets a non-coder
+operator build, configure, and run a full multiplayer RPG without writing
+code.
 
----
-
-## Structure
-
-```
-twisted-engine/
-├── te/           Express backend (port 3001 in dev)
-├── ui/           Next.js frontend (port 3000 in dev)
-├── nginx.conf    Production reverse proxy config
-└── package.json  Root scripts (concurrently)
-```
+Production URL: https://tcgaming.quest
+AdminSauce path: `/sauce` (permanent)
 
 ---
 
-## Local Dev — 2 Commands
+## What's in this repo
 
-```bash
-# 1. Install everything
-npm run install:all
+| Path                  | Role                          | Stack                                                            |
+| --------------------- | ----------------------------- | ---------------------------------------------------------------- |
+| `te_phoenix/`         | Backend + AdminSauce control panel | Phoenix 1.8.5, LiveView 1.0, Ecto/MyXQL → MariaDB, Bandit |
+| `player/`             | Player game client            | SvelteKit 2.50, Svelte 5 (runes), Vite 6, Pixi v8, Three.js     |
+| `packages/render/`    | Shared 2D/3D rendering core   | `@twisted/render` — tsup ESM+CJS, peer Pixi v8 + Three          |
+| `docs/`               | Engine integration notes      | Fog-of-war, player/render integration                            |
+| `scripts/`            | Operational scripts           | Deploy, backup, log rotation                                     |
+| `ecosystem.config.js` | PM2 process definitions       | Phoenix release + player Node server                             |
+| `nginx.conf`, `nginx.player.conf` | Reverse proxy        | TLS termination via Let's Encrypt                                |
 
-# 2. Run both servers
-npm run dev
-```
+### Retired stacks — do not modify
 
-That's it. Backend on :3001, UI on :3000.  
-Open the game at http://localhost:3000  
-Open AdminSauce at http://localhost:3000/adminsauce
+- `te.retired/` — original Express + Socket.IO + MySQL backend
+- `ui.retired/` — original Next.js + shadcn admin UI
+- `monorepo.retired/`, `monorepo_v27_build.retired/` — earlier monorepo layouts
 
-### First-time setup
-
-```bash
-# Copy env files
-cp te/.env.example te/.env
-# Edit te/.env — fill in DB_HOST, DB_USER, DB_PASS, DB_NAME, SESSION_SECRET
-# ALLOWED_ORIGIN is already set to http://localhost:3000 in the example
-nano te/.env
-
-# ui/.env.local is already committed with dev values:
-# NEXT_PUBLIC_API_URL=http://localhost:3001
-# NEXT_PUBLIC_SOCKET_URL=http://localhost:3001
-```
-
-### Dev cookie note
-
-In development the session cookie is `sameSite: 'none'` so it can cross
-from :3000 → :3001. Browsers require `secure: true` for `sameSite: 'none'`,
-but local HTTP is not secure. **Chrome fix:**
-
-```
-chrome://flags/#unsafely-treat-insecure-origin-as-secure
-# Add: http://localhost:3001
-```
-
-Or use the same-origin approach: run `npm run dev:te` only and open the
-game at `http://localhost:3001` (the backend still serves `public/`), then
-configure the UI separately. In production this is a non-issue — nginx puts
-everything on one HTTPS domain.
+These directories are preserved as historical reference only. New work goes
+into `te_phoenix/`, `player/`, and `packages/render/`.
 
 ---
 
-## Production Deploy (Digital Ocean / any Ubuntu server)
+## Architecture
 
-### 1. Server prep
+### Backend — `te_phoenix/` (non-umbrella Phoenix app)
 
-```bash
-# Install Node 20, nginx, PM2
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs nginx
-sudo npm install -g pm2
+Single Phoenix 1.8.5 application, no umbrella. Lives at `te_phoenix/lib/te_phoenix/`
+and `te_phoenix/lib/te_phoenix_web/`. Contexts:
 
-# Install pnpm (for UI)
-npm install -g pnpm
-```
+- `accounts/` — users, sessions, roles
+- `ai/` — Anthropic-only AI integration (content generation, Game Director)
+- `battle/` — 37 modules, the combat engine core
+- `capabilities/` — skill/ability definitions
+- `combat/` — combat resolution
+- `game/` — top-level game state and rules
+- `matches/` — match orchestration
+- `mods/` — mod/content layering
+- `objectives/` — quest/objective tracking
+- `party/` — party state
+- `social/` — friends, guilds, chat
+- `strategy/` — AI strategy primitives
+- `tournament_manager/` — tournament brackets
+- `waves/` — wave spawning logic
+- `world/` — world map and zones
 
-### 2. Upload & install
+Plus standalone modules: `npc_brain.ex`, `gm_commands.ex`, `scheduler.ex`,
+`tenancy.ex`, `event_runner.ex`, `pathfinding.ex`, `clipboard_server.ex`,
+`release.ex`, `user_prefs.ex`.
 
-```bash
-# Upload the monorepo to /var/www/twisted
-scp -r ./twisted-engine user@yourserver:/var/www/twisted
+Router (`te_phoenix_web/router.ex`) is 303 lines. The `/sauce` scope mounts
+**AdminSauce** — 70+ LiveView panels covering map editor, character creator,
+ability/inventory/quest editors, battle ruleset builder, AI Game Director, and
+the saga engine. Every panel is no-code: an operator configures the game by
+clicking, not editing files.
 
-# On the server
-cd /var/www/twisted
-npm run install:all
-```
+### Player client — `player/`
 
-### 3. Configure environment
+SvelteKit 2.50 + Svelte 5 (runes API) + Vite 6 + TypeScript. Migrated from
+Next.js on 2026-05-04. Connects to Phoenix via the `phoenix` JS client (^1.7).
 
-```bash
-# Backend
-cp te/.env.example te/.env
-nano te/.env
-# Set:
-#   NODE_ENV=production
-#   PORT=3001
-#   DB_HOST / DB_USER / DB_PASS / DB_NAME
-#   SESSION_SECRET=<64 random chars>
-#   ALLOWED_ORIGIN=https://yourdomain.com
+Rendering is split:
 
-# Frontend
-nano ui/.env.production
-# In production, UI and API share one domain via nginx
-# so API_URL is empty (same-origin requests, no CORS needed):
-#   NEXT_PUBLIC_API_URL=
-#   NEXT_PUBLIC_SOCKET_URL=
-```
+- **Pixi v8** runs in a Worker on `OffscreenCanvas` for the 2D world.
+- **Three.js** is used for 3D viewport elements.
+- Both are wrapped behind `@twisted/render`.
 
-### 4. Build Next.js
+### Shared renderer — `packages/render/`
 
-```bash
-cd /var/www/twisted/ui
-pnpm build
-```
+Framework-agnostic TypeScript package. Built with `tsup` to ESM + CJS, exposes
+subpath exports `./projections` and `./shaders`. Peer dependencies pin
+`pixi.js ^8` and `three ^0.180`.
 
-### 5. Start with PM2
+**Known version drift to be aware of:**
 
-```bash
-cd /var/www/twisted
+| Location               | Three.js version  |
+| ---------------------- | ----------------- |
+| `packages/render` peer | `^0.180.0`        |
+| `packages/render` dev  | `^0.183.2`        |
+| `player` runtime       | `^0.171.0`        |
 
-# Backend
-pm2 start te/server.js --name twisted-backend --cwd te
+This drift is tolerated for now but should be resolved before the next
+rendering-heavy session.
 
-# Frontend (Next.js production server)
-pm2 start --name twisted-ui --cwd ui -- pnpm start
+### AI
 
-pm2 save
-pm2 startup   # follow the printed command to auto-start on reboot
-```
+Anthropic-only. Two models in active use:
 
-### 6. Nginx
+- `claude-sonnet-4-6-20251001` — primary content + Director
+- `claude-haiku-4-5-20251001`  — light/inline tasks
 
-```bash
-# Edit nginx.conf — replace yourdomain.com with your actual domain
-sudo cp nginx.conf /etc/nginx/sites-available/twisted
-sudo ln -s /etc/nginx/sites-available/twisted /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-```
+No OpenAI, no Ollama. Provider abstraction lives in `te_phoenix/lib/te_phoenix/ai/`.
 
-### 7. SSL (Let's Encrypt — free)
+### Persistence
 
-```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
-# Certbot fills in the ssl_certificate lines automatically
-sudo systemctl reload nginx
-```
-
-### 8. Grant GM/Admin access
-
-```sql
--- In MySQL (game database)
-UPDATE users SET role = 'ADMIN' WHERE username = 'yourname';
--- Then visit: https://yourdomain.com/adminsauce
-```
+MariaDB via MyXQL/Ecto. Schema lives under `te_phoenix/priv/repo/migrations/`.
+Backups handled by `scripts/backup-db.sh` and rotated to `/var/goose/backups/`.
 
 ---
 
-## /adminsauce — Non-Negotiable URL
+## Getting started
 
-`/adminsauce` is permanently the admin entry point. It will never change.
+### Prerequisites
 
-- In dev: http://localhost:3000/adminsauce
-- In prod: https://yourdomain.com/adminsauce
+- Elixir 1.15+ / Erlang OTP 26
+- Node 20+
+- pnpm (workspace uses `pnpm-workspace.yaml`)
+- MariaDB 10.x with a database for the app
 
-The URL resolves through nginx → Next.js → `/adminsauce` page → calls
-`/admin-panel/*` Express routes for all data. The Express routes are
-protected by `requireStaff` middleware — all identity comes from the
-session cookie (database-backed), never from `req.body.userId`.
+### Backend (Phoenix)
+
+```bash
+cd te_phoenix
+mix setup                       # deps + ecto create + migrate + seeds + assets
+mix phx.server                  # http://localhost:4000
+```
+
+AdminSauce will be at `http://localhost:4000/sauce`. First account created
+should be promoted via the `gm_commands` module or by direct UPDATE on
+`users.role`.
+
+### Player client (SvelteKit)
+
+```bash
+cd player
+pnpm install
+pnpm dev                        # http://localhost:5173
+```
+
+The player client expects Phoenix to be reachable; configure the socket URL
+in the player env if not running locally.
+
+### Shared renderer (`@twisted/render`)
+
+```bash
+cd packages/render
+pnpm install
+pnpm build                      # produces dist/
+pnpm dev                        # tsup --watch for live rebuilds
+```
+
+Player consumes `@twisted/render` via the pnpm workspace (`workspace:*`).
+
+### Production
+
+PM2 manages two processes via `ecosystem.config.js` (Phoenix release) and
+`ecosystem.player.config.js` (SvelteKit Node server). Nginx terminates TLS;
+`nginx.conf` proxies AdminSauce + Phoenix sockets, `nginx.player.conf` proxies
+the player client. `.env.phoenix.secret` (mode 0600, outside git) supplies
+`SECRET_KEY_BASE`.
 
 ---
 
-## Endpoint Mismatches Found & Resolved
+## Status
 
-| UI Expected | Backend Had | Fix |
-|---|---|---|
-| `GET /admin-panel/:type` | `POST /admin/get-all` | ✅ New REST GET routes in adminPanel.js |
-| `POST /admin-panel/:type` | `POST /admin/save` | ✅ New REST POST create |
-| `POST /admin-panel/:type/:id` | `POST /admin/save` | ✅ New REST POST update |
-| `POST /admin-panel/:type/:id/delete` | `POST /admin/delete` | ✅ New REST delete alias |
-| `POST /admin-panel/player/ban` | `POST /admin-panel/player/:id/ban` | ✅ Flat body alias |
-| `POST /admin-panel/player/unban` | `POST /admin-panel/player/:id/unban` | ✅ Flat body alias |
-| `POST /admin-panel/player/role` | `POST /admin-panel/player/:id/role` | ✅ Flat body alias |
-| `POST /admin-panel/player/give-gold` | `POST /admin-panel/player/:id/give-gold` | ✅ Flat body alias |
-| `POST /admin-panel/player/give-item` | `POST /admin-panel/player/:id/give-item` | ✅ Flat body alias |
-| `POST /admin-panel/player/kick` | `POST /admin-panel/kick` | ✅ New alias via global._io |
-| `POST /admin-panel/player/teleport` | Did not exist | ✅ New endpoint (DB + live push) |
-| `POST /admin-panel/player/set-level` | Did not exist | ✅ New endpoint |
-| `GET/POST /admin-panel/settings` | Did not exist | ✅ New settings endpoints |
-| `GET /auth/me` | `GET /me` (at root `/`) | ✅ Already matched — no change |
-| `localStorage` for API base URL | Was in game-api.ts, admin-api.ts, game-context.tsx | ✅ Replaced with NEXT_PUBLIC_API_URL |
-| Demo mode gate in login() | Bypassed real auth when no localStorage URL set | ✅ Removed — always hits real API |
-| `sameSite: 'lax'` blocking cookies | Cookie config in server.js | ✅ `'none'` in dev, `'lax'` in prod |
+- **Engine V1:** complete
+- **AdminSauce:** 70+ panels live, covering all configurable systems
+- **Next session:** Battle session 8 — limb targeting, knockout state,
+  active defense
+
+In-flight bug list and recent audits:
+
+- `BUG_REPORT_2026-05-04.md` — AdminSauce browser-automation pass
+- `AUDIT_WORLD_GROUP_2026-05-04.md` — World-group LiveView audit
+- `CRASH_TRIAGE_2026-05-11.md` — May 7 + Apr 18 erl_crash.dump triage
 
 ---
 
-## Security Model
+## Related docs
 
-- **Identity**: Always from `req.session.userId` → database lookup. `req.body.userId` is never trusted.
-- **Cookies**: `httpOnly: true` (JS cannot read). `secure: true` in production. `sameSite: lax` in production.
-- **CORS**: Locked to `ALLOWED_ORIGIN` env var in production. Credentials always required.
-- **Admin routes**: All protected by `requireStaff` — checks role from database on every request, not from a cached session value.
-- **No localStorage user identity**: Removed entirely. The session cookie is the only auth surface.
+- `REVIEW_GUIDE.md` — code review guide and ground rules
+- `AUDIT_WORLD_GROUP_2026-05-04.md` — World group audit (2026-05-04)
+- `BUG_REPORT_2026-05-04.md` — AdminSauce bug report (2026-05-04)
+- `docs/player-fog-integration.md` — fog-of-war integration on the player side
+- `docs/render-fog-integration.md` — fog-of-war integration on the renderer side
