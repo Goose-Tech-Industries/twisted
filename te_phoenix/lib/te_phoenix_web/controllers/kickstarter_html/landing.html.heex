@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="csrf-token" content={get_csrf_token()} />
+  <title>Twisted Carnage — Kickstarter</title>
+  <meta name="description" content="Twisted Carnage — a no-code dark Celtic RPG creator. Built with the Filí school in mind." />
+  <meta property="og:title" content="Twisted Carnage" />
+  <meta property="og:description" content="No-code RPG creator. Dark Celtic. Built with the Filí school in mind." />
+  <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+  <style>
+    :root {
+      --ink: #0b0608;
+      --bone: #e9e2d3;
+      --rust: #8a2418;
+      --moss: #3e4a32;
+      --slate: #19181a;
+    }
+    html, body { background: var(--ink); color: var(--bone); }
+    body { font-family: ui-serif, Georgia, "Times New Roman", serif; }
+    .ks-bg {
+      background:
+        radial-gradient(ellipse at top, rgba(138,36,24,0.10), transparent 60%),
+        radial-gradient(ellipse at bottom, rgba(62,74,50,0.08), transparent 60%),
+        var(--ink);
+    }
+    .ks-divider {
+      height: 1px;
+      background: linear-gradient(to right, transparent, rgba(233,226,211,0.25), transparent);
+    }
+    .ks-tile {
+      border: 1px solid rgba(233,226,211,0.10);
+      background: rgba(25,24,26,0.6);
+      transition: border-color 200ms;
+    }
+    .ks-tile:hover { border-color: rgba(138,36,24,0.40); }
+    .ks-tier {
+      border: 1px solid rgba(233,226,211,0.12);
+      background: linear-gradient(180deg, rgba(25,24,26,0.7), rgba(11,6,8,0.7));
+    }
+    .ks-tier-head {
+      border-bottom: 1px solid rgba(233,226,211,0.10);
+      letter-spacing: 0.04em;
+    }
+    .ks-input {
+      background: rgba(11,6,8,0.6);
+      border: 1px solid rgba(233,226,211,0.20);
+      color: var(--bone);
+    }
+    .ks-input:focus { outline: 1px solid rgba(138,36,24,0.6); }
+    .ks-btn {
+      background: var(--rust);
+      color: var(--bone);
+      letter-spacing: 0.06em;
+    }
+    .ks-btn:hover { filter: brightness(1.1); }
+    .ks-quiet { color: rgba(233,226,211,0.55); }
+  </style>
+</head>
+<body class="ks-bg">
+  <main class="max-w-5xl mx-auto px-6 py-16">
+
+    <%!-- HERO --%>
+    <section class="text-center pt-10 pb-16">
+      <p class="ks-quiet text-xs tracking-[0.3em] uppercase mb-6">A Bran-coded campaign</p>
+      <h1 class="text-5xl md:text-6xl font-semibold leading-tight">Twisted Carnage</h1>
+      <p class="mt-6 text-lg md:text-xl ks-quiet max-w-3xl mx-auto">
+        No-code RPG creator. Dark Celtic. Built with the Filí school in mind.
+      </p>
+      <div class="ks-divider mt-10 mx-auto max-w-md"></div>
+    </section>
+
+    <%!-- PITCH TILES --%>
+    <section class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-20">
+      <div class="ks-tile p-6">
+        <h3 class="text-xl mb-2">No-code creator</h3>
+        <p class="ks-quiet">
+          Design encounters, dialogue, quests, and combat rules from a panel — no Elixir, no
+          JSON spelunking. AdminSauce ships with the game.
+        </p>
+      </div>
+      <div class="ks-tile p-6">
+        <h3 class="text-xl mb-2">Three shipping paths</h3>
+        <p class="ks-quiet">
+          One engine, three releases: a desktop binary for solo play, a self-hosted node for
+          guilds, a hosted realm for the curious.
+        </p>
+      </div>
+      <div class="ks-tile p-6">
+        <h3 class="text-xl mb-2">AI-optional</h3>
+        <p class="ks-quiet">
+          AI as a writing partner, never a requirement. Every encounter, every line of bardic
+          counsel, is overrideable. Local models welcome.
+        </p>
+      </div>
+      <div class="ks-tile p-6">
+        <h3 class="text-xl mb-2">Bran-coded lore</h3>
+        <p class="ks-quiet">
+          A grammar of cairns and crows. Restrained where most fantasy shouts. Written with
+          the Filí school in mind — image first, image last.
+        </p>
+      </div>
+    </section>
+
+    <%!-- TIERS --%>
+    <section class="mb-20">
+      <h2 class="text-2xl mb-2 text-center">Reward tiers</h2>
+      <p class="ks-quiet text-center mb-8">A preview. Final tiers settle nearer the launch.</p>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="ks-tier">
+          <div class="ks-tier-head px-5 py-4">
+            <p class="ks-quiet text-xs uppercase">Tier I</p>
+            <p class="text-2xl">$15</p>
+          </div>
+          <div class="px-5 py-5">
+            <p class="font-semibold mb-2">The digital game</p>
+            <p class="ks-quiet text-sm">Twisted Carnage, the desktop build. Yours to keep.</p>
+          </div>
+        </div>
+        <div class="ks-tier">
+          <div class="ks-tier-head px-5 py-4">
+            <p class="ks-quiet text-xs uppercase">Tier II</p>
+            <p class="text-2xl">$35</p>
+          </div>
+          <div class="px-5 py-5">
+            <p class="font-semibold mb-2">+ Soundtrack</p>
+            <p class="ks-quiet text-sm">The game, plus the soundtrack. Drone, bone-flute, crow-call.</p>
+          </div>
+        </div>
+        <div class="ks-tier">
+          <div class="ks-tier-head px-5 py-4">
+            <p class="ks-quiet text-xs uppercase">Tier III</p>
+            <p class="text-2xl">$65</p>
+          </div>
+          <div class="px-5 py-5">
+            <p class="font-semibold mb-2">+ Named NPC</p>
+            <p class="ks-quiet text-sm">All the above. Your name on a wandering bard, archived in lore.</p>
+          </div>
+        </div>
+        <div class="ks-tier">
+          <div class="ks-tier-head px-5 py-4">
+            <p class="ks-quiet text-xs uppercase">Tier IV</p>
+            <p class="text-2xl">$250</p>
+          </div>
+          <div class="px-5 py-5">
+            <p class="font-semibold mb-2">+ AdminSauce founder seat</p>
+            <p class="ks-quiet text-sm">Everything above. A founder seat on AdminSauce — your hand on the realm.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <%!-- TRAILER PLACEHOLDER --%>
+    <section class="mb-20">
+      <div class="ks-divider mb-10"></div>
+      <div class="aspect-video bg-black/40 border border-white/10 flex items-center justify-center">
+        <iframe
+          class="w-full h-full"
+          src="about:blank"
+          title="Twisted Carnage trailer (placeholder)"
+          loading="lazy"
+          allowfullscreen
+        ></iframe>
+      </div>
+      <p class="ks-quiet text-center text-xs mt-3">Trailer goes here. One minute. No commentary.</p>
+    </section>
+
+    <%!-- SIGNUP --%>
+    <section class="mb-24">
+      <div class="max-w-xl mx-auto text-center">
+        <h2 class="text-2xl mb-2">When we open the door, you'll be told.</h2>
+        <p class="ks-quiet mb-6">Leave an email. Nothing else, nothing more often than needed.</p>
+
+        <%= cond do %>
+          <% @signed_up -> %>
+            <p class="text-sm" style="color: var(--moss);">Marked. We'll send word.</p>
+          <% @already -> %>
+            <p class="text-sm ks-quiet">You were already on the roll. Nothing changed.</p>
+          <% @error == "invalid" -> %>
+            <p class="text-sm" style="color: var(--rust);">That email looked off. Try once more.</p>
+          <% @error == "missing" -> %>
+            <p class="text-sm" style="color: var(--rust);">Leave an email if you mean it.</p>
+          <% @error == "long" -> %>
+            <p class="text-sm" style="color: var(--rust);">That email is longer than the spec allows.</p>
+          <% @error == "other" -> %>
+            <p class="text-sm" style="color: var(--rust);">Something faltered. Try again in a moment.</p>
+          <% true -> %>
+            <%= "" %>
+        <% end %>
+
+        <form action={~p"/kickstarter/signup"} method="post" class="mt-6 flex flex-col sm:flex-row gap-3">
+          <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+          <input type="hidden" name="source" value={@source} />
+          <input
+            type="email"
+            name="email"
+            required
+            placeholder="your.name@example.com"
+            class="ks-input flex-1 px-4 py-3"
+            autocomplete="email"
+          />
+          <button type="submit" class="ks-btn px-6 py-3 uppercase text-sm">Keep me told</button>
+        </form>
+      </div>
+    </section>
+
+    <%!-- QUIET CLOSING IMAGE --%>
+    <section class="text-center pb-20 pt-10">
+      <div class="ks-divider mb-12 max-w-sm mx-auto"></div>
+      <p class="ks-quiet italic max-w-md mx-auto">
+        A crow above a cairn. The wind down between the stones. The realm watches and is, for the moment, patient.
+      </p>
+    </section>
+
+  </main>
+</body>
+</html>

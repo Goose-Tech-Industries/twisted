@@ -29,6 +29,14 @@ defmodule TePhoenixWeb.Router do
   # PUBLIC (no auth required)
   # ══════════════════════════════════════════════════════════════════
 
+  # Kickstarter marketing landing — standalone page, no admin shell.
+  scope "/", TePhoenixWeb do
+    pipe_through :browser
+
+    get "/kickstarter", KickstarterController, :index
+    post "/kickstarter/signup", KickstarterController, :signup
+  end
+
   # Public character API (no auth required)
   scope "/api", TePhoenixWeb do
     pipe_through :api
