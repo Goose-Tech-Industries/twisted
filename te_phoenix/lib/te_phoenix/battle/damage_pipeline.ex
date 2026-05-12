@@ -44,7 +44,7 @@ defmodule TePhoenix.Battle.DamagePipeline do
   Then add `"my_custom_step"` to the pipeline order in AdminSauce settings.
   """
 
-  alias TePhoenix.Battle.{Combatant, Formula, StatusEffects, Systems, Tactics}
+  alias TePhoenix.Battle.{ActiveDefense, Combatant, Formula, Limb, StatusEffects, Systems, Tactics}
 
   @default_steps [
     :compute_modifiers,
@@ -71,7 +71,8 @@ defmodule TePhoenix.Battle.DamagePipeline do
     :stagger,
     :weapon_triangle,
     :apply_damage_triggers,
-    :death_check
+    :death_check,
+    :knockout_check
   ]
 
   def default_steps, do: @default_steps
@@ -292,9 +293,22 @@ defmodule TePhoenix.Battle.DamagePipeline do
   end
 
   defp execute_step(:active_defense, ctx) do
-    # Simplified — delegates to existing logic. Full implementation
-    # would extract dodge/block/counter into separate steps.
-    ctx
+    if ctx.settings[:enable_active_defense] do
+      case ActiveDefense.resolve(ctx.actor, ctx.target, settings: ctx.settings, type: ctx.opts[:defense_type]) do
+        {:negated, defender, type} ->
+          result = %{ctx.result | log: ["#{defender.name} #{type}s the attack!" | ctx.result.log]}
+          %{ctx | target: defender, damage: 0, result: result, meta: Map.merge(ctx.meta, %{dodged: true, halted: true})}
+
+        {:mitigated, defender, mult, type} ->
+          result = %{ctx.result | log: ["#{defender.name} #{type}s — #{round((1 - mult) * 100)}% reduced." | ctx.result.log]}
+          %{ctx | target: defender, damage: trunc(ctx.damage * mult), result: result, meta: Map.put(ctx.meta, :defense_type, type)}
+
+        {:hit, defender} ->
+          %{ctx | target: defender}
+      end
+    else
+      ctx
+    end
   end
 
   defp execute_step(:status_damage_mults, ctx) do
@@ -319,7 +333,36 @@ defmodule TePhoenix.Battle.DamagePipeline do
     end
   end
 
-  defp execute_step(:limb_routing, ctx), do: ctx
+  defp execute_step(:limb_routing, ctx) do
+    limb = ctx.meta[:effective_limb]
+    target = ctx.target
+
+    cond do
+      not ctx.settings[:enable_limb_targeting] ->
+        ctx
+
+      is_nil(limb) ->
+        ctx
+
+      map_size(target.limb_hp) == 0 ->
+        ctx
+
+      true ->
+        bleed = ctx.settings[:limb_bleed_through_default] || 0.60
+        {new_limb_hp, _leftover} = Limb.apply_to(target.limb_hp, limb, ctx.damage, bleed)
+        new_target = %{target | limb_hp: new_limb_hp}
+        result = %{ctx.result | log: ["#{target.name}'s #{limb} takes the blow." | ctx.result.log]}
+        ctx = %{ctx | target: new_target, result: result, meta: Map.put(ctx.meta, :limb_result, new_limb_hp)}
+
+        if Limb.disabled?(new_limb_hp, limb) do
+          msg = "#{target.name}'s #{limb} is disabled!"
+          result = %{ctx.result | log: [msg | ctx.result.log], actions: [%{type: :limb_disabled, target: target.name, limb: limb} | ctx.result.actions]}
+          %{ctx | result: result}
+        else
+          ctx
+        end
+    end
+  end
   defp execute_step(:break_shield, ctx), do: ctx
   defp execute_step(:stagger, ctx), do: ctx
   defp execute_step(:weapon_triangle, ctx), do: ctx
@@ -344,5 +387,42 @@ defmodule TePhoenix.Battle.DamagePipeline do
     end
   end
 
+  defp execute_step(:knockout_check, ctx) do
+    target = ctx.target
+
+    head_broken = map_size(target.limb_hp) > 0 and Limb.disabled?(target.limb_hp, :head)
+    ko_threshold = max(1, round(target.max_hp * 0.40))
+    big_hit = ctx.damage >= ko_threshold and target.current_hp > 0
+
+    cond do
+      target.unconscious or target.knocked_out ->
+        ctx
+
+      head_broken ->
+        new_target = %{target | unconscious: true, knocked_out: true}
+        result = %{ctx.result |
+          log: ["#{target.name} is knocked unconscious — head broken!" | ctx.result.log],
+          actions: [%{type: :knockout, target: target.name, reason: :head_broken} | ctx.result.actions]
+        }
+        %{ctx | target: new_target, result: result}
+
+      big_hit and target.current_hp <= target.max_hp * 0.20 ->
+        new_target = %{target | unconscious: true, knocked_out: true}
+        result = %{ctx.result |
+          log: ["#{target.name} crumples — knocked out by the blow." | ctx.result.log],
+          actions: [%{type: :knockout, target: target.name, reason: :overwhelmed} | ctx.result.actions]
+        }
+        %{ctx | target: new_target, result: result}
+
+      true ->
+        ctx
+    end
+  end
+
   defp execute_step(_unknown, ctx), do: ctx
+
+  if Mix.env() == :test do
+    @doc false
+    def __test_step__(step, ctx), do: execute_step(step, ctx)
+  end
 end

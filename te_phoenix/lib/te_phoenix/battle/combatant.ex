@@ -191,6 +191,21 @@ defmodule TePhoenix.Battle.Combatant do
     %{c | current_hp: max(0, c.current_hp - amount)}
   end
 
+  @doc "Initialise per-limb HP from max_hp (Session 8)."
+  def init_limbs(%__MODULE__{} = c) do
+    %{c | limb_hp: TePhoenix.Battle.Limb.init(c.max_hp)}
+  end
+
+  @doc "True if the named limb is at 0 HP."
+  def limb_disabled?(%__MODULE__{limb_hp: lh}, limb) do
+    TePhoenix.Battle.Limb.disabled?(lh, limb)
+  end
+
+  @doc "Mark a combatant unconscious — does not kill them."
+  def knockout(%__MODULE__{} = c) do
+    %{c | unconscious: true, knocked_out: true}
+  end
+
   @doc "Apply healing, clamping to max HP"
   def apply_healing(%__MODULE__{} = c, amount) when amount >= 0 do
     %{c | current_hp: min(c.max_hp, c.current_hp + amount)}
