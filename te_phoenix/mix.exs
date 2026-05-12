@@ -11,9 +11,26 @@ defmodule TePhoenix.MixProject do
       aliases: aliases(),
       deps: deps(),
       listeners: [Phoenix.CodeReloader],
-      releases: [
-        te_phoenix: [
-          strip_beams: false
+      releases: releases()
+    ]
+  end
+
+  # Burrito-wrapped releases. Each target produces a single self-contained
+  # binary that starts Phoenix and opens the default browser at localhost.
+  # First build needs the zig toolchain on the build host — see
+  # github.com/burrito-elixir/burrito and bin/build-binary.sh.
+  defp releases do
+    [
+      te_phoenix: [
+        strip_beams: false,
+        steps: [:assemble, &Burrito.wrap/1],
+        burrito: [
+          targets: [
+            linux_amd64: [os: :linux, cpu: :x86_64],
+            mac_amd64:   [os: :darwin, cpu: :x86_64],
+            mac_arm64:   [os: :darwin, cpu: :aarch64],
+            win:         [os: :windows, cpu: :x86_64]
+          ]
         ]
       ]
     ]
@@ -65,7 +82,8 @@ defmodule TePhoenix.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:bcrypt_elixir, "~> 3.0"},
-      {:req, "~> 0.5"}
+      {:req, "~> 0.5"},
+      {:burrito, "~> 1.0", runtime: false}
     ]
   end
 
