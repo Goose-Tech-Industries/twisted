@@ -135,10 +135,30 @@
    */
   function createCanvas2DFallback(c: HTMLCanvasElement) {
     const TILE = TILE_SIZE
-    const TILE_COLORS: Record<number, string> = {
-      0: '#1f2e1a', 1: '#2a1410', 2: '#5a3a1a', 3: '#1a2e4a',
-      4: '#3a2a1a', 5: '#3a3434', 6: '#1f1a1a', 7: '#0f0a0a',
-      8: '#7a8a9a', 10: '#5a3a1a'
+    // Mirror @twisted/render DEFAULT_TILE_COLORS. All tile IDs 0-63
+    // covered so the canvas2D fallback renders identically to Pixi.
+    // Unknown IDs (including -1 sentinel) fall back to zinc-800.
+    const hex = (c: number) => '#' + c.toString(16).padStart(6, '0')
+    const tileColor = (id: number): string => {
+      const COLORS: Record<number, number> = {
+        0: 0x2e5d31, 1: 0x3a3a3a, 2: 0x3a2a0a, 3: 0x1e3a5f,
+        4: 0x7a5a2a, 5: 0x8a8a8a, 6: 0x2a2a2a, 7: 0x1a1a1a,
+        8: 0xc9b27a, 9: 0xe8edf2, 10: 0xa4c8e0, 11: 0x4a3520,
+        12: 0xc1331a, 13: 0x5a544f, 14: 0x4a7a3a, 15: 0x8a5d8a,
+        16: 0x3a5a30, 17: 0x3d3823, 18: 0x2b1f10, 19: 0x3a3a25,
+        20: 0x3d6385, 21: 0x14304f, 22: 0x2d5478, 23: 0x5a8aaa,
+        24: 0xd6d2c8, 25: 0x4a525a, 26: 0x813833, 27: 0x6d6e72,
+        28: 0xb08a5a, 29: 0x5a574d, 30: 0x5d3329, 31: 0x3a3530,
+        32: 0x6e4a25, 33: 0x855e2e, 34: 0x4a311a, 35: 0x2d2010,
+        36: 0x4a3a3a, 37: 0x3d6535, 38: 0x2a1f1a, 39: 0x2d5025,
+        40: 0xd8d0b8, 41: 0x4a1c1c, 42: 0x6e1c1c, 43: 0x1f1a18,
+        44: 0xb8501a, 45: 0x15131a, 46: 0x1a0d2a, 47: 0x3a3520,
+        48: 0x6a5aa0, 49: 0x5a8a90, 50: 0x80c0e8, 51: 0x8aa8d0,
+        52: 0x7a4ab0, 53: 0x1a6a4a, 54: 0xd090b8, 55: 0x3a2535,
+        56: 0xe8c85a, 57: 0xcfcfcf, 58: 0x1a3a20, 59: 0x704040,
+        60: 0x505860, 61: 0x7a4a2a, 62: 0x909090, 63: 0x5a1a5a
+      }
+      return hex(COLORS[id] ?? 0x1f2937)
     }
 
     const draw = (s: { layers: { ground: number[] }; mapWidth: number; mapHeight: number; playerX: number; playerY: number; nearbyPlayers?: Array<{ x: number; y: number; name?: string }>; entities?: Array<{ x: number; y: number; kind: string; name?: string }>; camX: number; camY: number; viewportW: number; viewportH: number }) => {
@@ -149,7 +169,9 @@
         c.width = Math.floor(cw) || 1
         c.height = Math.floor(ch) || 1
       }
-      ctx.fillStyle = '#050507'
+      // Background behind the map — zinc-900 so unpainted/out-of-bounds
+      // canvas area reads as a deep void rather than bright white.
+      ctx.fillStyle = '#111118'
       ctx.fillRect(0, 0, c.width, c.height)
 
       const ox = -s.camX, oy = -s.camY
@@ -157,12 +179,14 @@
       for (let y = 0; y < s.mapHeight; y++) {
         for (let x = 0; x < s.mapWidth; x++) {
           const tile = ground[y * s.mapWidth + x] ?? 0
-          ctx.fillStyle = TILE_COLORS[tile] ?? '#1a1414'
+          ctx.fillStyle = tileColor(tile)
           ctx.fillRect(ox + x * TILE, oy + y * TILE, TILE, TILE)
         }
       }
 
-      ctx.strokeStyle = 'rgba(178, 34, 34, 0.06)'
+      // Grid — slightly brighter now so every tile cell reads as a cell,
+      // even when the whole map is the same tile id.
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)'
       ctx.lineWidth = 1
       for (let x = 0; x <= s.mapWidth; x++) {
         ctx.beginPath()
