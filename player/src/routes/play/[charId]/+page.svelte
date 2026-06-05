@@ -137,13 +137,13 @@
   game.on<unknown>('deployed_structures',  (p) => structures.set(asList(p, 'structures')))
   game.on<Record<string, unknown>>('overworld_effects', (p) => visualFx.setOverworld(p ?? {}))
 
-  game.on<{ x: number; y: number }>('force_move', (p) => character.active && character.patch({ x: p.x, y: p.y }))
+  game.on<{ x: number; y: number }>('force_move', (p) => {
+    console.warn('[move] force_move →', p.x, p.y, 'char at', character.active?.x, character.active?.y)
+    return character.active && character.patch({ x: p.x, y: p.y })
+  })
 
-  // Server pushes move_confirmed on the game channel after every
-  // accepted move — the authoritative position update. Optimistic
-  // patch in moveDirection() moves the sprite instantly; this snaps
-  // to the server-confirmed value ~200ms later, preventing drift.
   game.on<{ x: number; y: number }>('move_confirmed', (p) => {
+    console.info('[move] confirmed →', p.x, p.y, 'char at', character.active?.x, character.active?.y)
     if (character.active) character.patch({ x: p.x, y: p.y })
   })
   game.on<{ type?: string; message: string }>('notification', (p) => {
@@ -360,6 +360,7 @@
     const dx = dir === 'left' ? -1 : dir === 'right' ? 1 : 0
     const dy = dir === 'up' ? -1 : dir === 'down' ? 1 : 0
     void game.push('move', { x: c.x + dx, y: c.y + dy, running: false })
+    console.warn('[move] SENT →', c.x + dx, c.y + dy, 'from', c.x, c.y)
     character.patch({ x: c.x + dx, y: c.y + dy })
   }
 

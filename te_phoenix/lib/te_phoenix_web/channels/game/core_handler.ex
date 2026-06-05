@@ -44,6 +44,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     player = PlayerRegistry.get(char_id)
 
     if is_nil(player) do
+      Logger.warning("[move] no player in registry for char #{char_id}")
       {:noreply, socket}
     else
       target_x = parse_int(payload["x"])
@@ -58,6 +59,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
       effective_cooldown = trunc(base_cooldown * (if is_running, do: 0.5, else: 1.0) / max(0.5, mount_mult))
 
       if now - last_move < effective_cooldown do
+        Logger.info("[move] THROTTLED char=#{char_id} target=#{target_x},#{target_y} player_at=#{player.x},#{player.y} elapsed=#{now - last_move}ms cooldown=#{effective_cooldown}ms")
         {:noreply, socket}
       else
         do_move(socket, player, char_id, target_x, target_y, now)
@@ -486,6 +488,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
   defp do_move(socket, player, char_id, target_x, target_y, now) do
     map_data = MapData.get(player.map_id)
     if is_nil(map_data) do
+      Logger.warning("[move] char=#{char_id} map_data nil for map #{player.map_id}")
       {:noreply, socket}
     else
       dx = abs(target_x - player.x)
@@ -494,6 +497,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
       cond do
         # Must move exactly 1 tile (cardinal or diagonal)
         (dx + dy) < 1 or dx > 1 or dy > 1 ->
+          Logger.warning("[move] REJECT char=#{char_id} dist=#{dx},#{dy} target=#{target_x},#{target_y} player_at=#{player.x},#{player.y}")
           push(socket, "force_move", %{x: player.x, y: player.y})
           {:noreply, socket}
 
@@ -503,11 +507,13 @@ defmodule TePhoenixWeb.Game.CoreHandler do
 
         # Passability check
         not tile_passable?(map_data, target_x, target_y) ->
+          Logger.warning("[move] BLOCKED char=#{char_id} target=#{target_x},#{target_y}")
           push(socket, "force_move", %{x: player.x, y: player.y})
           {:noreply, socket}
 
         true ->
           # Valid move — update position
+          Logger.info("[move] ACCEPT char=#{char_id} #{player.x},#{player.y}→#{target_x},#{target_y}")
           PlayerRegistry.update(char_id, %{x: target_x, y: target_y, last_move_time: now})
 
           # Broadcast to map (all players on this map see the move)
@@ -778,14 +784,26 @@ defmodule TePhoenixWeb.Game.CoreHandler do
   defp tile_passable?(map_data, x, y) do
     idx = y * map_data.width + x
     passability = map_data.passability || []
+    tiles = map_data.tiles || []
+    tile_id = Enum.at(tiles, idx)
 
-    if passability != [] do
-      Enum.at(passability, idx) != 1
+    # Passability layer: 1 = explicitly blocked (admin override, e.g. a wall
+    # section painted as a puzzle barrier). If unset or 0, fall through to
+    # the tile palette — the game_tile_types.is_passable column is the
+    # canonical "can you walk on this tile type?" source of truth.
+    explicit_block = passability != [] and Enum.at(passability, idx) == 1
+    if explicit_block do
+      false
     else
-      tiles = map_data.tiles || []
-      tile_id = Enum.at(tiles, idx)
-      # Blocked tile IDs: 0 = void, other blocking tiles
-      tile_id != nil and tile_id != 0
+      tile_passable_by_type?(tile_id)
+    end
+  end
+
+  defp tile_passable_by_type?(nil), do: false
+  defp tile_passable_by_type?(tile_id) do
+    case :persistent_term.get({:tile_is_passable, tile_id}, :not_cached) do
+      :not_cached -> tile_id > 0
+      val -> val
     end
   end
 
@@ -1079,7 +1097,21 @@ defmodule TePhoenixWeb.Game.CoreHandler do
           tile = Enum.zip(cols, row) |> Map.new()
           Map.update(tile, "frame_tiles", nil, fn ft -> parse_json(ft, nil) end)
         end)
+
+        # Cache tile palette for rendering
         :persistent_term.put(:tile_palette, palette)
+
+        # Cache per-tile passability for movement validation.
+        # game_tile_types.is_passable (1=walkable, 0=blocked) is the
+        # canonical source — the passability layer in map JSON is an
+        # admin override for puzzle walls / quest barriers.
+        for tile <- palette do
+          id = tile["id"]
+          # DB column: is_passable TINYINT — 1 = walkable, 0 = blocked
+          passable = tile["is_passable"] != 0
+          :persistent_term.put({:tile_is_passable, id}, passable)
+        end
+
         palette
       _ -> []
     end
