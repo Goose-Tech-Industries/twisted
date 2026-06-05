@@ -419,7 +419,7 @@
     {#if battle.snapshot}
       <BattlePanel onaction={(payload) => battleCh?.push('action', payload)} />
     {:else if world.map}
-      <MapView map={world.map} character={character.active} players={world.players} npcs={world.npcs} drops={world.drops} palette={tilePalette.entries} />
+       <MapView map={world.map} character={character.active} players={world.players} npcs={world.npcs} drops={world.drops} palette={tilePalette.entries} fogEnabled={fog.hiddenCount > 0} exploredTiles={fog.explored} />
     {:else}
       <div class="placeholder">
         <p>Awaiting world data…</p>

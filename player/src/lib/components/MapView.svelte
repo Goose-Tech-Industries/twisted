@@ -16,9 +16,11 @@
     npcs: MapNpc[]
     drops?: GroundItem[]
     palette?: TilePaletteEntry[]
+    fogEnabled?: boolean
+    exploredTiles?: Set<string>
     ontileclick?: (x: number, y: number) => void
   }
-  let { map, character, players, npcs, drops = [], palette = [], ontileclick }: Props = $props()
+  let { map, character, players, npcs, drops = [], palette = [], fogEnabled = false, exploredTiles, ontileclick }: Props = $props()
 
   let canvas = $state<HTMLCanvasElement | null>(null)
   let worker: Worker | null = null
@@ -291,7 +293,9 @@
       map, character, players, npcs, drops, palette,
       viewportW: viewport.w,
       viewportH: viewport.h,
-      tileSize: TILE_SIZE
+      tileSize: TILE_SIZE,
+      fogEnabled,
+      exploredTiles,
     })
 
     const groundLen = state.layers.ground.length

@@ -14,13 +14,12 @@ export interface BuildRenderStateArgs {
   players: NearbyPlayer[]
   npcs: MapNpc[]
   drops: GroundItem[]
-  /** Admin-defined tile palette pushed on the channel. When present
-   * the renderer maps tile ids → admin colors/sprites; otherwise it
-   * falls back to its DEFAULT_TILE_COLORS table. */
   palette?: TilePaletteEntry[]
   viewportW: number
   viewportH: number
   tileSize: number
+  fogEnabled?: boolean
+  exploredTiles?: Set<string>
 }
 
 const TILE_SIZE = 32
@@ -42,7 +41,7 @@ function flattenTiles(tiles: number[][], width: number, height: number): number[
 }
 
 export function buildRenderState(args: BuildRenderStateArgs): RenderState {
-  const { map, character, players, npcs, drops, palette, viewportW, viewportH, tileSize } = args
+  const { map, character, players, npcs, drops, palette, viewportW, viewportH, tileSize, fogEnabled, exploredTiles } = args
   const ground = flattenTiles(map.tiles, map.width, map.height)
   const layers = map.layers
   const area = map.width * map.height
@@ -137,7 +136,10 @@ export function buildRenderState(args: BuildRenderStateArgs): RenderState {
 
     ambientDark: map.ambient_dark,
 
-    tilePalette: palette
+    tilePalette: palette,
+
+    fogEnabled,
+    exploredTiles: fogEnabled ? (exploredTiles as ReadonlySet<string> ?? new Set()) : undefined,
   }
 }
 
