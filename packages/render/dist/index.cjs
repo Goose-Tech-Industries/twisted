@@ -889,18 +889,21 @@ var TwistedRenderer = class {
     if (state.tilePalette) this.ingestPalette(state.tilePalette);
     this.recomputeAnimatedLayers(state);
     const layers = this.layers;
+    const clearChildren = (c) => {
+      for (const ch of c.removeChildren()) ch.destroy();
+    };
     const wallsContainerDirty = this.dirty.overlay || this.opts.renderMode === "2.5d" && this.dirty.ground;
-    layers.background.removeChildren();
-    if (this.dirty.ground) layers.ground.removeChildren();
-    if (wallsContainerDirty) layers.walls.removeChildren();
-    if (this.dirty.fringe) layers.fringe.removeChildren();
-    if (this.dirty.objects) layers.objects.removeChildren();
+    clearChildren(layers.background);
+    if (this.dirty.ground) clearChildren(layers.ground);
+    if (wallsContainerDirty) clearChildren(layers.walls);
+    if (this.dirty.fringe) clearChildren(layers.fringe);
+    if (this.dirty.objects) clearChildren(layers.objects);
     if (this.dirty.entities) {
-      layers.entities.removeChildren();
-      layers.player.removeChildren();
+      clearChildren(layers.entities);
+      clearChildren(layers.player);
     }
     if (this.dirty.passability || this.dirty.elevation) {
-      layers.fog.removeChildren();
+      clearChildren(layers.fog);
     }
     let drawnGround = 0;
     let skippedOffscreen = 0;

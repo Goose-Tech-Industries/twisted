@@ -38,9 +38,12 @@
 
   onMount(() => {
     if (!canvas) return
-    // Toggle on the @twisted/render bail/draw counter logs while we
-    // chase the "renderer receives state but draws nothing" bug.
-    ;(globalThis as { RENDER_DEBUG?: boolean }).RENDER_DEBUG = true
+    // @twisted/render bail/draw counter logs. Off by default — the
+    // "renderer receives state but draws nothing" hunt is solved (it was a
+    // Pixi Graphics leak in the animated-tile repaint, fixed 2026-06-05).
+    // Re-enable on demand by loading the player with ?renderdebug in the URL.
+    ;(globalThis as { RENDER_DEBUG?: boolean }).RENDER_DEBUG =
+      new URLSearchParams(location.search).has('renderdebug')
     console.info('[map] mount', { mapId: map.id, mapName: map.name })
 
     // Worker + OffscreenCanvas + Pixi v8 trio is wired but Pixi's init

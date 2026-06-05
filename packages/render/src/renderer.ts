@@ -441,20 +441,31 @@ export class TwistedRenderer {
     //   layers.entities   → state.entities (+ companions/groundItems/structures/battles)
     //   layers.player     → state.playerX/Y (tied to entities for V1)
     //   layers.fog        → fog of war + passability/elevation overlays
+    // Pixi v8's removeChildren() DETACHES children but does not free their
+    // GPU geometry / GraphicsContext. The animation ticker repaints any
+    // layer containing an animated tile (Water/Lava — present on nearly
+    // every map) ~10x/sec, so leaking the detached Graphics each repaint
+    // compounds into WebGL context loss → a frozen/blank/garbled canvas
+    // after seconds of real use. It is INVISIBLE in a one-shot headless
+    // screenshot (one frame, then exit), which is why this survived months
+    // of "looks fine in the test" verification. Destroy on removal.
+    const clearChildren = (c: Container): void => {
+      for (const ch of c.removeChildren()) ch.destroy();
+    };
     const wallsContainerDirty =
       this.dirty.overlay ||
       (this.opts.renderMode === "2.5d" && this.dirty.ground);
-    layers.background.removeChildren();
-    if (this.dirty.ground) layers.ground.removeChildren();
-    if (wallsContainerDirty) layers.walls.removeChildren();
-    if (this.dirty.fringe) layers.fringe.removeChildren();
-    if (this.dirty.objects) layers.objects.removeChildren();
+    clearChildren(layers.background);
+    if (this.dirty.ground) clearChildren(layers.ground);
+    if (wallsContainerDirty) clearChildren(layers.walls);
+    if (this.dirty.fringe) clearChildren(layers.fringe);
+    if (this.dirty.objects) clearChildren(layers.objects);
     if (this.dirty.entities) {
-      layers.entities.removeChildren();
-      layers.player.removeChildren();
+      clearChildren(layers.entities);
+      clearChildren(layers.player);
     }
     if (this.dirty.passability || this.dirty.elevation) {
-      layers.fog.removeChildren();
+      clearChildren(layers.fog);
     }
 
     // Counters for the diagnostic emit at the end of update().
