@@ -225,7 +225,14 @@
 
   social.on<IncomingChat>('chat_msg', ingest)
 
-  // Map-scoped local chat. Re-subscribes when the player changes maps.
+  // Map-scoped local chat + player_moved confirmations.
+  // Server broadcasts `player_moved` to `map:<id>` for every accepted
+  // move (line 514 core_handler.ex). The client already joins this
+  // channel for local chat — handle player_moved here so the client
+  // stays in lockstep with the server's authoritative position. The
+  // moveDirection() optimistic patch gives responsive visuals, and
+  // when the server confirmation arrives (~200ms later), this handler
+  // snaps position to the confirmed value. No timing guesswork needed.
   let mapTopic = $state<string | null>(null)
   $effect(() => {
     const mid = character.active?.map_id
@@ -236,8 +243,12 @@
   $effect(() => {
     const ch = mapChatCh
     if (!ch) return
-    const ref = ch.on('chat_msg', (p: unknown) => ingest(p as IncomingChat))
-    return () => ch.off('chat_msg', ref)
+    const r1 = ch.on('chat_msg', (p: unknown) => ingest(p as IncomingChat))
+    const r2 = ch.on('player_moved', (p: unknown) => {
+      const m = p as { id?: number; x?: number; y?: number }
+      if (m.id === character.active?.id) character.patch({ x: m.x, y: m.y })
+    })
+    return () => { ch.off('chat_msg', r1); ch.off('player_moved', r2) }
   })
 
   // Per-character party topic (Phoenix broadcasts party chat to
@@ -314,9 +325,20 @@
   game.on<unknown>('error_msg', (p) => console.warn('[phx] error_msg', p))
 
   // ── input + outgoing pushes ─────────────────────────────────────
+  // Moves are sent blind; the server broadcasts `player_moved` to
+  // `map:<id>` on acceptance (handled above) and `force_move` on the
+  // game channel on rejection. Optimistic patch gives responsive
+  // movement; player_moved snaps to truth. A 220ms client gate keeps
+  // key-repeat from flooding the server's 200ms move throttle (flood
+  // + throttle drops + optimistic drift = the old snap-back bug).
+  const MOVE_COOLDOWN_MS = 220
+  let lastMoveAt = 0
   function moveDirection(dir: 'up' | 'down' | 'left' | 'right') {
     const c = character.active
     if (!c) return
+    const now = performance.now()
+    if (now - lastMoveAt < MOVE_COOLDOWN_MS) return
+    lastMoveAt = now
     const dx = dir === 'left' ? -1 : dir === 'right' ? 1 : 0
     const dy = dir === 'up' ? -1 : dir === 'down' ? 1 : 0
     void game.push('move', { x: c.x + dx, y: c.y + dy, running: false })
