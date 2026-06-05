@@ -111,7 +111,7 @@
       const r = new TwistedRenderer({
         canvas,
         canvasMode: 'play',
-        renderMode: 'classic',
+        renderMode: (map.render_mode as 'classic' | '2.5d' | 'isometric' | 'first-person') || 'classic',
         tileSize: TILE_SIZE,
         backgroundAlpha: 1,
         callbacks: { onTileClick: (x, y) => ontileclick?.(x, y) }

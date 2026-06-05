@@ -12,6 +12,7 @@
   import { chat as chatStore } from '$stores/chat.svelte'
   import { inventory } from '$stores/inventory.svelte'
   import { notifications } from '$stores/notifications.svelte'
+  import { shop } from '$stores/shop.svelte'
   import { dialogue } from '$stores/dialogue.svelte'
   import { fog } from '$stores/fog.svelte'
   import { tournament } from '$stores/tournament.svelte'
@@ -164,6 +165,12 @@
     'fog_delta', (d) => fog.applyDelta(d)
   )
   game.on<unknown>('fog_reset', () => fog.reset())
+
+  // Shop channel responses (ShopHandler pushes these after shop_get_items,
+  // shop_buy_item, shop_sell_item).
+  game.on('shop_items', (p: unknown) => shop.onItems(p as never))
+  game.on('buy_result', (p: unknown) => shop.onBuyResult(p as never))
+  game.on('sell_result', (p: unknown) => shop.onSellResult(p as never))
   game.on<{ battle_id: number }>('battle_start', () => notifications.push('warning', 'Battle started!'))
   game.on<{ speaker: string; body: string; portrait?: string; choices?: Array<{ id: string; label: string }>; end?: boolean }>(
     'dialogue', (p) => dialogue.show(p)
@@ -207,9 +214,9 @@
         })
         break
       case 'open_shop':
-        // Shop UI is a panel — let the user open it from the menu rather
-        // than auto-opening to avoid stealing focus mid-conversation.
-        notifications.push('info', `Shop available${evt.discount ? ` (${evt.discount}% off)` : ''}`)
+        if (evt.shopId && typeof evt.shopId === 'number') {
+          shop.load(evt.shopId, (evt.shopName as string) || 'Shop')
+        }
         break
       case 'notification':
         notifications.push((evt.type as never) ?? 'info', evt.text || '')
@@ -316,10 +323,6 @@
   // ── boot ────────────────────────────────────────────────────────
   onMount(async () => {
     // No token at all → we're definitely not authed. Bounce to /login.
-    // Token but no user yet means the layout's auth.restore() is mid-
-    // flight (Svelte runs child onMount before parent, so the layout's
-    // /me request may not have started yet). Trigger restore ourselves
-    // so we don't race-redirect a logged-in user out.
     if (!auth.token) {
       goto('/login', { replaceState: true })
       return
@@ -327,17 +330,10 @@
     if (!auth.user) {
       try { await auth.restore() } catch { /* surfaced below */ }
     }
-    // restore() either populated user OR cleared the token on failure.
     if (!auth.token || !auth.user) {
       goto('/login', { replaceState: true })
       return
     }
-    // Token in hand → ensure the socket is alive. Retry on any
-    // non-active state ('disconnected' OR 'error'), not just disconnected.
-    // A transient handshake failure during boot used to leave the socket
-    // permanently dead; this catches that case AND covers fresh navigations
-    // where the layout's restore was skipped (auth.user already set).
-    // connect() is idempotent on a healthy (token, socket) pair.
     if (connection.state !== 'connected' && connection.state !== 'connecting') {
       console.info('[phx] page boot retry-connect, state was', connection.state)
       connection.connect(auth.token, 0)
@@ -347,6 +343,10 @@
     }
     await inventory.load(initialCharId)
     if (character.active?.gold !== undefined) inventory.setGold(character.active.gold ?? 0)
+
+    // Bind the game channel push function to the shop store so it can
+    // send shop_get_items / shop_buy_item / shop_sell_item events.
+    shop.bindPush((event, payload) => game.push(event, payload))
   })
 
   // ── debug taps (visible in DevTools console) ───────────────────
@@ -379,7 +379,12 @@
       const targetTile = m.tiles?.[ty]?.[tx]
       if (targetTile !== undefined) {
         const entry = tilePalette.entries.find(e => e.id === targetTile)
-        if (entry && entry.passable === false) return
+        // DB sends `is_passable` (TINYINT: 1=walkable, 0=blocked).
+        // The TilePaletteEntry type has `passable` (boolean) but the
+        // raw channel payload uses the DB column name.
+        const blocked = (entry as Record<string, unknown> | null)?.is_passable === 0
+          || entry?.passable === false
+        if (entry && blocked) return
       }
     } else {
       // No map data yet — don't move blindly
