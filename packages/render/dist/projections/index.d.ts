@@ -350,6 +350,12 @@ interface TwistedRendererOptions {
      * `window.devicePixelRatio` on the main thread, `1` in workers.
      */
     resolution?: number;
+    /**
+     * When false, tile animations (water shimmer, lava glow, sprite frames)
+     * are disabled — animated tiles draw as static (first frame / base color)
+     * and the animation ticker becomes a true no-op. Default: true.
+     */
+    animateTiles?: boolean;
 }
 /**
  * Stateful Pixi renderer. Create once per canvas, call init(), then call
@@ -366,7 +372,14 @@ declare class TwistedRenderer {
     private lastState;
     private frameCounter;
     private dirty;
-    private animatedLayers;
+    private animGroundCells;
+    private animOverlayCells;
+    private animFringeCells;
+    private hasAnyAnimCells;
+    private _animStep;
+    private _animOffsetX;
+    private _animOffsetY;
+    private _cachedPixi;
     private animatedTiles;
     /** Tile IDs that have a sprite-based animation or static sprite. Keyed
      * by tile id, value is the resolved frame URL list (one entry for
@@ -460,9 +473,7 @@ declare class TwistedRenderer {
     /** Flag every layer dirty — used by viewport/camera/palette mutations
      * that affect screen-space positions or colour mappings. */
     markAllDirty(): void;
-    /** Flag only the layers that contain currently-animated tile ids
-     * (computed in recomputeAnimatedLayers()). On a static map this set
-     * is empty, so the ticker becomes a no-op. */
+    /** Legacy — no longer used by the per-cell ticker. Kept for API compat. */
     markAnimatedDirty(): void;
     /** True if any layer needs redrawing. The ticker uses this to short-
      * circuit before scheduling a paint pass. */
@@ -473,11 +484,12 @@ declare class TwistedRenderer {
      * but with the diff against lastState being a no-op (same reference),
      * so any flags pre-set by markAnimatedDirty/markLayerDirty stay set. */
     drawDirtyOnly(): Promise<void>;
-    /** Walk each tile-data layer once and record which ones reference
-     * an animated tile id. Cheap: one pass per layer per state update.
-     * Without this, the ticker would refire `update()` every 100ms even
-     * on maps where no tile actually animates. */
-    private recomputeAnimatedLayers;
+    /** Walk each tile-data layer once and record per-CELL which tiles are
+     * animated. Results stored in animGroundCells / animOverlayCells /
+     * animFringeCells. The animation ticker uses these arrays to only
+     * redraw the *Anim containers (a handful of cells) instead of the
+     * entire layer (hundreds of cells). */
+    private recalcAnimCells;
     /** Diff incoming state against `lastState` and set per-layer dirty
      * flags by reference identity. Caller is responsible for replacing
      * the layer arrays (not mutating in place) when content changes —
@@ -486,6 +498,11 @@ declare class TwistedRenderer {
     private diffAndMarkDirty;
     /** Tear down the Pixi app and release GPU resources. */
     destroy(): void;
+    /** Draw animated tile cells into a target container.
+     * Uses the cached step/offsetX/offsetY from the last full paint
+     * (valid because the ticker only fires when the camera hasn't moved —
+     * otherwise a dirty flag triggers a full update()). */
+    private drawAnimCells;
     private ingestPalette;
     /**
      * Synchronously return a loaded texture for an object sprite URL, or

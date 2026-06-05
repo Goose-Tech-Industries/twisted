@@ -155,6 +155,12 @@ export interface TwistedRendererOptions {
    * `window.devicePixelRatio` on the main thread, `1` in workers.
    */
   resolution?: number;
+  /**
+   * When false, tile animations (water shimmer, lava glow, sprite frames)
+   * are disabled — animated tiles draw as static (first frame / base color)
+   * and the animation ticker becomes a true no-op. Default: true.
+   */
+  animateTiles?: boolean;
 }
 
 /**
@@ -167,11 +173,14 @@ export class TwistedRenderer {
   private layers: {
     background: Container;
     ground: Container;
+    groundAnim: Container;
     walls: Container;
+    overlayAnim: Container;
     objects: Container;
     entities: Container;
     player: Container;
     fringe: Container;
+    fringeAnim: Container;
     fog: Container;
   } | null = null;
   private projection: Projection;
@@ -195,11 +204,35 @@ export class TwistedRenderer {
     objects: true,
   };
 
-  // Set of layer names that contain at least one tile id present in
-  // animatedTiles or spriteTiles. Recomputed on every state update +
-  // every palette ingest. Empty set ⇒ animation ticker has nothing
-  // to redraw and skips work entirely.
-  private animatedLayers: Set<LayerName> = new Set();
+  // Per-cell animated-tile tracking. When animation is enabled, tiles
+  // that are color-cycling (animatedTiles, e.g. water/lava) or sprite-
+  // driven (spriteTiles) are NOT drawn into the static layer bucket.
+  // Instead they are recorded here and drawn into the layer's *Anim
+  // container, which the ticker clears + redraws every ~100ms without
+  // touching the static layer containers. Empty arrays ⇒ ticker no-op.
+  // See recalcAnimCells() — recomputed on every state update.
+  private animGroundCells: Array<{x: number, y: number, tileId: number}> = [];
+  private animOverlayCells: Array<{x: number, y: number, tileId: number}> = [];
+  private animFringeCells: Array<{x: number, y: number, tileId: number}> = [];
+
+  private hasAnyAnimCells(): boolean {
+    return (
+      this.animGroundCells.length > 0 ||
+      this.animOverlayCells.length > 0 ||
+      this.animFringeCells.length > 0
+    );
+  }
+
+  // Cached projection data from the last full update() pass. The
+  // animation ticker reuses these to draw animated cells at their
+  // current screen positions without recomputing offsets. When the
+  // camera moves, diffAndMarkDirty calls markAllDirty() and the next
+  // update() re-establishes fresh cached values.
+  private _animStep = 0;
+  private _animOffsetX = 0;
+  private _animOffsetY = 0;
+  // Cached Pixi import for the animation ticker (avoids re-import on each tick).
+  private _cachedPixi: typeof import("pixi.js") | null = null;
 
   private animatedTiles: Map<number, { colors: number[]; fps: number }> = new Map();
   /** Tile IDs that have a sprite-based animation or static sprite. Keyed
@@ -291,8 +324,12 @@ export class TwistedRenderer {
     background.label = "background";
     const ground = new PIXI.Container();
     ground.label = "ground";
+    const groundAnim = new PIXI.Container();
+    groundAnim.label = "groundAnim";
     const walls = new PIXI.Container();
     walls.label = "walls";
+    const overlayAnim = new PIXI.Container();
+    overlayAnim.label = "overlayAnim";
     const objects = new PIXI.Container();
     objects.label = "objects";
     const entities = new PIXI.Container();
@@ -301,11 +338,13 @@ export class TwistedRenderer {
     player.label = "player";
     const fringe = new PIXI.Container();
     fringe.label = "fringe";
+    const fringeAnim = new PIXI.Container();
+    fringeAnim.label = "fringeAnim";
     const fog = new PIXI.Container();
     fog.label = "fog";
 
-    app.stage.addChild(background, ground, walls, objects, entities, player, fringe, fog);
-    this.layers = { background, ground, walls, objects, entities, player, fringe, fog };
+    app.stage.addChild(background, ground, groundAnim, walls, overlayAnim, objects, entities, player, fringe, fringeAnim, fog);
+    this.layers = { background, ground, groundAnim, walls, overlayAnim, objects, entities, player, fringe, fringeAnim, fog };
 
     this.entityRenderer = new EntityRenderer({
       container: entities,
@@ -318,13 +357,10 @@ export class TwistedRenderer {
       pixi: PIXI,
     });
 
-    // Animation ticker — advances frameCounter and re-runs the paint
-    // pass at ~10fps WHEN the current state actually has animated
-    // content. Phase-2 dirty-flag system means:
-    //   - empty animatedLayers AND no animated objects → ticker is a no-op
-    //   - otherwise: mark only the animated layers dirty and let
-    //     drawDirtyOnly() repaint just those layers; static layers
-    //     keep their previously-drawn Graphics on stage.
+    // Animation ticker — per-cell animated redraw. Only the *Anim
+    // containers are cleared + redrawn; static layer containers are
+    // never touched by the ticker. When animateTiles is off, the
+    // ticker is a true no-op (all anim cell arrays are empty).
     let animFrameAccum = 0;
     app.ticker.add((tickerArg: unknown) => {
       const delta = typeof tickerArg === "number"
@@ -334,19 +370,44 @@ export class TwistedRenderer {
       if (animFrameAccum < 6) return; // ~10fps at 60fps ticker
       animFrameAccum = 0;
 
-      if (!this.lastState) return;
+      if (!this.lastState || !this.layers) return;
+      if (!this.hasAnyAnimCells()) return;
 
+      this.frameCounter++;
+
+      // Animated objects (sprite-animated props/chests) still need a
+      // full dirty-objects pass. But tile-layer *Anim containers only
+      // need the cells redrawn — no markDirty, no state diffing.
       const hasAnimatedObjects = (this.lastState.objects || []).some(
         (o) => (o.sprite_anim_urls && o.sprite_anim_urls.length > 1) ||
                (o.anim_frames && o.anim_frames.length > 1)
       );
 
-      // No animated content anywhere in current state — skip entirely.
-      if (this.animatedLayers.size === 0 && !hasAnimatedObjects) return;
+      const PIXI = this._cachedPixi || null;
+      if (!PIXI) return;
+      const layers = this.layers;
 
-      this.markAnimatedDirty();
-      if (hasAnimatedObjects) this.markLayerDirty("objects");
-      void this.drawDirtyOnly();
+      const clearChildren = (c: Container): void => {
+        for (const ch of c.removeChildren()) ch.destroy();
+      };
+
+      if (this.animGroundCells.length > 0) {
+        clearChildren(layers.groundAnim);
+        this.drawAnimCells(layers.groundAnim, this.animGroundCells, PIXI, false);
+      }
+      if (this.animOverlayCells.length > 0) {
+        clearChildren(layers.overlayAnim);
+        this.drawAnimCells(layers.overlayAnim, this.animOverlayCells, PIXI, true);
+      }
+      if (this.animFringeCells.length > 0) {
+        clearChildren(layers.fringeAnim);
+        this.drawAnimCells(layers.fringeAnim, this.animFringeCells, PIXI, false);
+      }
+
+      if (hasAnimatedObjects) {
+        this.markLayerDirty("objects");
+        void this.drawDirtyOnly();
+      }
     });
 
     this.ready = true;
@@ -413,6 +474,7 @@ export class TwistedRenderer {
       return;
     }
     const PIXI = await loadPixi();
+    this._cachedPixi = PIXI;
     if (this.destroyed || !this.layers) return;
 
     // Update palette caches if the state carries a new palette.
@@ -420,10 +482,11 @@ export class TwistedRenderer {
     // any tile so every cached bucket is potentially stale.
     if (state.tilePalette) this.ingestPalette(state.tilePalette);
 
-    // Walk current state's tile arrays once and determine which layers
-    // actually contain animated tile ids. Cheap; lets the ticker skip
-    // work for static maps and skip layers without animated content.
-    this.recomputeAnimatedLayers(state);
+    // Scan tile data for animated cells — populates animGroundCells /
+    // animOverlayCells / animFringeCells so the ticker knows which
+    // *Anim containers need redraws. When animation is disabled the
+    // arrays stay empty and the ticker is a true no-op.
+    this.recalcAnimCells(state);
 
     const layers = this.layers;
     // Per-layer conditional clear. The container holding the visual
@@ -544,6 +607,10 @@ export class TwistedRenderer {
     const { tileSize } = this.opts;
     const off = this.computeOffsets(state);
     const { step, offsetX, offsetY } = off;
+    // Cache for the animation ticker's drawAnimCells pass
+    this._animStep = step;
+    this._animOffsetX = offsetX;
+    this._animOffsetY = offsetY;
     const vpPxW = off.vpPxW;
     const vpPxH = off.vpPxH;
 
@@ -595,9 +662,10 @@ export class TwistedRenderer {
     const drawLayer = (
       tiles: number[],
       targetContainer: Container,
-      opts: { skipNegative: boolean; hideUnderPlayer: boolean; colorOverride?: (id: number) => number; isGround?: boolean }
+      opts: { skipNegative: boolean; hideUnderPlayer: boolean; colorOverride?: (id: number) => number; isGround?: boolean; skipAnim?: boolean }
     ): void => {
       const buckets = new Map<number, Array<{ sx: number; sy: number }>>();
+      const skipAnimated = opts.skipAnim === true;
 
       for (let y = 0; y < mapHeight; y++) {
         for (let x = 0; x < mapWidth; x++) {
@@ -611,6 +679,10 @@ export class TwistedRenderer {
           const tileId = tiles[idx] ?? 0;
           if (opts.skipNegative && tileId < 0) continue;
           if (opts.hideUnderPlayer && hideFringeNear(x, y)) continue;
+
+          // When animation is enabled, skip animated tiles in the static
+          // bucket pass — they'll be drawn into the *Anim container after.
+          if (skipAnimated && (this.animatedTiles.has(tileId) || this.spriteTiles.has(tileId))) continue;
 
           const elev = elevLayer[idx] ?? 0;
           const { sx, sy } = this.projection.toScreen(x, y, elev, step, offsetX, offsetY);
@@ -660,14 +732,20 @@ export class TwistedRenderer {
     };
 
     // Ground: always drawn, tile 0 is default grass (never skipped).
-    // Skipped entirely if not dirty — Pixi keeps the previously-drawn
-    // bucket Graphics on stage.
+    // Animated tiles (water/lava) are split into a separate *Anim container
+    // so the ticker can redraw them without touching the static layer.
     if (this.dirty.ground) {
+      const animEnabled = this.opts.animateTiles !== false;
       drawLayer(state.layers.ground, layers.ground, {
         skipNegative: false,
         hideUnderPlayer: false,
         isGround: true,
+        skipAnim: animEnabled,
       });
+      if (animEnabled && this.animGroundCells.length > 0) {
+        clearChildren(layers.groundAnim);
+        this.drawAnimCells(layers.groundAnim, this.animGroundCells, PIXI, false);
+      }
       this.dirty.ground = false;
     }
 
@@ -682,7 +760,7 @@ export class TwistedRenderer {
         gfxBuckets: gfxCount,
         paletteSize: this.paletteColors.size,
         spriteTiles: this.spriteTiles.size,
-        animatedLayers: Array.from(this.animatedLayers),
+        animatedLayers: [this.animGroundCells.length > 0 ? "ground" : "", this.animOverlayCells.length > 0 ? "overlay" : "", this.animFringeCells.length > 0 ? "fringe" : ""].filter(Boolean),
         canvas: { w: this.app.renderer.width, h: this.app.renderer.height },
         cam: [state.camX, state.camY],
         vp: [state.viewportW, state.viewportH],
@@ -750,10 +828,16 @@ export class TwistedRenderer {
     // Overlay: sparse, skip -1 (empty). Lives in the same Pixi container
     // as the 2.5d wall extrusion above; both flip on `wallsContainerDirty`.
     if (this.dirty.overlay) {
+      const animEnabled = this.opts.animateTiles !== false;
       drawLayer(state.layers.overlay, layers.walls, {
         skipNegative: true,
         hideUnderPlayer: false,
+        skipAnim: animEnabled,
       });
+      if (animEnabled && this.animOverlayCells.length > 0) {
+        clearChildren(layers.overlayAnim);
+        this.drawAnimCells(layers.overlayAnim, this.animOverlayCells, PIXI, true);
+      }
       this.dirty.overlay = false;
     }
 
@@ -761,11 +845,16 @@ export class TwistedRenderer {
     // Uses state.hiddenFringeTiles (set of tile indices) to dim tiles the
     // player is standing under without fully removing them.
     if (this.dirty.fringe) {
+      const animEnabled = this.opts.animateTiles !== false;
       const hiddenFringe = state.hiddenFringeTiles;
       if (hiddenFringe && hiddenFringe.size > 0) {
         for (let i = 0; i < state.layers.fringe.length; i++) {
           const tileId = state.layers.fringe[i] ?? -1;
           if (tileId < 0) continue;
+          // Skip animated tiles in the static pass — drawn into fringeAnim
+          const isAnimTile = animEnabled &&
+            (this.animatedTiles.has(tileId) || this.spriteTiles.has(tileId));
+          if (isAnimTile) continue;
           const fx = i % mapWidth;
           const fy = Math.floor(i / mapWidth);
           if (!this.projection.inViewport(fx, fy, camX, camY, viewportW, viewportH)) continue;
@@ -780,7 +869,12 @@ export class TwistedRenderer {
         drawLayer(state.layers.fringe, layers.fringe, {
           skipNegative: true,
           hideUnderPlayer: true,
+          skipAnim: animEnabled,
         });
+      }
+      if (animEnabled && this.animFringeCells.length > 0) {
+        clearChildren(layers.fringeAnim);
+        this.drawAnimCells(layers.fringeAnim, this.animFringeCells, PIXI, false);
       }
       this.dirty.fringe = false;
     }
@@ -1481,13 +1575,11 @@ export class TwistedRenderer {
     }
   }
 
-  /** Flag only the layers that contain currently-animated tile ids
-   * (computed in recomputeAnimatedLayers()). On a static map this set
-   * is empty, so the ticker becomes a no-op. */
+  /** Legacy — no longer used by the per-cell ticker. Kept for API compat. */
   markAnimatedDirty(): void {
-    for (const layer of this.animatedLayers) {
-      this.dirty[layer] = true;
-    }
+    if (this.animGroundCells.length > 0) this.dirty.ground = true;
+    if (this.animOverlayCells.length > 0) this.dirty.overlay = true;
+    if (this.animFringeCells.length > 0) this.dirty.fringe = true;
   }
 
   /** True if any layer needs redrawing. The ticker uses this to short-
@@ -1510,25 +1602,41 @@ export class TwistedRenderer {
     return this.update(this.lastState);
   }
 
-  /** Walk each tile-data layer once and record which ones reference
-   * an animated tile id. Cheap: one pass per layer per state update.
-   * Without this, the ticker would refire `update()` every 100ms even
-   * on maps where no tile actually animates. */
-  private recomputeAnimatedLayers(state: RenderState): void {
-    this.animatedLayers.clear();
+  /** Walk each tile-data layer once and record per-CELL which tiles are
+   * animated. Results stored in animGroundCells / animOverlayCells /
+   * animFringeCells. The animation ticker uses these arrays to only
+   * redraw the *Anim containers (a handful of cells) instead of the
+   * entire layer (hundreds of cells). */
+  private recalcAnimCells(state: RenderState): void {
+    this.animGroundCells = [];
+    this.animOverlayCells = [];
+    this.animFringeCells = [];
+
+    const enabled = this.opts.animateTiles !== false;
+    if (!enabled) return;
     if (this.animatedTiles.size === 0 && this.spriteTiles.size === 0) return;
+
     const isAnim = (id: number) =>
       this.animatedTiles.has(id) || this.spriteTiles.has(id);
 
-    const scan = (tiles: number[] | undefined, name: LayerName): void => {
+    const scan = (
+      tiles: number[] | undefined,
+      layer: "ground" | "overlay" | "fringe",
+    ): void => {
       if (!tiles) return;
-      for (const id of tiles) {
+      const mw = state.mapWidth;
+      for (let i = 0; i < tiles.length; i++) {
+        const id = tiles[i] ?? 0;
+        if (id < 0) continue;
         if (isAnim(id)) {
-          this.animatedLayers.add(name);
-          return;
+          const cell = { x: i % mw, y: Math.floor(i / mw), tileId: id };
+          if (layer === "ground") this.animGroundCells.push(cell);
+          else if (layer === "overlay") this.animOverlayCells.push(cell);
+          else this.animFringeCells.push(cell);
         }
       }
     };
+
     scan(state.layers.ground, "ground");
     scan(state.layers.overlay, "overlay");
     scan(state.layers.fringe, "fringe");
@@ -1583,6 +1691,49 @@ export class TwistedRenderer {
   }
 
   // ── Internals ──────────────────────────────────────────────────
+
+  /** Draw animated tile cells into a target container.
+   * Uses the cached step/offsetX/offsetY from the last full paint
+   * (valid because the ticker only fires when the camera hasn't moved —
+   * otherwise a dirty flag triggers a full update()). */
+  private drawAnimCells(
+    target: Container,
+    cells: Array<{x: number; y: number; tileId: number}>,
+    PIXI: typeof import("pixi.js"),
+    isOverlay: boolean,
+  ): void {
+    const ts = this.opts.tileSize;
+    const step = this._animStep || (ts + 1);
+    const ox = this._animOffsetX;
+    const oy = this._animOffsetY;
+
+    for (const c of cells) {
+      const { sx, sy } = this.projection.toScreen(c.x, c.y, 0, step, ox, oy);
+
+      // Sprite-animated tile
+      const sprite = this.spriteTiles.get(c.tileId);
+      if (sprite) {
+        const frameIdx = Math.floor(this.frameCounter / (60 / sprite.fps)) % sprite.urls.length;
+        const frame = sprite.urls[frameIdx];
+        const tex = frame ? this.getObjectTexture(frame) : null;
+        if (tex) {
+          const s = new PIXI.Sprite(tex as import("pixi.js").Texture);
+          s.width = ts;
+          s.height = ts;
+          s.position.set(sx, sy);
+          target.addChild(s);
+          continue;
+        }
+        // Texture still loading — draw color fallback
+      }
+
+      // Color-cycle animated tile
+      const gfx = new PIXI.Graphics();
+      this.projection.drawTile(gfx, sx, sy, ts);
+      gfx.fill(isOverlay ? { color: this.tileColor(c.tileId), alpha: 0.5 } : this.tileColor(c.tileId));
+      target.addChild(gfx);
+    }
+  }
 
   private ingestPalette(palette: TilePaletteEntry[]): void {
     // Palette change can remap any tile id's colour or sprite — every
