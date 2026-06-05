@@ -138,6 +138,14 @@
   game.on<Record<string, unknown>>('overworld_effects', (p) => visualFx.setOverworld(p ?? {}))
 
   game.on<{ x: number; y: number }>('force_move', (p) => character.active && character.patch({ x: p.x, y: p.y }))
+
+  // Server pushes move_confirmed on the game channel after every
+  // accepted move — the authoritative position update. Optimistic
+  // patch in moveDirection() moves the sprite instantly; this snaps
+  // to the server-confirmed value ~200ms later, preventing drift.
+  game.on<{ x: number; y: number }>('move_confirmed', (p) => {
+    if (character.active) character.patch({ x: p.x, y: p.y })
+  })
   game.on<{ type?: string; message: string }>('notification', (p) => {
     notifications.push((p.type as never) ?? 'info', p.message)
   })
@@ -246,7 +254,17 @@
     const r1 = ch.on('chat_msg', (p: unknown) => ingest(p as IncomingChat))
     const r2 = ch.on('player_moved', (p: unknown) => {
       const m = p as { id?: number; x?: number; y?: number }
-      if (m.id === character.active?.id) character.patch({ x: m.x, y: m.y })
+      // Own position is now confirmed via move_confirmed on the game
+      // channel — this handler updates OTHER players on the minimap.
+      if (m.id != null && m.id !== character.active?.id) {
+        world.upsertPlayer({
+          charId: m.id,
+          name: '',
+          x: m.x ?? 0,
+          y: m.y ?? 0,
+          level: 1
+        })
+      }
     })
     return () => { ch.off('chat_msg', r1); ch.off('player_moved', r2) }
   })

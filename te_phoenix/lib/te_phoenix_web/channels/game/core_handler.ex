@@ -510,10 +510,16 @@ defmodule TePhoenixWeb.Game.CoreHandler do
           # Valid move — update position
           PlayerRegistry.update(char_id, %{x: target_x, y: target_y, last_move_time: now})
 
-          # Broadcast to map
+          # Broadcast to map (all players on this map see the move)
           TePhoenixWeb.Endpoint.broadcast!("map:#{player.map_id}", "player_moved", %{
             id: char_id, x: target_x, y: target_y
           })
+
+          # Push confirmation to the mover's own socket so the client
+          # doesn't need to subscribe to the map channel just to learn
+          # its own position (the old snap-back bug was caused by the
+          # client predicting blindly with no positive confirmation).
+          push(socket, "move_confirmed", %{x: target_x, y: target_y})
 
           # Check hazards at new position
           check_hazards(socket, char_id, player.map_id, target_x, target_y)
@@ -564,10 +570,16 @@ defmodule TePhoenixWeb.Game.CoreHandler do
           # Valid move — update position
           PlayerRegistry.update(char_id, %{x: target_x, y: target_y, last_move_time: now})
 
-          # Broadcast to map
+          # Broadcast to map (all players on this map see the move)
           TePhoenixWeb.Endpoint.broadcast!("map:#{player.map_id}", "player_moved", %{
             id: char_id, x: target_x, y: target_y
           })
+
+          # Push confirmation to the mover's own socket so the client
+          # doesn't need to subscribe to the map channel just to learn
+          # its own position (the old snap-back bug was caused by the
+          # client predicting blindly with no positive confirmation).
+          push(socket, "move_confirmed", %{x: target_x, y: target_y})
 
           # Movement events (step-on triggers, encounters, etc.)
           check_hazards(socket, char_id, player.map_id, target_x, target_y)
