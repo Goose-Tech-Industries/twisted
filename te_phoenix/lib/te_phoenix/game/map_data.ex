@@ -58,14 +58,14 @@ defmodule TePhoenix.Game.MapData do
   @doc "Get NPCs for a map from DB."
   def get_npcs(map_id) do
     case Repo.query(
-      "SELECT n.id, n.name, n.char_id, n.x, n.y, n.icon, n.persona, n.is_enemy, n.is_recruitable, n.shop_id, n.script_key, n.quest_offers, n.npc_type, n.recruit_rep_req, n.recruit_quest_req FROM game_npcs n WHERE n.map_id=? AND n.is_active=1 AND (n.is_dead IS NULL OR n.is_dead=0)",
+      "SELECT n.id, n.name, n.char_id, n.x, n.y, n.icon, n.persona, n.is_enemy, n.is_recruitable, n.shop_id, n.script_key, n.quest_offers_json, n.recruit_rep_req, n.recruit_quest_req FROM game_npcs n WHERE n.map_id=? AND n.is_active=1 AND (n.is_dead IS NULL OR n.is_dead=0)",
       [map_id]
     ) do
       {:ok, %{rows: rows, columns: cols}} ->
         Enum.map(rows, fn row ->
           npc = Enum.zip(cols, row) |> Map.new()
           # Parse quest_offers JSON
-          quest_offers = case npc["quest_offers"] do
+          quest_offers = case npc["quest_offers_json"] do
             nil -> []
             "" -> []
             json when is_binary(json) ->

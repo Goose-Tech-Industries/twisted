@@ -524,7 +524,10 @@ export class TwistedRenderer {
     if (this.dirty.fringe) clearChildren(layers.fringe);
     if (this.dirty.objects) clearChildren(layers.objects);
     if (this.dirty.entities) {
-      clearChildren(layers.entities);
+      // EntityRenderer reconciles its own visuals — do NOT clearChildren
+      // here. clearChildren destroys all Pixi children, but EntityRenderer
+      // holds references to those containers. Destroying them would leave
+      // stale refs → reproject crashes on null container.
       clearChildren(layers.player);
     }
     if (this.dirty.passability || this.dirty.elevation) {
@@ -1305,8 +1308,15 @@ export class TwistedRenderer {
     // textures aren't reloaded per frame. Gated on dirty.entities AND we
     // clear the flag here as the final entity-related step in update().
     if (this.dirty.entities) {
+      // EntityRenderer owns the entities container — don't blind-destroy
+      // its children via clearChildren(), which would leave stale
+      // references in EntityRenderer.visuals. Instead, let it reconcile
+      // its own visuals against the new entity list.
       if (this.entityRenderer && state.entities) {
         this.entityRenderer.update(state.entities, 16);
+      } else if (this.entityRenderer) {
+        // No entities in state — clear all visuals.
+        this.entityRenderer.update([], 16);
       }
       this.dirty.entities = false;
     }

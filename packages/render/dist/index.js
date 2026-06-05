@@ -942,7 +942,6 @@ var TwistedRenderer = class {
     if (this.dirty.fringe) clearChildren(layers.fringe);
     if (this.dirty.objects) clearChildren(layers.objects);
     if (this.dirty.entities) {
-      clearChildren(layers.entities);
       clearChildren(layers.player);
     }
     if (this.dirty.passability || this.dirty.elevation) {
@@ -1522,6 +1521,8 @@ var TwistedRenderer = class {
     if (this.dirty.entities) {
       if (this.entityRenderer && state.entities) {
         this.entityRenderer.update(state.entities, 16);
+      } else if (this.entityRenderer) {
+        this.entityRenderer.update([], 16);
       }
       this.dirty.entities = false;
     }

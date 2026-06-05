@@ -135,7 +135,11 @@
     return Array.isArray(v) ? (v as T[]) : []
   }
   game.on<unknown>('player_list', (p) => world.setPlayersFromPayload(asList(p, 'players')))
-  game.on<unknown>('npc_list',    (p) => world.setNpcsFromPayload(asList(p, 'npcs')))
+  game.on<unknown>('npc_list', (p) => {
+    const arr = asList(p, 'npcs')
+    console.info('[npc] received', arr.length, 'NPCs', arr.slice(0, 3).map((n: Record<string,unknown>) => ({id: n.id, name: n.name, x: n.x, y: n.y, icon: n.icon, enemy: n.is_enemy})))
+    world.setNpcsFromPayload(arr)
+  })
   game.on<unknown>('ground_items', (p) => world.setDrops(asList(p, 'items')))
   game.on<unknown>('active_statuses', (p) => statusEffects.set(asList(p, 'statuses')))
   game.on<unknown>('abilities_list',  (p) => abilities.set(asList(p, 'abilities')))
