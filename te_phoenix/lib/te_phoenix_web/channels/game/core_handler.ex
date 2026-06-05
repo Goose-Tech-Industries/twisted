@@ -196,7 +196,12 @@ defmodule TePhoenixWeb.Game.CoreHandler do
       end)
 
       if live_npc do
-        handle_npc_interact(socket, char_id, player, live_npc)
+        # Enemies trigger combat; friendly NPCs open dialogue
+        if live_npc["is_enemy"] == 1 or live_npc["is_enemy"] == true do
+          handle_enemy_interact(socket, char_id, player, live_npc)
+        else
+          handle_npc_interact(socket, char_id, player, live_npc)
+        end
       else
         # 3. Check INTERACT map events
         events = map_data.events || []
@@ -692,6 +697,13 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     send_structures(socket, new_map_id)
 
     socket = assign(socket, :map_id, new_map_id)
+    {:noreply, socket}
+  end
+
+  defp handle_enemy_interact(socket, char_id, _player, npc) do
+    npc_name = npc["name"] || "Enemy"
+    npc_id = npc["id"]
+    push(socket, "notification", %{type: "warning", message: "⚔️ #{npc_name} attacks!"})
     {:noreply, socket}
   end
 

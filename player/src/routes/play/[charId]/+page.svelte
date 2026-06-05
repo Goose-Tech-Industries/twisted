@@ -499,7 +499,7 @@
 </div>
 
 <DialogueOverlay
-  onchoice={(choiceId) => void game.push('dialogue_choice', { choiceId })}
+  onchoice={(choiceId) => void game.push('npc_menu_choice', { choiceId })}
   onclose={() => { dialogue.close(); void game.push('dialogue_close', {}) }}
 />
 
