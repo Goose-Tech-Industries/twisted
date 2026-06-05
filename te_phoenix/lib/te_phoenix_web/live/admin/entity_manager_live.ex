@@ -3,10 +3,15 @@ defmodule TePhoenixWeb.Admin.EntityManagerLive do
   Generic CRUD manager for any game table. Dynamic column detection,
   create/edit/delete forms, search, pagination. This single component
   gives admin access to every entity type in the engine.
+
+  Tier α P6: hardened with ConfirmAction (per-row Delete) + BulkAction
+  (master checkbox + floating action bar with bulk delete/export/clone).
   """
   use TePhoenixWeb, :live_view
 
   alias TePhoenix.Repo
+  alias TePhoenixWeb.Components.ConfirmAction
+  alias TePhoenixWeb.Components.BulkAction
 
   # Every table in the database is available for admin editing.
   # Grouped by domain for the table picker dropdown.
@@ -45,7 +50,9 @@ defmodule TePhoenixWeb.Admin.EntityManagerLive do
       editing: nil,        # nil | %{row data}
       creating: false,
       form_data: %{},
-      form_errors: []
+      form_errors: [],
+      # Tier α P6: bulk-selection state for the BulkAction floating bar.
+      bulk_selected: MapSet.new()
     ) |> load_entities()}
   end
 
@@ -204,6 +211,11 @@ defmodule TePhoenixWeb.Admin.EntityManagerLive do
     end
   end
 
+  # ── Tier α P6: BulkAction wiring ────────────────────────────────
+  def handle_event("bulk_action:" <> _ = ev, params, socket) do
+    BulkAction.handle_event(ev, params, socket)
+  end
+
   # ── Delete ─────────────────────────────────────────────────────
   def handle_event("delete", %{"id" => id}, socket) do
     table = socket.assigns.table
@@ -215,13 +227,108 @@ defmodule TePhoenixWeb.Admin.EntityManagerLive do
     end
   end
 
-  # ── Cancel form ────────────────────────────────────────────────
+  # ── Cancel / update form ───────────────────────────────────────
   def handle_event("cancel_form", _p, socket) do
     {:noreply, assign(socket, editing: nil, creating: false, form_data: %{}, form_errors: [])}
   end
 
   def handle_event("update_form", %{"entity" => data}, socket) do
     {:noreply, assign(socket, form_data: Map.merge(socket.assigns.form_data, data))}
+  end
+
+  # ── Bulk action result ─────────────────────────────────────────
+  @impl true
+  def handle_info({:bulk_action_fired, %{"key" => key, "ids" => ids} = msg}, socket) do
+    table = socket.assigns.table
+
+    cond do
+      table not in @allowed_tables ->
+        {:noreply, put_flash(socket, :error, "Table not allowed.")}
+
+      ids == [] ->
+        {:noreply, put_flash(socket, :error, "No rows selected.")}
+
+      key == "delete" ->
+        do_bulk_delete(socket, table, ids)
+
+      key == "export" ->
+        do_bulk_export(socket, table, ids)
+
+      key == "clone" ->
+        do_bulk_clone(socket, table, ids)
+
+      true ->
+        {:noreply, put_flash(socket, :error, "Unknown bulk action: #{inspect(msg)}")}
+    end
+  end
+
+  defp do_bulk_delete(socket, table, ids) do
+    placeholders = Enum.map_join(ids, ",", fn _ -> "?" end)
+
+    case Repo.query("DELETE FROM #{table} WHERE id IN (#{placeholders})", ids) do
+      {:ok, %{num_rows: n}} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Deleted #{n} row(s) from #{table}.")
+         |> assign(:bulk_selected, MapSet.new())
+         |> load_entities()}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Bulk delete failed.")}
+    end
+  end
+
+  defp do_bulk_export(socket, _table, ids) do
+    selected_rows =
+      socket.assigns.rows
+      |> Enum.filter(fn r -> Enum.any?(ids, fn id -> to_string(r["id"]) == to_string(id) end) end)
+
+    json = Jason.encode!(selected_rows, pretty: true)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Exported #{length(selected_rows)} row(s).")
+     |> push_event("download_blob", %{
+       filename: "#{socket.assigns.table}-export.json",
+       mime: "application/json",
+       data: json
+     })}
+  end
+
+  defp do_bulk_clone(socket, table, ids) do
+    placeholders = Enum.map_join(ids, ",", fn _ -> "?" end)
+
+    case Repo.query("SELECT * FROM #{table} WHERE id IN (#{placeholders})", ids) do
+      {:ok, %{rows: rows, columns: cols}} ->
+        cloned =
+          for row <- rows do
+            cols_no_id = Enum.reject(cols, &(&1 == "id"))
+
+            values =
+              cols
+              |> Enum.zip(row)
+              |> Enum.reject(fn {c, _} -> c == "id" end)
+              |> Enum.map(fn {_, v} -> v end)
+
+            insert_placeholders = Enum.map_join(cols_no_id, ",", fn _ -> "?" end)
+
+            Repo.query(
+              "INSERT INTO #{table} (#{Enum.map_join(cols_no_id, ",", &"`#{&1}`")}) VALUES (#{insert_placeholders})",
+              values
+            )
+          end
+
+        ok_count = Enum.count(cloned, fn {res, _} -> res == :ok end)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Cloned #{ok_count} row(s) in #{table}.")
+         |> assign(:bulk_selected, MapSet.new())
+         |> load_entities()}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Bulk clone failed.")}
+    end
   end
 
   # ── Render ─────────────────────────────────────────────────────
@@ -299,11 +406,14 @@ defmodule TePhoenixWeb.Admin.EntityManagerLive do
         </div>
       </div>
 
-      <%!-- Data Table --%>
+      <%!-- Data Table — Tier α P6 hardened with ConfirmAction + BulkAction --%>
       <div class="bg-zinc-900 border border-zinc-800 rounded-xl overflow-x-auto">
         <table class="w-full">
           <thead>
             <tr class="border-b border-zinc-800 text-left">
+              <th class="px-3 py-2.5 w-8">
+                <BulkAction.bulk_master_checkbox items={@rows} selected={@bulk_selected} />
+              </th>
               <th :for={col <- @columns}
                 class="px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500 whitespace-nowrap">{col}</th>
               <th class="px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider text-zinc-500 w-24 sticky right-0 bg-zinc-900">Actions</th>
@@ -311,14 +421,26 @@ defmodule TePhoenixWeb.Admin.EntityManagerLive do
           </thead>
           <tbody>
             <tr :for={row <- @rows} class="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
+              <td class="px-3 py-2 w-8">
+                <BulkAction.bulk_row_checkbox id={row["id"]} selected={@bulk_selected} />
+              </td>
               <td :for={col <- @columns}
                 class="px-3 py-2 text-sm text-zinc-300 max-w-[200px] truncate whitespace-nowrap">{format_cell(row[col])}</td>
               <td class="px-3 py-2 flex gap-2 sticky right-0 bg-zinc-900">
                 <button phx-click="edit" phx-value-id={row["id"]}
                   class="text-xs text-amber-500 hover:text-amber-400 font-medium">Edit</button>
-                <button phx-click="delete" phx-value-id={row["id"]}
-                  data-confirm={"Delete ##{row["id"]} from #{@table}?"}
-                  class="text-xs text-red-500 hover:text-red-400">Del</button>
+                <ConfirmAction.confirm_action
+                  id={"em-del-#{row["id"]}"}
+                  kind={:destructive}
+                  title={"Delete row ##{row["id"]}"}
+                  message={"Permanently delete row ##{row["id"]} from #{@table}? This cannot be undone."}
+                  confirm_phrase={"DELETE #{row["id"]}"}
+                  confirm_label="Delete row"
+                  on_confirm={Phoenix.LiveView.JS.push("delete", value: %{id: row["id"]})}>
+                  <:trigger>
+                    <button type="button" class="text-xs text-red-500 hover:text-red-400">Del</button>
+                  </:trigger>
+                </ConfirmAction.confirm_action>
               </td>
             </tr>
           </tbody>
@@ -326,6 +448,14 @@ defmodule TePhoenixWeb.Admin.EntityManagerLive do
 
         <div :if={@rows == []} class="p-8 text-center text-zinc-600 text-sm">No records in {@table}</div>
       </div>
+
+      <BulkAction.bulk_action_bar
+        selected={@bulk_selected}
+        actions={[
+          %{key: "delete", label: "Delete", kind: :destructive, confirm_phrase: "BULK DELETE"},
+          %{key: "export", label: "Export JSON", kind: :reversible},
+          %{key: "clone", label: "Clone", kind: :reversible}
+        ]} />
     </div>
     """
   end

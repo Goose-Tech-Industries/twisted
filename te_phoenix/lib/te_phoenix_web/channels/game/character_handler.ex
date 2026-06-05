@@ -96,10 +96,10 @@ defmodule TePhoenixWeb.Game.CharacterHandler do
               Repo.query!("UPDATE characters SET current_hp=FLOOR(max_hp*?), current_mp=FLOOR(max_mp*?) WHERE id=?", [heal_hp, heal_mp, char_id])
 
               push(socket, "rest_result", %{success: true, message: "Rested at #{name}. HP and MP restored! (-#{cost} gold)", cost: cost})
-              push(socket, "event_queue", [
+              push(socket, "event_queue", %{events: [
                 %{cmd: "dialogue", speaker: "Innkeeper", text: "Welcome! Rest well, traveler. That'll be #{cost} gold."},
                 %{cmd: "dialogue", speaker: "System", text: "HP and MP fully restored."}
-              ])
+              ]})
 
             _ ->
               push(socket, "rest_result", %{success: false, message: "Not enough gold. Need #{cost}."})

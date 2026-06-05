@@ -137,7 +137,21 @@ defmodule TePhoenixWeb.AuthController do
             _ -> nil
           end
 
-          json(conn, %{success: true, username: username, role: role, chatColor: chat_color, charId: char_id})
+          # Mint a fresh socket token on every /me call. Phoenix.Token
+          # has max_age: 86_400 (1 day) on UserSocket — without this,
+          # a player whose page sits open for >24h or whose
+          # localStorage cached a token from a previous deploy would
+          # be unable to reconnect even though the session is valid.
+          fresh_token = Phoenix.Token.sign(TePhoenixWeb.Endpoint, "user socket", user_id)
+
+          json(conn, %{
+            success: true,
+            username: username,
+            role: role,
+            chatColor: chat_color,
+            charId: char_id,
+            token: fresh_token
+          })
 
         _ -> json(conn, %{success: false})
       end

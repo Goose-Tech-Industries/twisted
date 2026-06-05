@@ -6,6 +6,12 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
   @per_page 30
   @tabs ~w(maps npcs regions spawns connections versions worldforge)
 
+  # Sentinel id used for an unpainted/canvas-blank tile. Matches the
+  # existing overlay/fringe convention (-1 = no tile). Renderer falls
+  # back to zinc-800 for any id outside the palette, so a fresh map
+  # reads as a dim grid background instead of a fully-painted biome.
+  @default_ground_id -1
+
   @weather_options ~w(CLEAR RAIN STORM FOG BLIZZARD BLOOD_MOON)
   @move_types ~w(STATIONARY WANDER PATROL)
   @render_modes ~w(classic 2.5d isometric hex side-scroll first-person 3d DEFAULT ISOMETRIC SIDE_SCROLL TOP_DOWN)
@@ -133,7 +139,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
           w = to_int(data["width"])
           h = to_int(data["height"])
           empty = Jason.encode!(%{
-            "ground" => List.duplicate(0, w * h),
+            "ground" => List.duplicate(@default_ground_id, w * h),
             "overlay" => List.duplicate(-1, w * h),
             "passability" => List.duplicate(0, w * h),
             "fringe" => List.duplicate(-1, w * h),
@@ -609,13 +615,13 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
 
         <%!-- Create buttons for CRUD tabs --%>
         <%= if @tab == "maps" do %>
-          <button phx-click="create_map" class="px-3 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium rounded transition-colors">+ Create Map</button>
+          <button type="button" phx-click="create_map" class="px-3 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium rounded transition-colors">+ Create Map</button>
         <% end %>
         <%= if @tab == "npcs" do %>
-          <button phx-click="create_npc" class="px-3 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium rounded transition-colors">+ Create NPC</button>
+          <button type="button" phx-click="create_npc" class="px-3 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium rounded transition-colors">+ Create NPC</button>
         <% end %>
         <%= if @tab == "regions" do %>
-          <button phx-click="create_region" class="px-3 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium rounded transition-colors">+ Create Region</button>
+          <button type="button" phx-click="create_region" class="px-3 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium rounded transition-colors">+ Create Region</button>
         <% end %>
 
         <span class="text-xs text-zinc-600">{@total} records</span>
@@ -732,7 +738,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
                   <td class="px-3 py-2 text-sm text-zinc-500">{row["id"]}</td>
                   <td class="px-3 py-2 text-sm text-zinc-200 font-medium">{row["name"]}</td>
                   <td class="px-3 py-2 text-sm text-zinc-400">{row["width"]}x{row["height"]}</td>
-                  <td class="px-3 py-2 text-sm text-zinc-400">{row["ambient_dark"]}</td>
+                  <td class="px-3 py-2 text-sm text-zinc-400">{format_float(row["ambient_dark"])}</td>
                   <td class="px-3 py-2 text-sm text-zinc-400">{row["min_level"]}</td>
                   <td class="px-3 py-2 text-sm text-zinc-400">{region_name(row["region_id"], @regions_list)}</td>
                   <td class="px-3 py-2 text-sm text-zinc-500">{row["render_mode"]}</td>
@@ -1221,6 +1227,17 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
 
   defp yes_no_badge(1), do: Phoenix.HTML.raw(~s(<span class="text-amber-400 text-xs font-medium">Yes</span>))
   defp yes_no_badge(_), do: Phoenix.HTML.raw(~s(<span class="text-zinc-600 text-xs">No</span>))
+
+  defp format_float(nil), do: "-"
+  defp format_float(v) when is_float(v), do: :erlang.float_to_binary(v, decimals: 2)
+  defp format_float(v) when is_integer(v), do: :erlang.float_to_binary(v * 1.0, decimals: 2)
+  defp format_float(v) when is_binary(v) do
+    case Float.parse(v) do
+      {f, _} -> :erlang.float_to_binary(f, decimals: 2)
+      :error -> v
+    end
+  end
+  defp format_float(v), do: to_string(v)
 
   defp danger_color(1), do: "text-emerald-400 font-medium"
   defp danger_color(2), do: "text-yellow-400 font-medium"

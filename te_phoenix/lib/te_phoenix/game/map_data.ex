@@ -22,8 +22,17 @@ defmodule TePhoenix.Game.MapData do
   @impl true
   def init(_) do
     :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+    Phoenix.PubSub.subscribe(TePhoenix.PubSub, "map:saved")
     {:ok, %{}}
   end
+
+  @impl true
+  def handle_info({:map_saved, map_id}, state) when is_integer(map_id) do
+    :ets.delete(@table, map_id)
+    {:noreply, state}
+  end
+
+  def handle_info(_, state), do: {:noreply, state}
 
   @doc "Get map data by map_id. Loads from DB on cache miss."
   def get(map_id) when is_integer(map_id) do
@@ -91,14 +100,25 @@ defmodule TePhoenix.Game.MapData do
     case Repo.query("SELECT * FROM game_maps WHERE id=?", [map_id]) do
       {:ok, %{rows: [row], columns: cols}} ->
         raw = Enum.zip(cols, row) |> Map.new()
+        w = raw["width"] || 20
+        h = raw["height"] || 20
+
+        layers = parse_layers(raw["layers_json"], raw["tiles_json"], w, h)
+        ground = pad_to(Map.get(layers, "ground", []), w * h, 0)
+        pass =
+          case Map.get(layers, "passability") do
+            list when is_list(list) and list != [] -> pad_to(list, w * h, 0)
+            _ -> parse_json_field(raw["passability_json"], [])
+          end
 
         data = %{
           id: raw["id"],
           name: raw["name"],
-          width: raw["width"] || 20,
-          height: raw["height"] || 20,
-          tiles: parse_json_field(raw["tiles_json"], []),
-          passability: parse_json_field(raw["passability_json"], []),
+          width: w,
+          height: h,
+          layers: layers,
+          tiles: ground,
+          passability: pass,
           events: parse_json_field(raw["collisions_json"], []),
           objects: parse_json_field(raw["objects_json"], []),
           spawn_x: raw["spawn_x"],
@@ -135,4 +155,57 @@ defmodule TePhoenix.Game.MapData do
   end
   defp parse_json_field(val, _default) when is_list(val) or is_map(val), do: val
   defp parse_json_field(_, default), do: default
+
+  # Schema-2 maps store layers as `{"schema_version":2,"layers":{ground,overlay,passability,fringe,elevation}}`.
+  # Schema-1 maps store a 2D `tiles_json` (number[][]) and a separate `passability_json`.
+  # This unifies both into a flat-array layers map keyed by layer name.
+  defp parse_layers(layers_json, tiles_json, w, h) do
+    decoded =
+      case parse_json_field(layers_json, nil) do
+        %{"layers" => l} when is_map(l) -> l
+        l when is_map(l) -> l
+        _ -> nil
+      end
+
+    cond do
+      is_map(decoded) ->
+        %{
+          "ground" => pad_to(Map.get(decoded, "ground", []), w * h, 0),
+          "overlay" => pad_to(Map.get(decoded, "overlay", []), w * h, -1),
+          "passability" => pad_to(Map.get(decoded, "passability", []), w * h, 0),
+          "fringe" => pad_to(Map.get(decoded, "fringe", []), w * h, -1),
+          "elevation" => pad_to(Map.get(decoded, "elevation", []), w * h, 0)
+        }
+
+      true ->
+        ground = flatten_2d(parse_json_field(tiles_json, []), w, h)
+
+        %{
+          "ground" => pad_to(ground, w * h, 0),
+          "overlay" => List.duplicate(-1, w * h),
+          "passability" => List.duplicate(0, w * h),
+          "fringe" => List.duplicate(-1, w * h),
+          "elevation" => List.duplicate(0, w * h)
+        }
+    end
+  end
+
+  # Legacy tiles_json was number[][]; the rest of the runtime now expects flat
+  # row-major. Accept either shape and emit flat.
+  defp flatten_2d(rows, w, h) when is_list(rows) do
+    cond do
+      rows == [] -> []
+      is_list(hd(rows)) -> rows |> List.flatten() |> Enum.take(w * h)
+      true -> Enum.take(rows, w * h)
+    end
+  end
+  defp flatten_2d(_, _, _), do: []
+
+  defp pad_to(list, n, fill) when is_list(list) do
+    case length(list) do
+      len when len >= n -> Enum.take(list, n)
+      len -> list ++ List.duplicate(fill, n - len)
+    end
+  end
+  defp pad_to(_, n, fill), do: List.duplicate(fill, n)
 end

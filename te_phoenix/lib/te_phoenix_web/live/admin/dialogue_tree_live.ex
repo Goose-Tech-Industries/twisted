@@ -49,7 +49,18 @@ defmodule TePhoenixWeb.Admin.DialogueTreeLive do
     <div class="p-6 max-w-7xl mx-auto flex gap-6">
       <%!-- Left panel: tree list --%>
       <div class="w-72 shrink-0 space-y-4">
-        <h1 class="text-xl font-bold text-amber-400">Dialogue Trees</h1>
+        <div class="flex items-center justify-between">
+          <h1 class="text-xl font-bold text-amber-400">Dialogue Trees</h1>
+          <.live_component
+            module={TePhoenixWeb.Components.AiAssist}
+            id="ai-dialogue-branch"
+            feature_key="dialogue_branch"
+            user_id={@session_user_id}
+            role={@session_role}
+            trigger_label="✨ Branch"
+            context={%{before_value: ""}}
+            on_accept={Phoenix.LiveView.JS.push("ai:apply_dialogue_suggestion")} />
+        </div>
 
         <div class="space-y-2">
           <input type="text" placeholder="New tree name..." value={@new_tree_name}
@@ -389,6 +400,29 @@ defmodule TePhoenixWeb.Admin.DialogueTreeLive do
   # ── Events: Tree CRUD ──────────────────────────────────────────
 
   @impl true
+  def handle_event("ai:apply_dialogue_suggestion", %{"suggestion" => json}, socket) do
+    # Stash the suggestion in a flash + assign so the user can see what
+    # the AI proposed before manually adding nodes. Auto-merging into
+    # the live graph would risk corrupting the in-progress edit.
+    summary =
+      case Jason.decode(json) do
+        {:ok, %{} = parsed} ->
+          npc = parsed["npc_name"] || parsed["speaker"] || "NPC"
+          line = parsed["text"] || parsed["body"] || parsed["line"] || ""
+          "AI suggestion for #{npc}: #{String.slice(line, 0, 100)}"
+
+        _ ->
+          "AI suggestion received — see console for full payload."
+      end
+
+    {:noreply,
+     socket
+     |> put_flash(:info, summary)
+     |> assign(:ai_last_suggestion, json)}
+  end
+
+  def handle_event("ai:apply_dialogue_suggestion", _, socket), do: {:noreply, socket}
+
   def handle_event("update_new_name", %{"value" => val}, socket) do
     {:noreply, assign(socket, :new_tree_name, val)}
   end

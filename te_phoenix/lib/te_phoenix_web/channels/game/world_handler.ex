@@ -170,7 +170,7 @@ defmodule TePhoenixWeb.Game.WorldHandler do
             push(socket, "map_changed", %{mapId: interior_map})
 
             npcs = MapData.get_npcs(interior_map)
-            push(socket, "npc_list", npcs)
+            push(socket, "npc_list", %{npcs: npcs})
             push(socket, "notification", %{type: "info", message: "Entered #{sname}"})
         end
 
@@ -200,7 +200,7 @@ defmodule TePhoenixWeb.Game.WorldHandler do
       map_data = MapData.get(ret.map_id)
       if map_data, do: push(socket, "map_data", map_data)
       push(socket, "map_changed", %{mapId: ret.map_id})
-      push(socket, "npc_list", MapData.get_npcs(ret.map_id))
+      push(socket, "npc_list", %{npcs: MapData.get_npcs(ret.map_id)})
       push(socket, "notification", %{type: "info", message: "Exited structure"})
 
       socket = assign(socket, :structure_return, nil)
@@ -225,7 +225,7 @@ defmodule TePhoenixWeb.Game.WorldHandler do
       _ -> []
     end
 
-    push(socket, "world_events_active", events)
+    push(socket, "world_events_active", %{events: events})
     {:noreply, socket}
   end
 
@@ -234,7 +234,7 @@ defmodule TePhoenixWeb.Game.WorldHandler do
       {:ok, %{rows: rows, columns: cols}} -> Enum.map(rows, fn row -> Enum.zip(cols, row) |> Map.new() end)
       _ -> []
     end
-    push(socket, "world_events_history", history)
+    push(socket, "world_events_history", %{events: history})
     {:noreply, socket}
   end
 
@@ -292,7 +292,7 @@ defmodule TePhoenixWeb.Game.WorldHandler do
       _ -> []
     end
 
-    push(socket, "event_list_result", events)
+    push(socket, "event_list_result", %{events: events})
     {:noreply, socket}
   end
 

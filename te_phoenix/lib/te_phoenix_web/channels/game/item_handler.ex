@@ -301,8 +301,8 @@ defmodule TePhoenixWeb.Game.ItemHandler do
     case Repo.query("SELECT * FROM character_abilities WHERE character_id=?", [char_id]) do
       {:ok, %{rows: rows, columns: cols}} ->
         abilities = Enum.map(rows, fn row -> Enum.zip(cols, row) |> Map.new() end)
-        push(socket, "abilities_list", abilities)
-      _ -> push(socket, "abilities_list", [])
+        push(socket, "abilities_list", %{abilities: abilities})
+      _ -> push(socket, "abilities_list", %{abilities: []})
     end
     {:noreply, socket}
   end
@@ -377,7 +377,7 @@ defmodule TePhoenixWeb.Game.ItemHandler do
         items = rows
           |> Enum.map(fn row -> Enum.zip(cols, row) |> Map.new() end)
           |> Enum.filter(fn it -> it["is_instanced"] != 1 or it["instance_for"] == char_id end)
-        push(socket, "ground_items", items)
+        push(socket, "ground_items", %{items: items})
       _ -> nil
     end
   end
@@ -389,7 +389,7 @@ defmodule TePhoenixWeb.Game.ItemHandler do
     ) do
       {:ok, %{rows: rows, columns: cols}} ->
         statuses = Enum.map(rows, fn row -> Enum.zip(cols, row) |> Map.new() |> Map.take(["id", "name", "icon", "type"]) end)
-        push(socket, "active_statuses", statuses)
+        push(socket, "active_statuses", %{statuses: statuses})
 
         ow_fx = Enum.reduce(rows, %{}, fn row, acc ->
           data = Enum.zip(cols, row) |> Map.new()

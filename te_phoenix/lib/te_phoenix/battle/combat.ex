@@ -725,4 +725,201 @@ defmodule TePhoenix.Battle.Combat do
   defp sign(n) when n < 0, do: -1
 
   defp clamp(val, min_val, max_val), do: max(min_val, min(max_val, val))
+
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 1.5d Magic — handle_spell_cast/3
+  # ═══════════════════════════════════════════════════════════════
+  # Called by `TePhoenix.Game.Magic.combat_cast/4` to apply a spell's
+  # `effect_json` against an in-progress battle state. Atomic gates
+  # (anam, oghams, cooldown) live in `Magic` — by the time this
+  # function runs those have already cleared.
+  #
+  # Effect clauses match the brief + script_effects:
+  #   damage / heal / status_apply / status_remove / buff /
+  #   summon / dispel
+  #
+  # Returns `{state, log_entries}` so action_results can fold this
+  # into the existing combat narrative without special casing.
+
+  @doc """
+  Apply a Magic spell to combat state. `combat_ctx` carries the
+  battle state map (`%{state: state, target_id: id}`); `spell` is
+  a `TePhoenix.Game.Magic` spell map; `extras` holds caster_id +
+  free-form target_opts.
+
+  Returns `{state, log_entries}` — same shape as the existing
+  combat resolvers so action_results stay uniform.
+  """
+  def handle_spell_cast(combat_ctx, spell, extras \\ %{}) do
+    state = Map.get(combat_ctx, :state, %{combatants: %{}})
+    target_id = Map.get(combat_ctx, :target_id) || Map.get(extras, :target_id)
+    caster_id = Map.get(extras, :caster_id)
+
+    effects = decode_spell_effects(spell.effect_json)
+
+    Enum.reduce(effects, {state, []}, fn {kind, params}, {st, log} ->
+      apply_combat_effect(kind, params, st, caster_id, target_id, log, spell)
+    end)
+  end
+
+  defp decode_spell_effects(nil), do: []
+  defp decode_spell_effects(""), do: []
+
+  defp decode_spell_effects(s) when is_binary(s) do
+    case Jason.decode(s) do
+      {:ok, %{} = m} ->
+        Map.to_list(m)
+
+      {:ok, list} when is_list(list) ->
+        Enum.flat_map(list, fn
+          %{} = entry -> Map.to_list(entry)
+          _ -> []
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp decode_spell_effects(%{} = m), do: Map.to_list(m)
+  defp decode_spell_effects(list) when is_list(list), do: list
+  defp decode_spell_effects(_), do: []
+
+  defp apply_combat_effect("damage", params, state, _caster, target_id, log, spell) do
+    amount = pick_number(params, ["amount", :amount], 0)
+    type = pick_string(params, ["type", :type], "neutral")
+    target = state.combatants[target_id]
+
+    if target do
+      new_target = %{target | current_hp: max(0, (target.current_hp || 0) - amount)}
+      new_state = %{state | combatants: Map.put(state.combatants, target_id, new_target)}
+      msg = "✨ #{spell.name} hits #{target.name} for #{amount} #{type} damage."
+      {new_state, log ++ [msg]}
+    else
+      {state, log ++ ["✨ #{spell.name} fizzles — no target."]}
+    end
+  end
+
+  defp apply_combat_effect("heal", params, state, caster_id, target_id, log, spell) do
+    amount = pick_number(params, ["amount", :amount], 0)
+    target_key = target_id || caster_id
+    target = state.combatants[target_key]
+
+    if target do
+      max_hp = target.max_hp || target.current_hp || amount
+      new_hp = min(max_hp, (target.current_hp || 0) + amount)
+      new_target = %{target | current_hp: new_hp}
+      new_state = %{state | combatants: Map.put(state.combatants, target_key, new_target)}
+      msg = "✨ #{spell.name} restores #{amount} HP to #{target.name}."
+      {new_state, log ++ [msg]}
+    else
+      {state, log ++ ["✨ #{spell.name} could not find a heal target."]}
+    end
+  end
+
+  defp apply_combat_effect("status_apply", params, state, _caster, target_id, log, spell) do
+    status_key = pick_string(params, ["status_key", :status_key], "")
+    duration = pick_number(params, ["duration_ms", :duration_ms], 0)
+    target = state.combatants[target_id]
+
+    if target && status_key != "" do
+      statuses = Map.get(target, :statuses, %{})
+      new_target = Map.put(target, :statuses, Map.put(statuses, status_key, %{expires_in_ms: duration}))
+      new_state = %{state | combatants: Map.put(state.combatants, target_id, new_target)}
+      msg = "✨ #{spell.name} afflicts #{target.name} with #{status_key} (#{duration}ms)."
+      {new_state, log ++ [msg]}
+    else
+      {state, log}
+    end
+  end
+
+  defp apply_combat_effect("status_remove", params, state, _caster, target_id, log, spell) do
+    status_key = pick_string(params, ["status_key", :status_key], "")
+    target = state.combatants[target_id]
+
+    if target && status_key != "" do
+      statuses = Map.delete(Map.get(target, :statuses, %{}), status_key)
+      new_target = Map.put(target, :statuses, statuses)
+      new_state = %{state | combatants: Map.put(state.combatants, target_id, new_target)}
+      msg = "✨ #{spell.name} dispels #{status_key} from #{target.name}."
+      {new_state, log ++ [msg]}
+    else
+      {state, log}
+    end
+  end
+
+  defp apply_combat_effect("buff", params, state, caster_id, _target_id, log, spell) do
+    stat = pick_string(params, ["stat", :stat], "atk")
+    amount = pick_number(params, ["amount", :amount], 0)
+    target = state.combatants[caster_id]
+
+    if target do
+      buffs = Map.get(target, :buffs, %{})
+      new_target = Map.put(target, :buffs, Map.update(buffs, stat, amount, &(&1 + amount)))
+      new_state = %{state | combatants: Map.put(state.combatants, caster_id, new_target)}
+      msg = "✨ #{spell.name} buffs #{target.name}'s #{stat} by #{amount}."
+      {new_state, log ++ [msg]}
+    else
+      {state, log}
+    end
+  end
+
+  defp apply_combat_effect("dispel", _params, state, _caster, target_id, log, spell) do
+    target = state.combatants[target_id]
+
+    if target do
+      new_target = Map.put(target, :statuses, %{})
+      new_state = %{state | combatants: Map.put(state.combatants, target_id, new_target)}
+      {new_state, log ++ ["✨ #{spell.name} dispels every status on #{target.name}."]}
+    else
+      {state, log}
+    end
+  end
+
+  defp apply_combat_effect("summon", params, state, _caster, _target_id, log, spell) do
+    # Summon is a structural state change — defer the actual NPC
+    # spawn to the battle initiation handler. Log the request +
+    # queue it on the battle state so the next tick spawns it.
+    template = pick_number(params, ["npc_template_id", :npc_template_id], 0)
+    duration = pick_number(params, ["duration_ms", :duration_ms], 0)
+    queue = Map.get(state, :pending_summons, [])
+
+    new_state =
+      Map.put(state, :pending_summons, queue ++ [
+        %{template_id: template, duration_ms: duration, source_spell: spell.id}
+      ])
+
+    {new_state, log ++ ["✨ #{spell.name} summons template ##{template} (#{duration}ms)."]}
+  end
+
+  defp apply_combat_effect(kind, params, state, _caster, _target, log, spell) do
+    {state, log ++ ["✨ #{spell.name}: unhandled effect '#{kind}' #{inspect(params)}"]}
+  end
+
+  defp pick_number(map, keys, default) do
+    Enum.find_value(keys, default, fn k ->
+      case Map.get(map, k) do
+        v when is_number(v) ->
+          v
+
+        v when is_binary(v) ->
+          case Float.parse(v) do
+            {f, _} -> if f == trunc(f), do: trunc(f), else: f
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  defp pick_string(map, keys, default) do
+    Enum.find_value(keys, default, fn k ->
+      case Map.get(map, k) do
+        v when is_binary(v) and v != "" -> v
+        _ -> nil
+      end
+    end)
+  end
 end

@@ -47,9 +47,40 @@ defmodule TePhoenixWeb.Admin.ContentHubLive do
      |> load_tab()}
   end
 
+  # ── Tab → AI Feature mapping ───────────────────────────────────────
+
+  defp content_ai_feature("items"), do: "item_design"
+  defp content_ai_feature("loot"), do: "loot_balance"
+  defp content_ai_feature("crafting"), do: "recipe_suggestion"
+  defp content_ai_feature("achievements"), do: "achievement_set"
+  defp content_ai_feature(_), do: nil
+
   # ── Tab / Search / Pagination Events ───────────────────────────────
 
   @impl true
+  def handle_event("ai:apply_content_suggestion", %{"suggestion" => json}, socket) do
+    # Surface the AI suggestion as a flash + assign. Tab-specific apply
+    # (auto-fill items / quests / etc.) lives in the per-tab edit forms;
+    # the user reviews the suggestion text and clicks the relevant
+    # "+ New" / "Edit" button to apply it manually.
+    summary =
+      case Jason.decode(json) do
+        {:ok, %{} = parsed} ->
+          name = parsed["name"] || parsed["label"] || parsed["title"] || socket.assigns.tab
+          "AI suggestion (#{name}): see panel for full text. Click + Add to start a new #{socket.assigns.tab} entry from it."
+
+        _ ->
+          "AI suggestion received."
+      end
+
+    {:noreply,
+     socket
+     |> assign(:flash_msg, summary)
+     |> assign(:ai_last_suggestion, json)}
+  end
+
+  def handle_event("ai:apply_content_suggestion", _, socket), do: {:noreply, socket}
+
   def handle_event("change_tab", %{"tab" => tab}, socket) do
     socket = assign(socket, tab: tab, search: "", page: 1, quest_form: nil, quest_editing_id: nil, recipe_form: nil, recipe_editing_id: nil, achievement_form: nil, achievement_editing_id: nil, expanded_id: nil, expanded_data: nil, item_search: "", flash_msg: nil)
     socket = if tab in ["quests", "crafting", "shops", "loot"] do
@@ -892,7 +923,20 @@ defmodule TePhoenixWeb.Admin.ContentHubLive do
 
     ~H"""
     <div>
-      <h2 class="text-2xl font-bold text-amber-400 mb-6">Content Hub</h2>
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold text-amber-400">Content Hub</h2>
+        <%= if feature_key = content_ai_feature(@tab) do %>
+          <.live_component
+            module={TePhoenixWeb.Components.AiAssist}
+            id={"ai-content-" <> @tab}
+            feature_key={feature_key}
+            user_id={@session_user_id}
+            role={@session_role}
+            trigger_label={"✨ Suggest " <> @tab}
+            context={%{before_value: ""}}
+            on_accept={Phoenix.LiveView.JS.push("ai:apply_content_suggestion")} />
+        <% end %>
+      </div>
 
       <!-- Flash -->
       <div :if={@flash_msg} class="mb-4 px-4 py-2 bg-amber-900/40 border border-amber-700 rounded text-amber-300 text-sm">

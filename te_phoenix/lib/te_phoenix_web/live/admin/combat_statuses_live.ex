@@ -57,9 +57,20 @@ defmodule TePhoenixWeb.Admin.CombatStatusesLive do
             Edits take effect immediately, no restart.
           </p>
         </div>
-        <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
-          + New Status
-        </button>
+        <div class="flex items-center gap-2">
+          <.live_component
+            module={TePhoenixWeb.Components.AiAssist}
+            id="ai-status-generator"
+            feature_key="status_generator"
+            user_id={@session_user_id}
+            role={@session_role}
+            trigger_label="✨ Suggest status"
+            context={%{before_value: ""}}
+            on_accept={Phoenix.LiveView.JS.push("ai:apply_status_suggestion")} />
+          <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
+            + New Status
+          </button>
+        </div>
       </header>
 
       <div :if={@flash_msg} class="mb-4 p-3 bg-emerald-900/40 border border-emerald-700 text-emerald-200 text-sm rounded">
@@ -233,6 +244,22 @@ defmodule TePhoenixWeb.Admin.CombatStatusesLive do
   # ── Events ──
 
   @impl true
+  def handle_event("ai:apply_status_suggestion", %{"suggestion" => json}, socket) do
+    target = socket.assigns.editing || blank_status()
+
+    new_editing =
+      TePhoenixWeb.Admin.AiApplyHelpers.merge(json, target,
+        ~w(key name description icon category default_duration stacking max_stacks
+           effects_json tick_json disabled_commands_json cure_tags_json))
+
+    {:noreply,
+     socket
+     |> assign(:editing, new_editing)
+     |> assign(:flash_msg, "AI suggestion applied — review and Save to commit.")}
+  end
+
+  def handle_event("ai:apply_status_suggestion", _, socket), do: {:noreply, socket}
+
   def handle_event("new", _, socket) do
     {:noreply, assign(socket, :editing, blank_status())}
   end

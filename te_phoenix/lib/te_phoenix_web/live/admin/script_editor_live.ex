@@ -97,6 +97,15 @@ defmodule TePhoenixWeb.Admin.ScriptEditorLive do
         <div class="flex items-center gap-2 px-3 py-2 bg-zinc-900/80 border-b border-zinc-800 shrink-0">
           <button phx-click="save" class="px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white rounded text-xs font-bold">Save</button>
           <button phx-click="run" class="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-black rounded text-xs font-bold">▶ Run</button>
+          <.live_component
+            module={TePhoenixWeb.Components.AiAssist}
+            id="ai-script-from-text"
+            feature_key="script_from_text"
+            user_id={@session_user_id}
+            role={@session_role}
+            trigger_label="✨ From text"
+            context={%{before_value: ""}}
+            on_accept={Phoenix.LiveView.JS.push("ai:apply_script_suggestion")} />
           <button phx-click="undo" disabled={@undo_stack == []}
             class="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-xs disabled:opacity-40">↶ Undo</button>
           <button :if={@selected_node_id} phx-click="delete_selected"
@@ -213,6 +222,27 @@ defmodule TePhoenixWeb.Admin.ScriptEditorLive do
   # ── Event handlers ─────────────────────────────────────────────
 
   @impl true
+  def handle_event("ai:apply_script_suggestion", %{"suggestion" => json}, socket) do
+    # Script editor is graph-based; the AI suggestion is plain English →
+    # we surface it for the user to read alongside the canvas, but don't
+    # auto-mutate the graph (that risks corrupting hand-edited scripts).
+    summary =
+      case Jason.decode(json) do
+        {:ok, %{"nodes" => nodes}} when is_list(nodes) ->
+          "AI suggested #{length(nodes)} nodes. See full payload to copy/paste."
+
+        _ ->
+          "AI script suggestion received. Open the right panel for the full text."
+      end
+
+    {:noreply,
+     socket
+     |> put_flash(:info, summary)
+     |> assign(:ai_last_suggestion, json)}
+  end
+
+  def handle_event("ai:apply_script_suggestion", _, socket), do: {:noreply, socket}
+
   def handle_event("add_node", %{"type" => type}, socket) do
     case ScriptNodes.get(type) do
       nil ->

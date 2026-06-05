@@ -16,6 +16,9 @@ defmodule TePhoenixWeb.Admin.CombatRulesLive do
 
   alias TePhoenix.Battle.StatusRegistry
   alias TePhoenix.Repo
+  alias TePhoenixWeb.Components.PowerUserField
+  alias TePhoenixWeb.Components.RuleTreeBuilder
+  alias TePhoenixWeb.Components.RuleSchemas.BattleRule
 
   @triggers ~w(
     limb_broken ko death damage_taken attack_landed crit_scored
@@ -25,6 +28,10 @@ defmodule TePhoenixWeb.Admin.CombatRulesLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    user_id = socket.assigns[:session_user_id]
+    role_weight = PowerUserField.role_weight_for(socket.assigns[:session_role])
+    field_views = PowerUserField.load_field_views(user_id)
+
     {:ok,
      socket
      |> assign(:active_tab, :combat_rules)
@@ -33,7 +40,11 @@ defmodule TePhoenixWeb.Admin.CombatRulesLive do
      |> assign(:scripts, list_scripts())
      |> assign(:editing, nil)
      |> assign(:flash_msg, nil)
-     |> assign(:triggers, @triggers)}
+     |> assign(:triggers, @triggers)
+     |> assign(:role_weight, role_weight)
+     |> assign(:field_views, field_views)
+     |> assign(:condition_schema, BattleRule.condition_schema())
+     |> assign(:effect_schema, BattleRule.action_schema())}
   end
 
   defp list_scripts do
@@ -56,9 +67,23 @@ defmodule TePhoenixWeb.Admin.CombatRulesLive do
             <%= length(@rules) %> rules loaded. Fires on events during combat — fully data-driven.
           </p>
         </div>
-        <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
-          + New Rule
-        </button>
+        <div class="flex items-center gap-2">
+          <.live_component
+            module={TePhoenixWeb.Components.AiAssist}
+            id="ai-rule-suggester"
+            feature_key="rule_suggester"
+            user_id={@session_user_id}
+            role={@session_role}
+            role_weight={@role_weight}
+            trigger_label="✨ Suggest a rule"
+            context={%{
+              before_value: (@editing && @editing["effect_json"]) || ""
+            }}
+            on_accept={Phoenix.LiveView.JS.push("ai:apply_rule_suggestion")} />
+          <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
+            + New Rule
+          </button>
+        </div>
       </header>
 
       <div :if={@flash_msg} class="mb-4 p-3 bg-emerald-900/40 border border-emerald-700 text-emerald-200 text-sm rounded">
@@ -99,23 +124,47 @@ defmodule TePhoenixWeb.Admin.CombatRulesLive do
               class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"><%= @editing["description"] %></textarea>
           </label>
 
-          <.live_component
-            module={TePhoenixWeb.Components.RuleBuilder}
-            id="condition_builder"
-            field_name="condition_json"
-            schema={:battle_rule_condition}
+          <PowerUserField.power_user_field
             label="IF (conditions)"
-            value={@editing["condition_json"]}
-          />
+            help_text="Combine conditions with AND/OR. Empty = always fires when triggered."
+            form_id="combat_rule"
+            field_name="condition_json"
+            user_id={@session_user_id}
+            role_weight={@role_weight}
+            view={Map.get(@field_views, "combat_rule.condition_json", "structured")}>
+            <:structured>
+              <RuleTreeBuilder.rule_tree_builder
+                kind={:condition_tree}
+                schema={@condition_schema}
+                field_name="condition_json"
+                value={@editing["condition_json"]} />
+            </:structured>
+            <:raw>
+              <textarea name="condition_json" rows="4"
+                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["condition_json"] %></textarea>
+            </:raw>
+          </PowerUserField.power_user_field>
 
-          <.live_component
-            module={TePhoenixWeb.Components.RuleBuilder}
-            id="effect_builder"
-            field_name="effect_json"
-            schema={:battle_rule_effect}
+          <PowerUserField.power_user_field
             label="THEN (effects)"
-            value={@editing["effect_json"]}
-          />
+            help_text="Add one or more actions. Each action's params become top-level keys in the saved JSON."
+            form_id="combat_rule"
+            field_name="effect_json"
+            user_id={@session_user_id}
+            role_weight={@role_weight}
+            view={Map.get(@field_views, "combat_rule.effect_json", "structured")}>
+            <:structured>
+              <RuleTreeBuilder.rule_tree_builder
+                kind={:action_list}
+                schema={@effect_schema}
+                field_name="effect_json"
+                value={@editing["effect_json"]} />
+            </:structured>
+            <:raw>
+              <textarea name="effect_json" rows="4"
+                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["effect_json"] %></textarea>
+            </:raw>
+          </PowerUserField.power_user_field>
 
           <div class="flex gap-2 pt-2">
             <button type="submit" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
@@ -186,6 +235,51 @@ defmodule TePhoenixWeb.Admin.CombatRulesLive do
      |> assign(:rules, StatusRegistry.list_rules() |> Enum.sort_by(&{&1.trigger, &1.key}))
      |> assign(:flash_msg, "Deleted #{key}")}
   end
+
+  # ── Tier α infrastructure events ──────────────────────────────
+
+  def handle_event("rb:" <> _ = ev, params, socket),
+    do: RuleTreeBuilder.dispatch(ev, params, socket, assign: :editing)
+
+  def handle_event("power_user_field:toggle", params, socket),
+    do: PowerUserField.handle_toggle(params, socket)
+
+  # AI Assist accept handler — merges suggestion into the editing form
+  # so the user reviews + saves manually. Never auto-saves.
+  def handle_event("ai:apply_rule_suggestion", %{"suggestion" => json}, socket) do
+    editing = socket.assigns.editing || blank_rule()
+    new_editing =
+      case Jason.decode(json) do
+        {:ok, %{} = parsed} ->
+          editing
+          |> maybe_put("name", parsed["name"])
+          |> maybe_put("description", parsed["description"])
+          |> maybe_put("trigger", parsed["trigger"] || parsed["trigger_event"])
+          |> maybe_put("condition_json", encode_field(parsed["condition"] || parsed["conditions"]))
+          |> maybe_put("effect_json", encode_field(parsed["effect"] || parsed["effects"] || parsed["actions"]))
+
+        _ ->
+          # Non-JSON response → drop into description so user can review
+          Map.put(editing, "description", json)
+      end
+
+    {:noreply,
+     socket
+     |> assign(:editing, new_editing)
+     |> assign(:flash_msg, "AI suggestion applied — review and Save to commit.")}
+  end
+
+  def handle_event("ai:apply_rule_suggestion", _, socket), do: {:noreply, socket}
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp encode_field(nil), do: nil
+  defp encode_field(s) when is_binary(s), do: s
+  defp encode_field(other), do: Jason.encode!(other)
+
+  # ─────────────────────────────────────────────────────────────────
 
   def handle_event("save", params, socket) do
     rule = form_to_rule(params)

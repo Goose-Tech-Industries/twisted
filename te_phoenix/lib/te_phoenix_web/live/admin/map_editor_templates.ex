@@ -167,28 +167,6 @@ defmodule TePhoenixWeb.Admin.MapEditorTemplates do
     %{w: 12, h: 8, cells: cells ++ beds}
   end
 
-  def room_template(_), do: room_template("campfire")
-
-  @doc "List of available template names paired with display labels."
-  def template_index do
-    [
-      %{key: "campfire", label: "Campfire room", w: 7, h: 7},
-      %{key: "shrine", label: "Shrine", w: 9, h: 9},
-      %{key: "prison", label: "Prison cells", w: 11, h: 7},
-      %{key: "crypt", label: "Crypt", w: 9, h: 9},
-      %{key: "barracks", label: "Barracks", w: 12, h: 8},
-      %{key: "shop", label: "Shop interior", w: 8, h: 6},
-      %{key: "tavern", label: "Tavern interior", w: 12, h: 10},
-      %{key: "house", label: "Small house", w: 7, h: 6},
-      %{key: "well", label: "Well (outdoor)", w: 3, h: 3},
-      %{key: "bridge_h", label: "Bridge (horizontal)", w: 6, h: 3},
-      %{key: "bridge_v", label: "Bridge (vertical)", w: 3, h: 6},
-      %{key: "garden", label: "Garden plot", w: 5, h: 5},
-      %{key: "tower", label: "Tower floor", w: 7, h: 7},
-      %{key: "throne_room", label: "Throne room", w: 11, h: 9}
-    ]
-  end
-
   # ── Additional room templates ─────────────────────────────────
 
   def room_template("shop") do
@@ -235,14 +213,12 @@ defmodule TePhoenixWeb.Admin.MapEditorTemplates do
 
   def room_template("bridge_h") do
     # 6x3 horizontal bridge: water with wood path
-    cells = []
     water = for x <- 0..5, y <- 0..2, do: %{x: x, y: y, value: 3}
     planks = for x <- 0..5, do: %{x: x, y: 1, value: 4}
     %{w: 6, h: 3, cells: water ++ planks}
   end
 
   def room_template("bridge_v") do
-    cells = []
     water = for x <- 0..2, y <- 0..5, do: %{x: x, y: y, value: 3}
     planks = for y <- 0..5, do: %{x: 1, y: y, value: 4}
     %{w: 3, h: 6, cells: water ++ planks}
@@ -278,6 +254,28 @@ defmodule TePhoenixWeb.Admin.MapEditorTemplates do
     %{w: 11, h: 9, cells: cells ++ carpet ++ carpet2 ++ throne ++ pillars}
   end
 
+  def room_template(_), do: room_template("campfire")
+
+  @doc "List of available template names paired with display labels."
+  def template_index do
+    [
+      %{key: "campfire", label: "Campfire room", w: 7, h: 7},
+      %{key: "shrine", label: "Shrine", w: 9, h: 9},
+      %{key: "prison", label: "Prison cells", w: 11, h: 7},
+      %{key: "crypt", label: "Crypt", w: 9, h: 9},
+      %{key: "barracks", label: "Barracks", w: 12, h: 8},
+      %{key: "shop", label: "Shop interior", w: 8, h: 6},
+      %{key: "tavern", label: "Tavern interior", w: 12, h: 10},
+      %{key: "house", label: "Small house", w: 7, h: 6},
+      %{key: "well", label: "Well (outdoor)", w: 3, h: 3},
+      %{key: "bridge_h", label: "Bridge (horizontal)", w: 6, h: 3},
+      %{key: "bridge_v", label: "Bridge (vertical)", w: 3, h: 6},
+      %{key: "garden", label: "Garden plot", w: 5, h: 5},
+      %{key: "tower", label: "Tower floor", w: 7, h: 7},
+      %{key: "throne_room", label: "Throne room", w: 11, h: 9}
+    ]
+  end
+
   # ── Town generator ────────────────────────────────────────────
 
   @doc """
@@ -296,7 +294,6 @@ defmodule TePhoenixWeb.Admin.MapEditorTemplates do
 
     # Place 4-8 buildings randomly
     num_buildings = 4 + :rand.uniform(5)
-    building_types = ["house", "shop", "tavern", "shrine", "barracks"]
 
     {ground, passability, buildings} =
       Enum.reduce(1..num_buildings, {ground, passability, []}, fn _, {g, p, bldgs} ->

@@ -37,7 +37,6 @@ defmodule TePhoenix.World.MapTemplates do
   @mountain 6
   @grass 7
   @ice 8
-  @lava 9
   @bridge 10
   @door 11
 

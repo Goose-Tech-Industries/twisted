@@ -40,9 +40,20 @@ defmodule TePhoenixWeb.Admin.QuestDesignerLive do
           <h1 class="text-xl font-bold text-amber-400">Quest Designer</h1>
           <p class="text-xs text-zinc-500 mt-1"><%= length(@quests) %> quests defined.</p>
         </div>
-        <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
-          + New Quest
-        </button>
+        <div class="flex items-center gap-2">
+          <.live_component
+            module={TePhoenixWeb.Components.AiAssist}
+            id="ai-quest-chain"
+            feature_key="quest_chain"
+            user_id={@session_user_id}
+            role={@session_role}
+            trigger_label="✨ Suggest quest"
+            context={%{before_value: ""}}
+            on_accept={Phoenix.LiveView.JS.push("ai:apply_quest_suggestion")} />
+          <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
+            + New Quest
+          </button>
+        </div>
       </header>
 
       <div :if={@flash_msg} class="mb-4 p-3 bg-emerald-900/40 border border-emerald-700 text-emerald-200 text-sm rounded">
@@ -236,6 +247,22 @@ defmodule TePhoenixWeb.Admin.QuestDesignerLive do
   # ── Events ─────────────────────────────────────────────────────
 
   @impl true
+  def handle_event("ai:apply_quest_suggestion", %{"suggestion" => json}, socket) do
+    target = socket.assigns.editing || blank_quest()
+
+    new_editing =
+      TePhoenixWeb.Admin.AiApplyHelpers.merge(json, target,
+        ~w(name description quest_type level_req prerequisites_json
+           stages_json rewards_json giver_npc_id giver_location))
+
+    {:noreply,
+     socket
+     |> assign(:editing, new_editing)
+     |> assign(:flash_msg, "AI suggestion applied — review and Save to commit.")}
+  end
+
+  def handle_event("ai:apply_quest_suggestion", _, socket), do: {:noreply, socket}
+
   def handle_event("new", _, socket) do
     {:noreply, assign(socket, :editing, blank_quest())}
   end

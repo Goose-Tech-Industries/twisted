@@ -31,9 +31,20 @@ defmodule TePhoenixWeb.Admin.BossPhasesLive do
   def render(assigns) do
     ~H"""
     <div class="p-6 max-w-6xl mx-auto">
-      <header class="mb-6">
-        <h1 class="text-xl font-bold text-amber-400">Boss Phases & Transformations</h1>
-        <p class="text-xs text-zinc-500 mt-1">No-code multi-phase boss fights. Full form changes — new name, sprite, HP, stats, moveset.</p>
+      <header class="mb-6 flex items-start justify-between gap-3">
+        <div>
+          <h1 class="text-xl font-bold text-amber-400">Boss Phases & Transformations</h1>
+          <p class="text-xs text-zinc-500 mt-1">No-code multi-phase boss fights. Full form changes — new name, sprite, HP, stats, moveset.</p>
+        </div>
+        <.live_component
+          module={TePhoenixWeb.Components.AiAssist}
+          id="ai-boss-phase-progression"
+          feature_key="boss_phase_progression"
+          user_id={@session_user_id}
+          role={@session_role}
+          trigger_label="✨ Suggest progression"
+          context={%{before_value: ""}}
+          on_accept={Phoenix.LiveView.JS.push("ai:apply_boss_suggestion")} />
       </header>
 
       <div :if={@flash_msg} class="mb-4 p-3 bg-emerald-900/40 border border-emerald-700 text-emerald-200 text-sm rounded"><%= @flash_msg %></div>
@@ -167,6 +178,22 @@ defmodule TePhoenixWeb.Admin.BossPhasesLive do
   end
 
   @impl true
+  def handle_event("ai:apply_boss_suggestion", %{"suggestion" => json}, socket) do
+    target = socket.assigns.editing || %{}
+
+    new_editing =
+      TePhoenixWeb.Admin.AiApplyHelpers.merge(json, target,
+        ~w(name phase hp_threshold_pct stat_mods_json on_enter_json on_exit_json
+           t_name t_animation t_clear_statuses sprite_id active_abilities_json))
+
+    {:noreply,
+     socket
+     |> assign(:editing, new_editing)
+     |> assign(:flash_msg, "AI suggestion applied — review and Save to commit.")}
+  end
+
+  def handle_event("ai:apply_boss_suggestion", _, socket), do: {:noreply, socket}
+
   def handle_event("select_boss", %{"boss_id" => ""}, socket), do: {:noreply, assign(socket, selected_boss: nil, phases: [], editing: nil)}
   def handle_event("select_boss", %{"boss_id" => id_str}, socket) do
     boss_id = String.to_integer(id_str)

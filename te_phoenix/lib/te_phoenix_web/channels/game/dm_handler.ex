@@ -320,7 +320,7 @@ defmodule TePhoenixWeb.Game.DmHandler do
       _ -> []
     end
 
-    push(socket, "dm_campaigns_list", campaigns)
+    push(socket, "dm_campaigns_list", %{campaigns: campaigns})
     {:noreply, socket}
   end
 

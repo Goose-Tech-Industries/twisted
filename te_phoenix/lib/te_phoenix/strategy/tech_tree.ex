@@ -815,7 +815,7 @@ defmodule TePhoenix.Strategy.TechTree do
 
   # ── Cost spending (delegates to Economy) ───────────────────────
 
-  defp spend_costs(char_id, cost_map) when map_size(cost_map) == 0, do: :ok
+  defp spend_costs(_char_id, cost_map) when map_size(cost_map) == 0, do: :ok
 
   defp spend_costs(char_id, cost_map) do
     # Pre-check all resources before spending any

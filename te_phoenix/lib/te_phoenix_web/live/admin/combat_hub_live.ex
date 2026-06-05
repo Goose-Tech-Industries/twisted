@@ -29,5 +29,16 @@ defmodule TePhoenixWeb.Admin.CombatHubLive do
     {"Limb Zones",   "game_limb_zones"},
   ]
 
-  use TePhoenixWeb.Admin.HubCrud, per_page: @per_page, tab_config: @tab_config, hub_title: "Combat Hub", active_tab: :combat
+  use TePhoenixWeb.Admin.HubCrud,
+    per_page: @per_page,
+    tab_config: @tab_config,
+    hub_title: "Combat Hub",
+    active_tab: :combat,
+    ai_features: %{
+      "game_classes" => "class_stat_block",
+      "game_skills" => "skill_design",
+      "game_signature_abilities" => "sig_tech",
+      "game_limit_breaks" => "limit_break",
+      "game_ki_moves" => "ki_move"
+    }
 end

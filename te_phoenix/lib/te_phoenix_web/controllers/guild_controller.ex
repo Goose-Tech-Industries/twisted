@@ -19,22 +19,76 @@ defmodule TePhoenixWeb.GuildController do
 
   def create_guild(conn, params) do
     user_id = conn.assigns.user_id
-    name = params["name"]
+    name = (params["name"] || "") |> String.trim()
     description = params["description"] || ""
-    icon = params["icon"] || "⚔️"
+    emblem = params["emblem"] || params["icon"] || "⚔️"
+    # Schema: `tag VARCHAR(6) NOT NULL` with no default. Derive when the
+    # client doesn't pass one.
+    tag =
+      (params["tag"] || derive_tag(name))
+      |> to_string()
+      |> String.upcase()
+      |> String.slice(0, 6)
 
+    cond do
+      String.length(name) < 3 or String.length(name) > 64 ->
+        json(conn, %{success: false, message: "Guild name must be 3-64 characters."})
+
+      tag == "" ->
+        json(conn, %{success: false, message: "Guild tag required."})
+
+      true ->
+        do_create_guild(conn, user_id, name, tag, emblem, description)
+    end
+  end
+
+  defp do_create_guild(conn, user_id, name, tag, emblem, description) do
     case Repo.query("SELECT id FROM characters WHERE user_id=? ORDER BY id LIMIT 1", [user_id]) do
       {:ok, %{rows: [[char_id]]}} ->
         case Repo.query("SELECT id FROM guild_members WHERE character_id=? AND is_active=1", [char_id]) do
-          {:ok, %{rows: [_]}} -> json(conn, %{success: false, message: "Already in a guild."})
+          {:ok, %{rows: [_]}} ->
+            json(conn, %{success: false, message: "Already in a guild."})
+
           _ ->
-            {:ok, result} = Repo.query("INSERT INTO guilds (name, description, icon, leader_id) VALUES (?,?,?,?)", [name, description, icon, char_id])
-            guild_id = result.last_insert_id
-            Repo.query!("INSERT INTO guild_members (guild_id, character_id, rank) VALUES (?,?,'LEADER')", [guild_id, char_id])
-            json(conn, %{success: true, guildId: guild_id, message: "Guild created!"})
+            try do
+              {:ok, result} = Repo.query(
+                "INSERT INTO guilds (name, tag, description, emblem, leader_id) VALUES (?,?,?,?,?)",
+                [name, tag, description, emblem, char_id]
+              )
+              guild_id = result.last_insert_id
+              Repo.query!(
+                "INSERT INTO guild_members (guild_id, character_id, rank) VALUES (?,?,'LEADER')",
+                [guild_id, char_id]
+              )
+              json(conn, %{success: true, guildId: guild_id, tag: tag, message: "Guild created!"})
+            rescue
+              e ->
+                msg = case e do
+                  %{mysql: %{code: 1062}} -> "Guild name or tag already taken."
+                  %{message: m} -> "Create failed: #{m}"
+                  _ -> "Create failed."
+                end
+                json(conn, %{success: false, message: msg})
+            end
         end
-      _ -> json(conn, %{success: false, message: "No character found."})
+
+      _ ->
+        json(conn, %{success: false, message: "No character found."})
     end
+  end
+
+  # Initials of the first words, falling back to the first up-to-4
+  # letters of the name. Capped to fit the 6-char `tag` column.
+  defp derive_tag(name) do
+    initials =
+      name
+      |> String.split(~r/\s+/, trim: true)
+      |> Enum.map(&String.first/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join()
+
+    raw = if String.length(initials) >= 2, do: initials, else: name
+    raw |> String.replace(~r/[^A-Za-z]/, "") |> String.slice(0, 4)
   end
 
   def get_members(conn, %{"id" => id}) do

@@ -51,7 +51,7 @@ defmodule TePhoenix.Battle.Reactions do
   """
 
   require Logger
-  alias TePhoenix.Battle.{Combatant, StatusEffects, Triggers}
+  alias TePhoenix.Battle.{Combatant, StatusEffects}
   alias TePhoenix.Repo
 
   @table "game_reaction_defs"

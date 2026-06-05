@@ -1,0 +1,47 @@
+{
+  "name": "@twisted/render",
+  "version": "0.1.0",
+  "description": "Shared rendering core for Twisted Engine — Pixi v8 + Three.js framework-agnostic TypeScript package.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./projections": {
+      "types": "./dist/projections/index.d.ts",
+      "import": "./dist/projections/index.js"
+    },
+    "./shaders": {
+      "types": "./dist/shaders/index.d.ts",
+      "import": "./dist/shaders/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "pixi.js": "^8.0.0",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.183.0",
+    "pixi.js": "^8.17.1",
+    "three": "^0.183.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3"
+  }
+}

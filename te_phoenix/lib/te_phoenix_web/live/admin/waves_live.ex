@@ -4,17 +4,42 @@ defmodule TePhoenixWeb.Admin.WavesLive do
   """
   use TePhoenixWeb, :live_view
 
+  alias TePhoenix.Repo
   alias TePhoenix.Waves.Registry
+  alias TePhoenixWeb.Components.PowerUserField
+  alias TePhoenixWeb.Components.RuleTreeBuilder
+  alias TePhoenixWeb.Components.RuleSchemas.WaveRound
 
   @impl true
   def mount(_params, _session, socket) do
+    user_id = socket.assigns[:session_user_id]
+    role_weight = PowerUserField.role_weight_for(socket.assigns[:session_role])
+    field_views = PowerUserField.load_field_views(user_id)
+
     {:ok,
      socket
      |> assign(:active_tab, :world)
      |> assign(:page_title, "Wave Sequences")
      |> assign(:defs, Registry.list_all() |> Enum.sort_by(& &1.key))
      |> assign(:editing, nil)
-     |> assign(:flash_msg, nil)}
+     |> assign(:flash_msg, nil)
+     |> assign(:role_weight, role_weight)
+     |> assign(:field_views, field_views)
+     |> assign(:scaling_schema, WaveRound.scaling_schema())
+     |> assign(:settings_schema, WaveRound.settings_schema())
+     |> assign(:callback_schema, WaveRound.callback_schema())
+     |> assign(:npc_options, list_npc_options())}
+  end
+
+  defp list_npc_options do
+    case Repo.query(
+      "SELECT id, name FROM game_npcs WHERE is_active=1 ORDER BY name ASC LIMIT 500"
+    ) do
+      {:ok, %{rows: rows}} -> Enum.map(rows, fn [id, name] -> {to_string(id), name} end)
+      _ -> []
+    end
+  rescue
+    _ -> []
   end
 
   @impl true
@@ -67,32 +92,217 @@ defmodule TePhoenixWeb.Admin.WavesLive do
               class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"><%= @editing["description"] %></textarea>
           </label>
 
-          <div class="block">
-            <div class="flex items-center justify-between mb-1">
-              <span class="text-xs text-zinc-400">
-                Rounds — array of wave objects
-              </span>
-              <button type="button" phx-click="add_wave_round"
-                class="text-xs text-amber-400 hover:text-amber-300 px-2 py-1 border border-amber-700 rounded">
-                + Quick Add Wave
-              </button>
-            </div>
-            <textarea name="rounds_json" rows="8"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["rounds_json"] %></textarea>
-            <p class="text-[10px] text-zinc-600 mt-1">
-              Format: [&lbrace;"wave": 1, "delay_seconds": 5, "spawns": [&lbrace;"npc_template": "key", "count": 3, "zone_key": "zone", "interval_ms": 1000, "boss": false&rbrace;]&rbrace;]
-            </p>
-          </div>
+          <PowerUserField.power_user_field
+            label="Rounds"
+            help_text="Each round is a wave with delay + spawn list. Quick Add appends a starter wave; structured view summarizes; raw shows the full JSON."
+            form_id="waves"
+            field_name="rounds_json"
+            user_id={@session_user_id}
+            role_weight={@role_weight}
+            view={Map.get(@field_views, "waves.rounds_json", "structured")}>
+            <:structured>
+              <div class="border border-zinc-800 rounded bg-zinc-900/40 p-3 space-y-2">
+                <div class="flex items-center justify-between">
+                  <% rounds = parsed_rounds(@editing["rounds_json"]) %>
+                  <% total_spawns = Enum.sum(Enum.map(rounds, fn r -> Enum.sum(Enum.map(r["spawns"] || [], &(&1["count"] || 0))) end)) %>
+                  <% est_seconds = Enum.sum(Enum.map(rounds, fn r -> r["delay_seconds"] || 0 end)) %>
+                  <span class="text-xs text-zinc-400">
+                    {length(rounds)} round<%= if length(rounds) != 1, do: "s" %> ·
+                    <span class="text-amber-400 font-bold">{total_spawns}</span> total enemies ·
+                    est <span class="text-zinc-300 font-mono">{est_seconds}s</span>
+                  </span>
+                  <button type="button" phx-click="add_wave_round"
+                    class="text-xs text-amber-400 hover:text-amber-300 px-2 py-1 border border-amber-700 rounded">
+                    + Quick Add Wave
+                  </button>
+                </div>
+
+                <table :if={rounds != []} class="w-full text-xs">
+                  <thead class="text-[10px] uppercase text-zinc-500">
+                    <tr class="border-b border-zinc-800">
+                      <th class="text-left py-1 w-10">#</th>
+                      <th class="text-left py-1 w-32">NPC</th>
+                      <th class="text-left py-1 w-16">Count</th>
+                      <th class="text-left py-1 w-24">Zone</th>
+                      <th class="text-left py-1 w-16">Diff ×</th>
+                      <th class="text-left py-1 w-16">Delay</th>
+                      <th class="text-right py-1 w-16">Edit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <%= for {r, idx} <- Enum.with_index(rounds) do %>
+                      <% first_spawn = (r["spawns"] || []) |> List.first() || %{} %>
+                      <% extra_spawn_count = max(length(r["spawns"] || []) - 1, 0) %>
+                      <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
+                        <td class="py-1 font-mono text-zinc-300">{r["wave"] || (idx + 1)}</td>
+                        <td class="py-1">
+                          <select
+                            phx-change="round_set_npc"
+                            phx-value-index={idx}
+                            name="npc"
+                            class="w-full bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-[11px]">
+                            <option value="">— pick —</option>
+                            <option :for={{id, name} <- @npc_options}
+                              value={id}
+                              selected={to_string(first_spawn["npc_template"] || first_spawn["npc_id"] || "") == id}>
+                              {name}
+                            </option>
+                            <%!-- if the round refers to an NPC slug not in the live list, surface it --%>
+                            <option :if={
+                                first_spawn["npc_template"] not in [nil, ""] and
+                                not Enum.any?(@npc_options, fn {id, _} -> id == to_string(first_spawn["npc_template"]) end)
+                              }
+                              value={first_spawn["npc_template"]} selected>
+                              {first_spawn["npc_template"]} (slug)
+                            </option>
+                          </select>
+                        </td>
+                        <td class="py-1">
+                          <input type="number" min="1" max="50"
+                            phx-blur="round_set_count" phx-value-index={idx}
+                            name="count" value={first_spawn["count"] || 1}
+                            class="w-full bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-[11px] font-mono" />
+                        </td>
+                        <td class="py-1">
+                          <input type="text"
+                            phx-blur="round_set_zone" phx-value-index={idx}
+                            name="zone" value={first_spawn["zone_key"] || ""}
+                            placeholder="entrance"
+                            class="w-full bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-[11px] font-mono" />
+                        </td>
+                        <td class="py-1">
+                          <input type="number" step="0.1" min="0.1" max="10"
+                            phx-blur="round_set_difficulty" phx-value-index={idx}
+                            name="difficulty" value={first_spawn["level_scaling"] || 1.0}
+                            class="w-full bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-[11px] font-mono" />
+                        </td>
+                        <td class="py-1">
+                          <input type="number" min="0" max="120"
+                            phx-blur="round_set_delay" phx-value-index={idx}
+                            name="delay" value={r["delay_seconds"] || 0}
+                            class="w-full bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-[11px] font-mono" />
+                        </td>
+                        <td class="py-1 text-right">
+                          <span :if={extra_spawn_count > 0}
+                            class="text-[9px] text-amber-500/70 mr-1"
+                            title="Extra spawn rows in this round — switch to Raw to edit">
+                            +{extra_spawn_count}
+                          </span>
+                          <button type="button" phx-click="duplicate_wave_round" phx-value-index={idx}
+                            class="text-[10px] text-zinc-500 hover:text-zinc-300 mr-1" title="Duplicate">⎘</button>
+                          <button type="button" phx-click="delete_wave_round" phx-value-index={idx}
+                            data-confirm={"Delete round #{r["wave"] || (idx + 1)}?"}
+                            class="text-[10px] text-rose-500 hover:text-rose-400" title="Delete">✕</button>
+                        </td>
+                      </tr>
+                    <% end %>
+                  </tbody>
+                </table>
+
+                <div :if={rounds == []} class="text-[11px] text-zinc-500 italic text-center py-3">
+                  No rounds yet — click <span class="text-amber-400">+ Quick Add Wave</span> to start, or switch to Raw to paste JSON.
+                </div>
+
+                <%!-- Hidden input keeps the JSON in sync with the form submit --%>
+                <input type="hidden" name="rounds_json" value={@editing["rounds_json"]} />
+              </div>
+            </:structured>
+            <:raw>
+              <textarea name="rounds_json" rows="8"
+                class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["rounds_json"] %></textarea>
+              <p class="text-[10px] text-zinc-600 mt-1">
+                Format: [&lbrace;"wave": 1, "delay_seconds": 5, "spawns": [&lbrace;"npc_template": "key", "count": 3, "zone_key": "zone", "interval_ms": 1000, "boss": false&rbrace;]&rbrace;]
+              </p>
+            </:raw>
+          </PowerUserField.power_user_field>
 
           <div class="grid grid-cols-2 gap-3">
-            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_scaling" field_name="scaling_json" schema={:wave_scaling} label="Wave Scaling" value={@editing["scaling_json"]} />
-            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_settings" field_name="settings_json" schema={:wave_settings} label="Wave Settings" value={@editing["settings_json"]} />
+            <PowerUserField.power_user_field
+              label="Wave Scaling"
+              help_text="HP/ATK/XP/SPD multipliers applied per wave. Example: 0.10 = +10% per wave."
+              form_id="waves" field_name="scaling_json"
+              user_id={@session_user_id} role_weight={@role_weight}
+              view={Map.get(@field_views, "waves.scaling_json", "structured")}>
+              <:structured>
+                <RuleTreeBuilder.rule_tree_builder kind={:action_list}
+                  schema={@scaling_schema} field_name="scaling_json"
+                  value={@editing["scaling_json"]} />
+              </:structured>
+              <:raw>
+                <textarea name="scaling_json" rows="3"
+                  class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["scaling_json"] %></textarea>
+              </:raw>
+            </PowerUserField.power_user_field>
+
+            <PowerUserField.power_user_field
+              label="Wave Settings"
+              help_text="Auto-start, clear condition, intervals, max active spawns."
+              form_id="waves" field_name="settings_json"
+              user_id={@session_user_id} role_weight={@role_weight}
+              view={Map.get(@field_views, "waves.settings_json", "structured")}>
+              <:structured>
+                <RuleTreeBuilder.rule_tree_builder kind={:action_list}
+                  schema={@settings_schema} field_name="settings_json"
+                  value={@editing["settings_json"]} />
+              </:structured>
+              <:raw>
+                <textarea name="settings_json" rows="3"
+                  class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["settings_json"] %></textarea>
+              </:raw>
+            </PowerUserField.power_user_field>
           </div>
 
           <div class="grid grid-cols-3 gap-3">
-            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_on_start" field_name="on_wave_start_json" schema={:objective_callback} label="On Wave Start" value={@editing["on_wave_start_json"]} />
-            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_on_clear" field_name="on_wave_clear_json" schema={:objective_callback} label="On Wave Clear" value={@editing["on_wave_clear_json"]} />
-            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="wave_on_complete" field_name="on_sequence_complete_json" schema={:objective_callback} label="On Sequence Complete" value={@editing["on_sequence_complete_json"]} />
+            <PowerUserField.power_user_field
+              label="On Wave Start"
+              help_text="Side-effects fired at the start of each wave."
+              form_id="waves" field_name="on_wave_start_json"
+              user_id={@session_user_id} role_weight={@role_weight}
+              view={Map.get(@field_views, "waves.on_wave_start_json", "structured")}>
+              <:structured>
+                <RuleTreeBuilder.rule_tree_builder kind={:action_list}
+                  schema={@callback_schema} field_name="on_wave_start_json"
+                  value={@editing["on_wave_start_json"]} />
+              </:structured>
+              <:raw>
+                <textarea name="on_wave_start_json" rows="3"
+                  class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["on_wave_start_json"] %></textarea>
+              </:raw>
+            </PowerUserField.power_user_field>
+
+            <PowerUserField.power_user_field
+              label="On Wave Clear"
+              help_text="Side-effects fired when a wave clears (between-wave hooks)."
+              form_id="waves" field_name="on_wave_clear_json"
+              user_id={@session_user_id} role_weight={@role_weight}
+              view={Map.get(@field_views, "waves.on_wave_clear_json", "structured")}>
+              <:structured>
+                <RuleTreeBuilder.rule_tree_builder kind={:action_list}
+                  schema={@callback_schema} field_name="on_wave_clear_json"
+                  value={@editing["on_wave_clear_json"]} />
+              </:structured>
+              <:raw>
+                <textarea name="on_wave_clear_json" rows="3"
+                  class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["on_wave_clear_json"] %></textarea>
+              </:raw>
+            </PowerUserField.power_user_field>
+
+            <PowerUserField.power_user_field
+              label="On Sequence Complete"
+              help_text="Side-effects fired when the entire sequence resolves (final reward, broadcast)."
+              form_id="waves" field_name="on_sequence_complete_json"
+              user_id={@session_user_id} role_weight={@role_weight}
+              view={Map.get(@field_views, "waves.on_sequence_complete_json", "structured")}>
+              <:structured>
+                <RuleTreeBuilder.rule_tree_builder kind={:action_list}
+                  schema={@callback_schema} field_name="on_sequence_complete_json"
+                  value={@editing["on_sequence_complete_json"]} />
+              </:structured>
+              <:raw>
+                <textarea name="on_sequence_complete_json" rows="3"
+                  class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["on_sequence_complete_json"] %></textarea>
+              </:raw>
+            </PowerUserField.power_user_field>
           </div>
 
           <div class="flex gap-2 pt-2">
@@ -169,6 +379,120 @@ defmodule TePhoenixWeb.Admin.WavesLive do
     Registry.upsert(d)
     {:noreply, socket |> assign(:editing, nil) |> assign(:defs, Registry.list_all() |> Enum.sort_by(& &1.key)) |> assign(:flash_msg, "Saved #{d.key}")}
   end
+
+  def handle_event("duplicate_wave_round", %{"index" => idx}, socket) do
+    rounds = parsed_rounds(socket.assigns.editing["rounds_json"])
+    n = String.to_integer(idx)
+
+    case Enum.at(rounds, n) do
+      nil ->
+        {:noreply, socket}
+
+      orig ->
+        bumped = Map.put(orig, "wave", (orig["wave"] || (n + 1)) + 1)
+        new_rounds = List.insert_at(rounds, n + 1, bumped)
+        editing = Map.put(socket.assigns.editing, "rounds_json", Jason.encode!(new_rounds, pretty: true))
+        {:noreply, assign(socket, :editing, editing)}
+    end
+  end
+
+  def handle_event("delete_wave_round", %{"index" => idx}, socket) do
+    rounds = parsed_rounds(socket.assigns.editing["rounds_json"])
+    n = String.to_integer(idx)
+    new_rounds = List.delete_at(rounds, n)
+    editing = Map.put(socket.assigns.editing, "rounds_json", Jason.encode!(new_rounds, pretty: true))
+    {:noreply, assign(socket, :editing, editing)}
+  end
+
+  def handle_event("power_user_field:toggle", params, socket),
+    do: PowerUserField.handle_toggle(params, socket)
+
+  def handle_event("rb:" <> _ = ev, params, socket),
+    do: RuleTreeBuilder.dispatch(ev, params, socket, assign: :editing)
+
+  # ── Inline cell editing for the round table ────────────────────
+  # phx-blur on each cell carries `value` (the input value) plus the
+  # phx-value-index we set on the input. The events update the FIRST
+  # spawn of the targeted round (multi-spawn rounds show a +N badge
+  # and direct admins to Raw mode for full editing).
+
+  def handle_event("round_set_delay", %{"index" => idx, "value" => v}, socket) do
+    {:noreply, update_round(socket, idx, fn r -> Map.put(r, "delay_seconds", to_int(v)) end)}
+  end
+
+  def handle_event("round_set_npc", %{"index" => idx, "value" => v}, socket) do
+    {:noreply, update_first_spawn(socket, idx, fn s -> Map.put(s, "npc_template", v) end)}
+  end
+
+  def handle_event("round_set_count", %{"index" => idx, "value" => v}, socket) do
+    {:noreply, update_first_spawn(socket, idx, fn s -> Map.put(s, "count", to_int(v)) end)}
+  end
+
+  def handle_event("round_set_zone", %{"index" => idx, "value" => v}, socket) do
+    {:noreply, update_first_spawn(socket, idx, fn s -> Map.put(s, "zone_key", v) end)}
+  end
+
+  def handle_event("round_set_difficulty", %{"index" => idx, "value" => v}, socket) do
+    {:noreply, update_first_spawn(socket, idx, fn s -> Map.put(s, "level_scaling", to_float(v)) end)}
+  end
+
+  defp update_round(socket, idx_str, mutator) do
+    idx = String.to_integer(to_string(idx_str))
+    rounds = parsed_rounds(socket.assigns.editing["rounds_json"])
+
+    case Enum.at(rounds, idx) do
+      nil ->
+        socket
+
+      round ->
+        new_round = mutator.(round)
+        new_rounds = List.replace_at(rounds, idx, new_round)
+        editing = Map.put(socket.assigns.editing, "rounds_json", Jason.encode!(new_rounds, pretty: true))
+        assign(socket, :editing, editing)
+    end
+  end
+
+  defp update_first_spawn(socket, idx_str, spawn_mutator) do
+    update_round(socket, idx_str, fn round ->
+      spawns = round["spawns"] || []
+
+      new_spawns =
+        case spawns do
+          [] ->
+            [spawn_mutator.(blank_spawn())]
+
+          [first | rest] ->
+            [spawn_mutator.(first) | rest]
+        end
+
+      Map.put(round, "spawns", new_spawns)
+    end)
+  end
+
+  defp blank_spawn do
+    %{"npc_template" => "", "count" => 1, "zone_key" => "", "interval_ms" => 1000, "boss" => false}
+  end
+
+  defp to_float(nil), do: 1.0
+  defp to_float(""), do: 1.0
+  defp to_float(s) when is_binary(s) do
+    case Float.parse(s) do
+      {f, _} -> f
+      _ -> 1.0
+    end
+  end
+  defp to_float(n) when is_number(n), do: n / 1
+  defp to_float(_), do: 1.0
+
+  defp parsed_rounds(nil), do: []
+  defp parsed_rounds(""), do: []
+  defp parsed_rounds(s) when is_binary(s) do
+    case Jason.decode(s) do
+      {:ok, l} when is_list(l) -> l
+      _ -> []
+    end
+  end
+  defp parsed_rounds(_), do: []
 
   defp blank do
     %{

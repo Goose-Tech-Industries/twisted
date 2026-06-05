@@ -145,7 +145,7 @@ defmodule TePhoenixWeb.Game.NpcHandler do
       String.starts_with?(choice_id, "shop_") ->
         shop_id = choice_id |> String.replace("shop_", "") |> parse_int()
         socket = assign(socket, :shop_discount, 0)
-        push(socket, "event_queue", [%{cmd: "open_shop", shopId: shop_id}])
+        push(socket, "event_queue", %{events: [%{cmd: "open_shop", shopId: shop_id}]})
 
       String.starts_with?(choice_id, "haggle_") ->
         shop_id = choice_id |> String.replace("haggle_", "") |> parse_int()
@@ -158,16 +158,16 @@ defmodule TePhoenixWeb.Game.NpcHandler do
 
         if discount > 0 do
           socket = assign(socket, :shop_discount, discount)
-          push(socket, "event_queue", [
+          push(socket, "event_queue", %{events: [
             %{cmd: "dialogue", speaker: npc_name,
               text: "*#{npc_name} leans in.* \"For you? I'll knock #{discount}% off. Don't tell the others.\""},
             %{cmd: "open_shop", shopId: shop_id, discount: discount}
-          ])
+          ]})
         else
-          push(socket, "event_queue", [
+          push(socket, "event_queue", %{events: [
             %{cmd: "dialogue", speaker: npc_name,
               text: "\"Prices are prices. I don't make exceptions.\""}
-          ])
+          ]})
         end
 
       choice_id == "companion_recruit" ->
@@ -177,31 +177,31 @@ defmodule TePhoenixWeb.Game.NpcHandler do
         handle_companion_dismiss(socket, char_id, npc, npc_name)
 
       choice_id == "companion_locked_rep" ->
-        push(socket, "event_queue", [
+        push(socket, "event_queue", %{events: [
           %{cmd: "dialogue", speaker: npc_name,
             text: "*#{npc_name} considers your request.* \"I don't know you well enough yet. Prove yourself to me first.\""}
-        ])
+        ]})
 
       choice_id == "companion_locked_quest" ->
-        push(socket, "event_queue", [
+        push(socket, "event_queue", %{events: [
           %{cmd: "dialogue", speaker: npc_name,
             text: "*#{npc_name} shakes their head.* \"There's something I need done first. Help me with that, and we'll talk.\""}
-        ])
+        ]})
 
       choice_id == "companion_full" ->
-        push(socket, "event_queue", [
+        push(socket, "event_queue", %{events: [
           %{cmd: "dialogue", speaker: npc_name,
             text: "*#{npc_name} glances at your companions.* \"Looks like your hands are full already. Come back if you make room.\""}
-        ])
+        ]})
 
       choice_id == "talk" ->
-        push(socket, "event_queue", [%{cmd: "npc_talk_prompt", npcName: npc_name}])
+        push(socket, "event_queue", %{events: [%{cmd: "npc_talk_prompt", npcName: npc_name}]})
 
       choice_id == "farewell" ->
         farewell = if reputation > 50,
           do: "*#{npc_name} waves warmly.* \"Safe travels, friend.\"",
           else: "\"Watch yourself out there.\""
-        push(socket, "event_queue", [%{cmd: "dialogue", speaker: npc_name, text: farewell}])
+        push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: npc_name, text: farewell}]})
 
       true -> nil
     end
@@ -786,7 +786,7 @@ defmodule TePhoenixWeb.Game.NpcHandler do
           obj = Enum.at(steps, step)
           text = if obj, do: "\"You're making progress. #{obj["description"] || "Keep going."}\"",
             else: "\"I think you've done what I asked. Let me reward you.\""
-          push(socket, "event_queue", [%{cmd: "dialogue", speaker: npc_name, text: text}])
+          push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: npc_name, text: text}]})
         else
           # Start new quest
           quests = char_state["quests"] || %{}
@@ -805,10 +805,10 @@ defmodule TePhoenixWeb.Game.NpcHandler do
             do: "\"Good. Here's what I need: #{first_step["description"]}\"",
             else: "\"The task is yours. Don't disappoint me.\""
 
-          push(socket, "event_queue", [
+          push(socket, "event_queue", %{events: [
             %{cmd: "dialogue", speaker: npc_name, text: accept_msg},
             %{cmd: "notification", text: "📜 Quest Started: #{quest_name}", type: "quest"}
-          ])
+          ]})
 
           upsert_npc_memory(char_id, npc_name, facts, min(100, reputation + 5))
         end
@@ -826,11 +826,11 @@ defmodule TePhoenixWeb.Game.NpcHandler do
         [char_id, npc_id]
       )
 
-      push(socket, "event_queue", [
+      push(socket, "event_queue", %{events: [
         %{cmd: "dialogue", speaker: npc_name,
           text: "*#{npc_name} nods firmly.* \"I'll fight by your side. Lead the way.\""},
         %{cmd: "notification", text: "⚔️ #{npc_name} joined your party!", type: "info"}
-      ])
+      ]})
 
       upsert_npc_memory(char_id, npc_name, facts, min(100, reputation + 10))
     rescue
@@ -842,10 +842,10 @@ defmodule TePhoenixWeb.Game.NpcHandler do
     try do
       Repo.query!("UPDATE character_companions SET is_active=0 WHERE character_id=? AND npc_id=?", [char_id, npc["id"]])
       push(socket, "companion_dismissed", %{npcId: npc["id"]})
-      push(socket, "event_queue", [
+      push(socket, "event_queue", %{events: [
         %{cmd: "dialogue", speaker: npc_name,
           text: "*#{npc_name} steps back.* \"I'll be here if you need me again.\""}
-      ])
+      ]})
     rescue _ -> nil
     end
   end

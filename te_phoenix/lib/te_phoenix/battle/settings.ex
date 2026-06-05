@@ -394,10 +394,7 @@ defmodule TePhoenix.Battle.Settings do
 
     # Turn delay (Grandia-style push-back on stagger)
     enable_turn_delay: false,
-    stagger_turn_delay: 2,
-
-    # Rolling HP (Earthbound odometer)
-    enable_rolling_hp: false
+    stagger_turn_delay: 2
   }
 
   @doc "Returns default settings map"

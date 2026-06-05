@@ -325,20 +325,19 @@ defmodule TePhoenix.Battle.Damage do
               end
 
             # ── Stagger (FF7R) + turn delay on break ────────────
-            {damage, target, result} =
+            {damage, target, result, state} =
               if settings[:enable_stagger_system] do
                 {d, t, r} = apply_stagger(target, damage, settings, result)
                 # Apply turn delay when a stagger break occurs (Grandia-style)
                 if t.broken and not target.broken and settings[:enable_turn_delay] do
                   delay = settings[:stagger_turn_delay] || 2
                   {new_queue, r} = Systems.apply_turn_delay(state.turn_queue, t, delay, r)
-                  state = %{state | turn_queue: new_queue}
-                  {d, t, r}
+                  {d, t, r, %{state | turn_queue: new_queue}}
                 else
-                  {d, t, r}
+                  {d, t, r, state}
                 end
               else
-                {damage, target, result}
+                {damage, target, result, state}
               end
 
             # ── Weapon triangle (Fire Emblem) ───────────────────

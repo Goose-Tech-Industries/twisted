@@ -1,7 +1,6 @@
 defmodule TePhoenix.ObjectivesTest do
   use ExUnit.Case, async: false
 
-  alias TePhoenix.Objectives
   alias TePhoenix.Objectives.Registry
 
   @ets_defs :twisted_objective_defs

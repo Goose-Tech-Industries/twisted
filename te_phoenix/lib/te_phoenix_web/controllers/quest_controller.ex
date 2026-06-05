@@ -1,6 +1,7 @@
 defmodule TePhoenixWeb.QuestController do
   use TePhoenixWeb, :controller
   alias TePhoenix.Repo
+  alias TePhoenix.Game.Quests
 
   def list_quests(conn, _params) do
     quests = query_rows("SELECT id, name, description, level_req, reward_xp, reward_gold, is_repeatable FROM game_quests WHERE is_active=1 ORDER BY level_req, name")
@@ -107,6 +108,95 @@ defmodule TePhoenixWeb.QuestController do
     )
     json(conn, %{success: true, quests: quests})
   end
+
+  # ── v2 endpoints — TePhoenix.Game.Quests backed ──────────────
+  # These hit the newer game_quest_defs + game_quest_progress shape and
+  # use the runtime module's prereq + reward distribution. Active beside
+  # the legacy actions above; SvelteKit can migrate panels gradually.
+
+  def v2_active(conn, %{"char_id" => char_id}) do
+    case verify_char_ownership(conn, char_id) do
+      {:ok, cid} -> json(conn, %{success: true, quests: Quests.list_active(cid)})
+      :unauthorized -> json(conn, %{success: false, message: "Unauthorized."})
+    end
+  end
+
+  def v2_active(conn, _), do: json(conn, %{success: false, message: "char_id required"})
+
+  def v2_completed(conn, %{"char_id" => char_id}) do
+    case verify_char_ownership(conn, char_id) do
+      {:ok, cid} -> json(conn, %{success: true, quests: Quests.list_completed(cid)})
+      :unauthorized -> json(conn, %{success: false, message: "Unauthorized."})
+    end
+  end
+
+  def v2_completed(conn, _), do: json(conn, %{success: false, message: "char_id required"})
+
+  def v2_start(conn, %{"def_id" => def_id, "char_id" => char_id}) do
+    case verify_char_ownership(conn, char_id) do
+      {:ok, cid} ->
+        case Quests.start(cid, to_int(def_id)) do
+          {:ok, progress} -> json(conn, %{success: true, progress: progress})
+          {:error, reason} -> json(conn, %{success: false, message: to_string(reason)})
+        end
+
+      :unauthorized ->
+        json(conn, %{success: false, message: "Unauthorized."})
+    end
+  end
+
+  def v2_start(conn, _), do: json(conn, %{success: false, message: "char_id + def_id required"})
+
+  def v2_advance(conn, %{"def_id" => def_id, "char_id" => char_id} = params) do
+    delta = to_int(Map.get(params, "delta", 1))
+
+    case verify_char_ownership(conn, char_id) do
+      {:ok, cid} ->
+        case Quests.advance(cid, to_int(def_id), nil, max(delta, 1)) do
+          {:ok, progress} -> json(conn, %{success: true, progress: progress})
+          {:error, reason} -> json(conn, %{success: false, message: to_string(reason)})
+        end
+
+      :unauthorized ->
+        json(conn, %{success: false, message: "Unauthorized."})
+    end
+  end
+
+  def v2_advance(conn, _), do: json(conn, %{success: false, message: "char_id + def_id required"})
+
+  def v2_complete(conn, %{"def_id" => def_id, "char_id" => char_id}) do
+    case verify_char_ownership(conn, char_id) do
+      {:ok, cid} ->
+        case Quests.complete(cid, to_int(def_id)) do
+          {:ok, progress} -> json(conn, %{success: true, progress: progress})
+          {:error, reason} -> json(conn, %{success: false, message: to_string(reason)})
+        end
+
+      :unauthorized ->
+        json(conn, %{success: false, message: "Unauthorized."})
+    end
+  end
+
+  def v2_complete(conn, _), do: json(conn, %{success: false, message: "char_id + def_id required"})
+
+  defp verify_char_ownership(conn, char_id) do
+    user_id = conn.assigns[:user_id]
+    cid = to_int(char_id)
+
+    case Repo.query("SELECT id FROM characters WHERE id = ? AND user_id = ?", [cid, user_id]) do
+      {:ok, %{rows: [[_]]}} -> {:ok, cid}
+      _ -> :unauthorized
+    end
+  end
+
+  defp to_int(n) when is_integer(n), do: n
+  defp to_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {i, _} -> i
+      _ -> 0
+    end
+  end
+  defp to_int(_), do: 0
 
   defp query_rows(sql, params \\ []) do
     case Repo.query(sql, params) do

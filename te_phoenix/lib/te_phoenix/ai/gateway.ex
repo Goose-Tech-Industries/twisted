@@ -43,6 +43,7 @@ defmodule TePhoenix.AI.Gateway do
   """
 
   alias TePhoenix.Repo
+  alias TePhoenix.AI.{Budget, FeatureRegistry}
   require Logger
 
   @type feature_key :: atom()
@@ -74,10 +75,14 @@ defmodule TePhoenix.AI.Gateway do
           {:ok, call_result()} | {:error, atom() | String.t()}
   def call(feature_key, prompt, opts \\ []) when is_atom(feature_key) and is_binary(prompt) do
     user_id = Keyword.get(opts, :user_id)
+    user = Keyword.get(opts, :user)
+    est_tokens = Keyword.get(opts, :estimated_tokens, estimated_tokens(prompt, opts))
     started = System.monotonic_time(:millisecond)
 
-    with :ok <- check_feature_enabled(feature_key, user_id),
+    with :ok <- check_role_gate(feature_key, user, user_id),
+         :ok <- check_feature_enabled(feature_key, user_id),
          :ok <- check_budget(user_id),
+         :ok <- check_token_budget(user_id, feature_key, est_tokens),
          {:ok, provider, model} <- resolve_provider(user_id, opts),
          {:ok, result} <- dispatch(provider, model, prompt, opts) do
       duration = System.monotonic_time(:millisecond) - started
@@ -92,6 +97,49 @@ defmodule TePhoenix.AI.Gateway do
   end
 
   # ── Gates ──────────────────────────────────────────────────────
+
+  # Tier α-AI: role-weight gate. If FeatureRegistry has a row for this
+  # feature with a min_role_weight set, enforce it. Falls through to
+  # `:ok` for legacy features that haven't been registered yet so the
+  # existing :npc_dialogue path keeps working.
+  defp check_role_gate(feature_key, user, user_id) do
+    case FeatureRegistry.get(feature_key) do
+      nil ->
+        :ok
+
+      feature ->
+        case FeatureRegistry.available_for?(user || %{role_weight: lookup_role_weight(user_id)}, feature.feature_key) do
+          :ok -> :ok
+          {:error, _reason} = err -> err
+        end
+    end
+  end
+
+  defp lookup_role_weight(nil), do: 100  # backend-initiated calls bypass role gate
+  defp lookup_role_weight(user_id) when is_integer(user_id) do
+    case Repo.query("SELECT role FROM users WHERE id = ?", [user_id]) do
+      {:ok, %{rows: [[role]]}} ->
+        TePhoenixWeb.Components.PowerUserField.role_weight(role)
+
+      _ ->
+        0
+    end
+  end
+
+  defp check_token_budget(user_id, feature_key, est_tokens) do
+    case Budget.check_budget(user_id, feature_key, est_tokens) do
+      :ok -> :ok
+      {:error, :feature_not_found, _} -> :ok  # legacy / unregistered feature → skip
+      {:error, :budget_exceeded, _meta} = err -> err
+    end
+  end
+
+  # Cheap pre-flight estimate: ~4 chars/token in + max_tokens out.
+  defp estimated_tokens(prompt, opts) do
+    in_est = div(byte_size(prompt), 4)
+    out_est = Keyword.get(opts, :max_tokens, 1024)
+    in_est + out_est
+  end
 
   defp check_feature_enabled(feature_key, user_id) do
     key_str = Atom.to_string(feature_key)

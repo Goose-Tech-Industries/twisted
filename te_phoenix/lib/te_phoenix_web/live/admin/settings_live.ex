@@ -12,7 +12,8 @@ defmodule TePhoenixWeb.Admin.SettingsLive do
       active_category: nil,
       search: "",
       editing_key: nil,
-      edit_value: ""
+      edit_value: "",
+      revealed_keys: MapSet.new()
     ) |> load_settings()}
   end
 
@@ -73,6 +74,14 @@ defmodule TePhoenixWeb.Admin.SettingsLive do
     {:noreply, assign(socket, edit_value: value)}
   end
 
+  def handle_event("reveal", %{"key" => key}, socket) do
+    {:noreply, assign(socket, revealed_keys: MapSet.put(socket.assigns.revealed_keys, key))}
+  end
+
+  def handle_event("hide", %{"key" => key}, socket) do
+    {:noreply, assign(socket, revealed_keys: MapSet.delete(socket.assigns.revealed_keys, key))}
+  end
+
   def handle_event("save", %{"key" => key}, socket) do
     value = socket.assigns.edit_value
 
@@ -107,14 +116,33 @@ defmodule TePhoenixWeb.Admin.SettingsLive do
       if search != "" do
         q = String.downcase(search)
         Enum.filter(s, fn setting ->
-          String.contains?(String.downcase(to_string(setting["setting_key"] || "")), q) or
-          String.contains?(String.downcase(to_string(setting["setting_value"] || "")), q)
+          key = to_string(setting["setting_key"] || "")
+          val = to_string(setting["setting_value"] || "")
+          String.contains?(String.downcase(key), q) or
+            (not sensitive?(key) and String.contains?(String.downcase(val), q))
         end)
       else
         s
       end
     end)
   end
+
+  # Settings whose value should be masked by default. Suffix-based detection
+  # so future _api_key / _secret / _token / _password settings inherit masking
+  # automatically without code changes.
+  defp sensitive?(key) when is_binary(key) do
+    k = String.downcase(key)
+    String.ends_with?(k, "_api_key") or
+      String.ends_with?(k, "_secret") or
+      String.ends_with?(k, "_token") or
+      String.ends_with?(k, "_password") or
+      String.contains?(k, "private_key")
+  end
+  defp sensitive?(_), do: false
+
+  defp mask_value(nil), do: ""
+  defp mask_value(""), do: ""
+  defp mask_value(_val), do: "••••••••••••"
 
   @impl true
   def render(assigns) do
@@ -163,14 +191,30 @@ defmodule TePhoenixWeb.Admin.SettingsLive do
               <td class="px-4 py-2.5 text-sm text-zinc-300 max-w-md">
                 <div :if={@editing_key == setting["setting_key"]}>
                   <form phx-submit="save" phx-value-key={setting["setting_key"]} class="flex gap-2">
-                    <input type="text" name="value" value={@edit_value} phx-keyup="update_edit" phx-value-value={@edit_value}
+                    <input
+                      type={if sensitive?(setting["setting_key"]) and not MapSet.member?(@revealed_keys, setting["setting_key"]), do: "password", else: "text"}
+                      name="value" value={@edit_value} phx-keyup="update_edit" phx-value-value={@edit_value}
                       class="flex-1 px-2 py-1 bg-zinc-800 border border-amber-600 rounded text-sm text-zinc-200 focus:outline-none"
+                      autocomplete="off"
                       autofocus />
                     <button type="submit" class="px-2 py-1 bg-green-700 hover:bg-green-600 text-white rounded text-xs">Save</button>
                     <button type="button" phx-click="cancel_edit" class="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded text-xs">Cancel</button>
                   </form>
                 </div>
-                <span :if={@editing_key != setting["setting_key"]} class="truncate block">{truncate(setting["setting_value"])}</span>
+                <div :if={@editing_key != setting["setting_key"]} class="flex items-center gap-2">
+                  <%= cond do %>
+                    <% sensitive?(setting["setting_key"]) and not MapSet.member?(@revealed_keys, setting["setting_key"]) -> %>
+                      <span class="font-mono text-zinc-500 tracking-widest">{mask_value(setting["setting_value"])}</span>
+                      <button type="button" phx-click="reveal" phx-value-key={setting["setting_key"]}
+                        class="text-[10px] px-1.5 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 rounded">Reveal</button>
+                    <% sensitive?(setting["setting_key"]) -> %>
+                      <span class="truncate block font-mono text-amber-300/80">{truncate(setting["setting_value"])}</span>
+                      <button type="button" phx-click="hide" phx-value-key={setting["setting_key"]}
+                        class="text-[10px] px-1.5 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 rounded">Hide</button>
+                    <% true -> %>
+                      <span class="truncate block">{truncate(setting["setting_value"])}</span>
+                  <% end %>
+                </div>
               </td>
               <td class="px-4 py-2.5">
                 <span class="text-[10px] px-2 py-0.5 rounded bg-zinc-800 text-zinc-500">{setting["category"]}</span>

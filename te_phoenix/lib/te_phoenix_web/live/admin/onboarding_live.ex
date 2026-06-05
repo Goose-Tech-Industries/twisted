@@ -103,11 +103,22 @@ defmodule TePhoenixWeb.Admin.OnboardingLive do
     ~H"""
     <div class="min-h-screen bg-zinc-950 text-zinc-200">
       <div class="max-w-5xl mx-auto px-6 py-10">
-        <header class="text-center mb-10">
+        <header class="text-center mb-10 relative">
           <h1 class="text-3xl font-bold text-amber-400">Welcome to Twisted Engine</h1>
           <p class="text-zinc-500 mt-2 text-sm">
             What kind of game do you want to build? You can change this later — switching never deletes content.
           </p>
+          <div class="absolute top-0 right-0">
+            <.live_component
+              module={TePhoenixWeb.Components.AiAssist}
+              id="ai-onboarding-seed"
+              feature_key="onboarding_seed"
+              user_id={@session_user_id}
+              role={@session_role}
+              trigger_label="✨ Help me decide"
+              context={%{before_value: ""}}
+              on_accept={Phoenix.LiveView.JS.push("ai:apply_onboarding_suggestion")} />
+          </div>
         </header>
 
         <%= case @step do %>
@@ -248,6 +259,25 @@ defmodule TePhoenixWeb.Admin.OnboardingLive do
   end
 
   @impl true
+  def handle_event("ai:apply_onboarding_suggestion", %{"suggestion" => json}, socket) do
+    # AI suggests a genre + capability mix. Surface it so the user can
+    # apply manually — auto-clicking the genre buttons would feel pushy
+    # for an "I'll decide" wizard step.
+    summary =
+      case Jason.decode(json) do
+        {:ok, %{"genre" => g}} -> "AI recommends genre: #{g}. Click to apply."
+        {:ok, %{} = parsed} -> "AI suggests: #{inspect(parsed) |> String.slice(0, 200)}"
+        _ -> "AI suggestion received."
+      end
+
+    {:noreply,
+     socket
+     |> assign(:ai_last_suggestion, json)
+     |> put_flash(:info, summary)}
+  end
+
+  def handle_event("ai:apply_onboarding_suggestion", _, socket), do: {:noreply, socket}
+
   def handle_event("select_genre", %{"key" => key}, socket) do
     {:noreply, assign(socket, :selected_genre, String.to_existing_atom(key))}
   end
@@ -284,6 +314,30 @@ defmodule TePhoenixWeb.Admin.OnboardingLive do
     {:noreply, assign(socket, :hybrid_selection, new_sel)}
   end
 
+  def handle_event("hybrid_apply", _params, socket) do
+    sel = socket.assigns.hybrid_selection
+
+    Enum.each(Capabilities.list_modules(), fn m ->
+      Capabilities.set_enabled(m.id, MapSet.member?(sel, m.id))
+    end)
+
+    {:noreply, assign(socket, :step, :done)}
+  end
+
+  def handle_event("back", _params, socket) do
+    {:noreply, assign(socket, :step, :pick)}
+  end
+
+  def handle_event("apply", _params, socket) do
+    Capabilities.seed_genre(socket.assigns.selected_genre)
+    seed_summary = OnboardingSeeder.seed(socket.assigns.selected_genre)
+
+    {:noreply,
+     socket
+     |> assign(:step, :done)
+     |> assign(:seed_summary, seed_summary)}
+  end
+
   # All modules that (transitively) require `id`. Used when disabling.
   defp collect_reverse_deps(id, current_sel) do
     Enum.reduce(Capabilities.list_modules(), [], fn m, acc ->
@@ -311,30 +365,6 @@ defmodule TePhoenixWeb.Admin.OnboardingLive do
         transitive = Enum.flat_map(direct, &collect_forward_deps(&1, nil))
         Enum.uniq(direct ++ transitive)
     end
-  end
-
-  def handle_event("hybrid_apply", _params, socket) do
-    sel = socket.assigns.hybrid_selection
-
-    Enum.each(Capabilities.list_modules(), fn m ->
-      Capabilities.set_enabled(m.id, MapSet.member?(sel, m.id))
-    end)
-
-    {:noreply, assign(socket, :step, :done)}
-  end
-
-  def handle_event("back", _params, socket) do
-    {:noreply, assign(socket, :step, :pick)}
-  end
-
-  def handle_event("apply", _params, socket) do
-    Capabilities.seed_genre(socket.assigns.selected_genre)
-    seed_summary = OnboardingSeeder.seed(socket.assigns.selected_genre)
-
-    {:noreply,
-     socket
-     |> assign(:step, :done)
-     |> assign(:seed_summary, seed_summary)}
   end
 
   defp genres, do: @genres

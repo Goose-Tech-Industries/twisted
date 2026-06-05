@@ -4,6 +4,8 @@ defmodule TePhoenixWeb.Admin.MagicHubLive do
 
   @per_page 30
   @tab_config [
+    # Phase 1.5d — Spells tab (new). Test Cast button gated to this tab.
+    {"Spells",        "game_spells"},
     {"Oghams",        "game_oghams"},
     {"Families",      "game_ogham_families"},
     {"Awakenings",    "game_ogham_awakenings"},
@@ -24,5 +26,23 @@ defmodule TePhoenixWeb.Admin.MagicHubLive do
     {"Relic Sets",    "game_relic_sets"},
   ]
 
-  use TePhoenixWeb.Admin.HubCrud, per_page: @per_page, tab_config: @tab_config, hub_title: "Magic & Lore Hub", active_tab: :magic
+  use TePhoenixWeb.Admin.HubCrud,
+    per_page: @per_page,
+    tab_config: @tab_config,
+    hub_title: "Magic & Lore Hub",
+    active_tab: :magic,
+    ai_features: %{"game_oghams" => "ogham_design"}
+
+  # Pre-warm the magic schema on first hub mount so the Spells tab
+  # has tables to read against. Idempotent — Magic.ensure_schema/0
+  # caches via persistent_term.
+  @impl true
+  def handle_params(params, uri, socket) do
+    TePhoenix.Game.Magic.ensure_schema()
+    super_handle_params(params, uri, socket)
+  end
+
+  # Fallback super-call wrapper: HubCrud doesn't define handle_params,
+  # so Phoenix LiveView's default no-op handler runs.
+  defp super_handle_params(_, _, socket), do: {:noreply, socket}
 end

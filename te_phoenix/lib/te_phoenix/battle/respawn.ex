@@ -43,7 +43,6 @@ defmodule TePhoenix.Battle.Respawn do
     * Client receives `respawn_timer` push with countdown
   """
 
-  alias TePhoenix.Battle.Combatant
   require Logger
 
   @default_config %{

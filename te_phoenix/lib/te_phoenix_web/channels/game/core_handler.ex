@@ -183,7 +183,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     end)
 
     if sign do
-      push(socket, "event_queue", [%{cmd: "dialogue", speaker: sign["label"] || "Sign", text: sign["text"]}])
+      push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: sign["label"] || "Sign", text: sign["text"]}]})
       {:noreply, socket}
     else
       # 2. Check for live NPCs
@@ -246,12 +246,15 @@ defmodule TePhoenixWeb.Game.CoreHandler do
   # ═══════════════════════════════════════════════════════════════════
 
   def handle_disconnect(socket) do
-    char_id = socket.assigns[:char_id]
-    if is_nil(char_id), do: :ok
+    with char_id when not is_nil(char_id) <- socket.assigns[:char_id],
+         player when not is_nil(player) <- PlayerRegistry.get(char_id) do
+      do_disconnect(socket, char_id, player)
+    else
+      _ -> :ok
+    end
+  end
 
-    player = PlayerRegistry.get(char_id)
-    if is_nil(player), do: :ok
-
+  defp do_disconnect(_socket, char_id, player) do
     # Persist position to DB
     try do
       Repo.query!("UPDATE characters SET x=?, y=?, map_id=?, presence='offline', last_seen=NOW() WHERE id=?",
@@ -367,6 +370,32 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     # Greet system
     {enable_greet, greeted_ids, has_greeted} = load_greet_data(char_id, char_state)
 
+    # Ticket Q: bundle the right-rail panel data onto init_self so the
+    # player UI doesn't have to chase six separate pushes to know what
+    # to render. Each lookup returns a safe default if the underlying
+    # module doesn't exist yet — empty array, nil, "clear" — never raise.
+
+    quests_active =
+      try do
+        TePhoenix.Game.Quests.list_active(char_id)
+      rescue
+        _ -> []
+      end
+
+    weather_key =
+      try do
+        TePhoenix.World.Weather.get_weather(map_id) || "clear"
+      rescue
+        _ -> "clear"
+      end
+
+    online_count =
+      try do
+        TePhoenix.Game.PlayerRegistry.count()
+      rescue
+        _ -> 0
+      end
+
     # Send init_self with full character data
     push(socket, "init_self", %{
       charId: char_id, userId: user_id,
@@ -383,20 +412,36 @@ defmodule TePhoenixWeb.Game.CoreHandler do
       speed: char["speed"], luck: char["luck"],
       limitbreak: char["limitbreak"] || 0,
       breaklevel: char["breaklevel"] || 1,
-      region: region_payload
+      region: region_payload,
+      # ── Ticket Q additions ────────────────────────────────
+      quests: %{active: quests_active},
+      # Statuses also flow via the separate `active_statuses` push fired
+      # in send_active_statuses/2 below — embedding [] here is a
+      # forward-compat slot for clients that prefer one-shot init.
+      statuses: [],
+      # TODO: companion system not yet implemented; return nil so the
+      # Companion panel renders its empty state without inventing fake data.
+      companion: nil,
+      world: %{
+        # TODO: in-game day/night clock not yet implemented; default "day".
+        time_of_day: "day",
+        weather: weather_key,
+        online_count: online_count,
+        events: []
+      }
     })
 
     # Send players on this map
     map_players = PlayerRegistry.on_map(map_id)
       |> Enum.filter(fn p -> p.char_id != char_id end)
-    push(socket, "player_list", map_players)
+    push(socket, "player_list", %{players: map_players})
 
     # Broadcast join to map
     TePhoenixWeb.Endpoint.broadcast!("map:#{map_id}", "player_joined", player)
 
     # Send NPCs
     npcs = MapData.get_npcs(map_id)
-    push(socket, "npc_list", npcs)
+    push(socket, "npc_list", %{npcs: npcs})
 
     # Load active statuses
     send_active_statuses(socket, char_id)
@@ -585,10 +630,10 @@ defmodule TePhoenixWeb.Game.CoreHandler do
 
     # Send players + NPCs on new map
     map_players = PlayerRegistry.on_map(new_map_id) |> Enum.filter(fn p -> p.char_id != char_id end)
-    push(socket, "player_list", map_players)
+    push(socket, "player_list", %{players: map_players})
 
     npcs = MapData.get_npcs(new_map_id)
-    push(socket, "npc_list", npcs)
+    push(socket, "npc_list", %{npcs: npcs})
 
     # Fire location_enter trigger event
     TePhoenixWeb.Endpoint.broadcast!("user:#{char_id}", "trigger_event", %{event: "location_enter", map_id: new_map_id})
@@ -678,10 +723,10 @@ defmodule TePhoenixWeb.Game.CoreHandler do
 
     socket = assign(socket, :talking_to_npc, npc)
 
-    push(socket, "event_queue", [
+    push(socket, "event_queue", %{events: [
       %{cmd: "dialogue", speaker: npc_name, text: greeting},
       %{cmd: "npc_choice_menu", npcName: npc_name, choices: choices}
-    ])
+    ]})
 
     {:noreply, socket}
   end
@@ -967,7 +1012,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
         statuses = Enum.map(rows, fn row ->
           Enum.zip(cols, row) |> Map.new() |> Map.take(["id", "name", "icon", "type"])
         end)
-        push(socket, "active_statuses", statuses)
+        push(socket, "active_statuses", %{statuses: statuses})
 
         # Merge overworld effects
         ow_fx = Enum.reduce(rows, %{}, fn row, acc ->
@@ -987,7 +1032,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     ) do
       {:ok, %{rows: rows, columns: cols}} ->
         items = Enum.map(rows, fn row -> Enum.zip(cols, row) |> Map.new() end)
-        push(socket, "ground_items", items)
+        push(socket, "ground_items", %{items: items})
       _ -> nil
     end
   end
@@ -999,7 +1044,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     ) do
       {:ok, %{rows: rows, columns: cols}} ->
         structs = Enum.map(rows, fn row -> Enum.zip(cols, row) |> Map.new() end)
-        push(socket, "deployed_structures", structs)
+        push(socket, "deployed_structures", %{structures: structs})
       _ -> nil
     end
   end
@@ -1010,7 +1055,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
       nil -> load_tile_palette()
       cached -> cached
     end
-    push(socket, "tile_palette", palette)
+    push(socket, "tile_palette", %{tiles: palette})
   end
 
   defp load_tile_palette do

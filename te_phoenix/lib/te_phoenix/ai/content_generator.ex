@@ -97,6 +97,8 @@ defmodule TePhoenix.AI.ContentGenerator do
       "greeting": "What they say when you first talk to them",
       "knowledge_topics": ["topic1", "topic2"]
     }
+    #{if ctx[:map_name], do: "The NPC should fit thematically in: #{ctx[:map_name]}", else: ""}
+    #{if ctx[:role_hint], do: "Preferred role: #{ctx[:role_hint]}", else: ""}
     Return ONLY valid JSON.
     """
 
@@ -110,6 +112,8 @@ defmodule TePhoenix.AI.ContentGenerator do
   end
 
   defp generate_quest(ctx) do
+    level_hint = ctx[:level] || ctx[:player_level]
+
     prompt = """
     Generate a quest for a dark Celtic fantasy RPG as JSON:
     {
@@ -125,6 +129,8 @@ defmodule TePhoenix.AI.ContentGenerator do
       "reward_gold": number,
       "reward_item": "optional item name or null"
     }
+    #{if ctx[:map_name], do: "The quest should be set in or near: #{ctx[:map_name]}", else: ""}
+    #{if level_hint, do: "Target level_required around: #{level_hint}", else: ""}
     Return ONLY valid JSON.
     """
 
@@ -153,6 +159,9 @@ defmodule TePhoenix.AI.ContentGenerator do
       "buy_price": number,
       "effects": "what it does when equipped/used"
     }
+    #{if ctx[:rarity], do: "Force rarity: #{ctx[:rarity]}", else: ""}
+    #{if ctx[:type], do: "Force type: #{ctx[:type]}", else: ""}
+    #{if ctx[:map_name], do: "The item should match the theme of: #{ctx[:map_name]}", else: ""}
     Return ONLY valid JSON.
     """
 
@@ -179,6 +188,9 @@ defmodule TePhoenix.AI.ContentGenerator do
       "status_apply": "status key or null",
       "battle_text": "{name} does the thing!"
     }
+    #{if ctx[:element], do: "Element: #{ctx[:element]}", else: ""}
+    #{if ctx[:class], do: "Skill should fit class: #{ctx[:class]}", else: ""}
+    #{if ctx[:tier], do: "Power tier (1=basic, 5=ultimate): #{ctx[:tier]}", else: ""}
     Return ONLY valid JSON.
     """
 

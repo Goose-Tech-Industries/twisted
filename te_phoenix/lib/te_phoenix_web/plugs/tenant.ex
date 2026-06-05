@@ -36,27 +36,29 @@ defmodule TePhoenixWeb.Plugs.Tenant do
   @doc """
   Scope an Ecto query by tenant_id.
 
+  Accepts an integer tenant_id, a struct with a `:tenant_id` key, or a
+  `%Plug.Conn{}` whose assigns include a `:tenant_id`.
+
       from(m in "game_maps")
       |> TePhoenixWeb.Plugs.Tenant.tenant_scope(42)
 
+      from(m in "game_maps")
+      |> TePhoenixWeb.Plugs.Tenant.tenant_scope(conn)
+
   Adds `WHERE tenant_id = ^tenant_id` to any queryable.
   """
-  @spec tenant_scope(Ecto.Queryable.t(), integer()) :: Ecto.Query.t()
+  @spec tenant_scope(Ecto.Queryable.t(), integer() | map() | Plug.Conn.t()) :: Ecto.Query.t()
+  def tenant_scope(queryable, tenant_or_conn)
+
   def tenant_scope(queryable, tenant_id) when is_integer(tenant_id) do
     from(q in queryable, where: q.tenant_id == ^tenant_id)
   end
 
-  def tenant_scope(queryable, %{tenant_id: tid}) when is_integer(tid) do
+  def tenant_scope(queryable, %Plug.Conn{assigns: %{tenant_id: tid}}) do
     tenant_scope(queryable, tid)
   end
 
-  @doc """
-  Convenience: scope from a conn that already has :tenant_id assigned.
-
-      from(m in "game_maps")
-      |> TePhoenixWeb.Plugs.Tenant.tenant_scope(conn)
-  """
-  def tenant_scope(queryable, %Plug.Conn{assigns: %{tenant_id: tid}}) do
+  def tenant_scope(queryable, %{tenant_id: tid}) when is_integer(tid) do
     tenant_scope(queryable, tid)
   end
 

@@ -125,16 +125,6 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
       {:noreply, socket |> put_flash(:error, "Save failed: #{Exception.message(e)}")}
   end
 
-  defp current_table_for_tab(tab) do
-    %{
-      "rulesets" => "game_campaign_rulesets",
-      "campaigns" => "game_dm_campaigns",
-      "scheduler" => "game_scheduled_tasks",
-      "action_windows" => "game_action_windows",
-      "modifiers" => "game_ruleset_modifiers"
-    }[tab] || "game_campaign_rulesets"
-  end
-
   # ── Generic CRUD events for action_windows, modifiers tabs ──
   def handle_event("new", _, s) do
     defaults = for {c, m} <- (s.assigns[:column_types] || %{}), c != "id", into: %{}, do: {c, m.default || ""}
@@ -570,6 +560,16 @@ defmodule TePhoenixWeb.Admin.CampaignHubLive do
 
   defp humanize_col(col) do
     col |> String.replace("_json", "") |> String.replace("_id", "") |> String.replace("_", " ") |> String.split(" ") |> Enum.map(&String.capitalize/1) |> Enum.join(" ")
+  end
+
+  defp current_table_for_tab(tab) do
+    %{
+      "rulesets" => "game_campaign_rulesets",
+      "campaigns" => "game_dm_campaigns",
+      "scheduler" => "game_scheduled_tasks",
+      "action_windows" => "game_action_windows",
+      "modifiers" => "game_ruleset_modifiers"
+    }[tab] || "game_campaign_rulesets"
   end
 
   defp tab_label("rulesets"), do: "Rulesets"

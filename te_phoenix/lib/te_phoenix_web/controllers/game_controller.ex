@@ -8,6 +8,38 @@ defmodule TePhoenixWeb.GameController do
 
   alias TePhoenix.Repo
 
+  # ── CHARACTER CREATION OPTIONS ───────────────────────────────────
+  # GET /api/character-options
+  # Returns the dropdown data the create-character form needs: races,
+  # classes, backgrounds, feats. All four tables are read at once so
+  # the new SvelteKit player can fetch them in a single request.
+  def character_options(conn, _params) do
+    races = list_options("game_races")
+    classes = list_options("game_classes")
+    backgrounds = list_options("game_backgrounds")
+    feats = list_options("game_feats")
+
+    json(conn, %{
+      success: true,
+      races: races,
+      classes: classes,
+      backgrounds: backgrounds,
+      feats: feats
+    })
+  end
+
+  defp list_options(table) do
+    case Repo.query("SELECT id, name, description FROM `#{table}` ORDER BY id") do
+      {:ok, %{rows: rows}} ->
+        Enum.map(rows, fn [id, name, description] ->
+          %{id: id, name: name, description: description}
+        end)
+
+      _ ->
+        []
+    end
+  end
+
   # ── LIST CHARACTERS ─────────────────────────────────────────────
 
   def list_characters(conn, _params) do

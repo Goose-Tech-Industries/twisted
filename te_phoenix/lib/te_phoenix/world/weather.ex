@@ -265,7 +265,7 @@ defmodule TePhoenix.World.Weather do
     end
   end
 
-  defp adjust_weight(key, base_weight, nil), do: base_weight
+  defp adjust_weight(_key, base_weight, nil), do: base_weight
 
   defp adjust_weight(key, base_weight, biome) do
     case {biome, key} do

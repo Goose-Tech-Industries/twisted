@@ -1,0 +1,30 @@
+{
+  "name": "@twisted/player",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev --port 5173 --host",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-node": "^5.2.12",
+    "@sveltejs/kit": "^2.50.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@types/node": "^22.10.5",
+    "svelte": "^5.19.0",
+    "svelte-check": "^4.1.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  },
+  "dependencies": {
+    "@twisted/render": "workspace:*",
+    "phoenix": "^1.7.21",
+    "@types/phoenix": "^1.6.6",
+    "pixi.js": "^8.6.6",
+    "three": "^0.171.0"
+  }
+}

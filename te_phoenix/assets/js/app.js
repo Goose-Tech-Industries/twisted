@@ -5,10 +5,11 @@ import topbar from "../vendor/topbar"
 import {VERSION as TWISTED_RENDER_VERSION} from "@twisted/render"
 import {TwistedCanvas} from "./hooks/twisted_canvas"
 import {ScriptCanvas} from "./hooks/script_canvas"
+import {ConfirmPhraseGate} from "./hooks/confirm_phrase_gate"
 
 console.log("[twisted] render-core", TWISTED_RENDER_VERSION)
 
-const Hooks = {TwistedCanvas, ScriptCanvas}
+const Hooks = {TwistedCanvas, ScriptCanvas, ConfirmPhraseGate}
 
 let csrfToken = document.querySelector("meta[name='csrf-token']")?.getAttribute("content")
 

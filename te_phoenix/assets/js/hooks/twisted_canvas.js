@@ -36,6 +36,15 @@ export const TwistedCanvas = {
   mounted() {
     const el = this.el
 
+    // LiveView can re-mount the same hook element when patches reorder
+    // siblings or when phx-update="ignore" is bypassed. Guard prevents
+    // duplicate Pixi instances + double event listeners on the same DOM.
+    if (el._twistedMounted) {
+      console.warn("[TwistedCanvas] mount called on already-mounted element, skipping")
+      return
+    }
+    el._twistedMounted = true
+
     const canvasMode = el.dataset.canvasMode || "play"
     const renderMode = el.dataset.renderMode || "classic"
     const tileSize = parseInt(el.dataset.tileSize || "20", 10)
@@ -116,30 +125,108 @@ export const TwistedCanvas = {
       this.drawGrid()
     })
 
+    // ── Fit-to-Screen ──
+    // Scales the rendered map to fill the available space the host page
+    // gives us, preserving aspect ratio. Two coordinated changes:
+    //   1. tileSize ↑  — so each tile draws at a larger pixel size and
+    //      the visible map grows. Rendered with sharp pixels.
+    //   2. canvas size = mapTiles * (tileSize + 1) — the canvas grows
+    //      to exactly hold the resized map (no dead space).
+    // Without (1), increasing canvas size alone leaves the map small in
+    // a big canvas — the bug JARVIS caught in the first deploy.
+    // D15-v2: canvas fills the available container; map is rendered
+    // centered inside it. tileSize is still the largest aspect-preserving
+    // fit so the map looks crisp; the remaining space becomes a visible
+    // "outside-map" tint band so the user can see where the world ends.
+    this.fitToScreen = () => {
+      if (!this.renderer || !this.lastState) return
+      const main = el.parentElement
+      if (!main) return
+      const availW = Math.max(1, main.clientWidth - 16)
+      const availH = Math.max(1, main.clientHeight - 16)
+      const mw = this.lastState.viewportW || this.lastState.mapWidth || 1
+      const mh = this.lastState.viewportH || this.lastState.mapHeight || 1
+      const tsByW = Math.floor(availW / mw) - 1
+      const tsByH = Math.floor(availH / mh) - 1
+      const newTileSize = Math.max(4, Math.min(tsByW, tsByH))
+
+      // Canvas DOM = available container; map renders centered inside.
+      el.style.width = availW + "px"
+      el.style.height = availH + "px"
+      this.tileSize = newTileSize
+      if (typeof this.renderer.setTileSize === "function") {
+        this.renderer.setTileSize(newTileSize)
+      }
+      this.renderer.resize(availW, availH)
+      this.drawGrid()
+    }
+    this.handleEvent("fit_to_screen", () => this.fitToScreen())
+
+    // ResizeObserver: keep the Pixi backing buffer in sync with the
+    // element's CSS box. Without this, resizing the browser window
+    // leaves the canvas at its initial size and clicks land on stale
+    // coords. Throttled to a single rAF per resize burst.
+    let resizeRaf = null
+    this.resizeObserver = new ResizeObserver((entries) => {
+      if (resizeRaf) cancelAnimationFrame(resizeRaf)
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = null
+        const entry = entries[entries.length - 1]
+        if (!entry || !this.renderer) return
+        const cw = entry.contentRect.width
+        const ch = entry.contentRect.height
+        if (cw < 1 || ch < 1) return
+        this.renderer.resize(Math.floor(cw), Math.floor(ch))
+        this.drawGrid()
+      })
+    })
+    this.resizeObserver.observe(el)
+
     // ── Zoom/pan state ──
     this.zoomLevel = 1.0
     this.panning = false
     this.panStart = null
 
-    this.handlePointerDown = (e) => {
-      const canvas = this.pixiWrapper ? this.pixiWrapper.querySelector("canvas") : null
-      const target = canvas || this.pixiWrapper || el
+    // Resolve the canonical pointer target. The Pixi canvas is the source
+    // of truth — its bounding rect is what the renderer's screenToTile
+    // expects coordinates against. We cache the canvas reference once
+    // it's available so the rect doesn't drift between handlers.
+    this.getPointerTarget = () => {
+      if (this._cachedCanvas && this._cachedCanvas.isConnected) return this._cachedCanvas
+      const c = this.pixiWrapper ? this.pixiWrapper.querySelector("canvas") : null
+      if (c) this._cachedCanvas = c
+      return c || this.pixiWrapper || el
+    }
+
+    this.pointerToTile = (e) => {
+      const target = this.getPointerTarget()
       const rect = target.getBoundingClientRect()
-      const localX = (e.clientX - rect.left) / this.zoomLevel
-      const localY = (e.clientY - rect.top) / this.zoomLevel
+      // The element is CSS-scaled by `transform: scale(zoomLevel)` on `el`.
+      // getBoundingClientRect returns post-transform pixel dims, so
+      // dividing screen-space delta by the visual scale converts back to
+      // canvas-pixel coords. Computing scale from the rect itself (rather
+      // than reading this.zoomLevel) keeps us robust to other CSS
+      // transforms anyone might layer on later.
+      const scaleX = target.clientWidth > 0 ? rect.width / target.clientWidth : 1
+      const scaleY = target.clientHeight > 0 ? rect.height / target.clientHeight : 1
+      const localX = (e.clientX - rect.left) / (scaleX || 1)
+      const localY = (e.clientY - rect.top) / (scaleY || 1)
       const hit = this.renderer.screenToTile(localX, localY)
 
-      // Debug: show click info (remove after fixing)
-      console.log("[CLICK]", {
-        client: [e.clientX, e.clientY],
-        rect: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)],
-        local: [Math.round(localX), Math.round(localY)],
-        canvasInternal: canvas ? [canvas.width, canvas.height] : "no canvas",
-        dpr: window.devicePixelRatio,
-        zoom: this.zoomLevel,
-        tile: hit ? [hit.tileX, hit.tileY] : "null",
-      })
+      // D15-v2: canvas now fills the host container. screenToTile may
+      // return tile coords for clicks in the gutter outside the map —
+      // clamp to null so out-of-map clicks don't dispatch tile_click and
+      // the cursor flips to not-allowed.
+      const s = this.lastState
+      if (!hit || !s) return null
+      if (hit.tileX < 0 || hit.tileY < 0) return null
+      if (hit.tileX >= (s.mapWidth || 0)) return null
+      if (hit.tileY >= (s.mapHeight || 0)) return null
+      return hit
+    }
 
+    this.handlePointerDown = (e) => {
+      const hit = this.pointerToTile(e)
       if (!hit) return
       this.pushEventTo(el, "tile_click", { x: hit.tileX, y: hit.tileY })
     }
@@ -162,16 +249,14 @@ export const TwistedCanvas = {
         return
       }
 
-      const canvas = this.pixiWrapper ? this.pixiWrapper.querySelector("canvas") : null
-      const target = canvas || this.pixiWrapper || el
-      const rect = target.getBoundingClientRect()
-      const localX = (e.clientX - rect.left) / this.zoomLevel
-      const localY = (e.clientY - rect.top) / this.zoomLevel
-      const hit = this.renderer.screenToTile(localX, localY)
+      const hit = this.pointerToTile(e)
       const tx = hit ? hit.tileX : null
       const ty = hit ? hit.tileY : null
 
       this.hoverTile = hit ? { x: tx, y: ty } : null
+
+      // D15-v2: visible cursor signal when over the outside-map gutter.
+      el.style.cursor = hit ? "" : "not-allowed"
 
       // Throttled cursor_move broadcast for remote collaborator display
       const now = performance.now()
@@ -208,12 +293,7 @@ export const TwistedCanvas = {
       // Right-click = eyedropper (pick tile)
       if (e.button === 2) {
         e.preventDefault()
-        const canvas = this.pixiWrapper ? this.pixiWrapper.querySelector("canvas") : null
-        const target = canvas || this.pixiWrapper || el
-        const rect = target.getBoundingClientRect()
-        const localX = (e.clientX - rect.left) / this.zoomLevel
-        const localY = (e.clientY - rect.top) / this.zoomLevel
-        const hit = this.renderer.screenToTile(localX, localY)
+        const hit = this.pointerToTile(e)
         if (hit) {
           this.pushEventTo(el, "eyedrop_tile", { x: hit.tileX, y: hit.tileY })
         }
@@ -234,8 +314,9 @@ export const TwistedCanvas = {
     this.handleContextMenu = (e) => { e.preventDefault() }
     this.pixiWrapper.addEventListener("contextmenu", this.handleContextMenu)
 
-    // Mouse wheel = zoom
+    // Mouse wheel = zoom (Ctrl/Cmd-gated so the page can scroll normally)
     this.handleWheel = (e) => {
+      if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const delta = e.deltaY > 0 ? -0.1 : 0.1
       this.zoomLevel = Math.max(0.25, Math.min(3.0, this.zoomLevel + delta))
@@ -360,6 +441,10 @@ export const TwistedCanvas = {
       if (this.renderer) this.renderer.update(state)
       if (this.drawMinimap) this.drawMinimap()
       if (this.evaluateSoundZones) this.evaluateSoundZones()
+      if (!this._didInitialFit && el.dataset.canvasMode === "edit") {
+        this._didInitialFit = true
+        requestAnimationFrame(() => this.fitToScreen())
+      }
     })
 
     this.handleEvent("map:set_render_mode", ({ mode }) => {
@@ -661,38 +746,244 @@ export const TwistedCanvas = {
       }
     }
 
-    this.handleEvent("map:zones", ({ spawn_zones, sound_zones }) => {
+    // Cached zone payload, used by re-renders triggered by selection
+    // changes without a full map:zones round-trip.
+    this._lastSpawnZones = []
+    this._lastSoundZones = []
+    this._selectedZone = null  // { kind: "spawn"|"sound", id: "..." }
+
+    this.handleEvent("map:zones", ({ spawn_zones, sound_zones, selected }) => {
       this.updateSoundZones(sound_zones)
+      this._lastSpawnZones = spawn_zones || []
+      this._lastSoundZones = sound_zones || []
+      if (selected !== undefined) this._selectedZone = selected || null
+      this._redrawZones()
+    })
+
+    this.handleEvent("zones:select", ({ kind, id }) => {
+      this._selectedZone = id ? { kind, id } : null
+      this._redrawZones()
+    })
+
+    this._redrawZones = () => {
       this.zoneOverlay.innerHTML = ""
       if (!this.lastState) return
 
-      const drawZoneBox = (z, color, label) => {
+      const drawZoneBox = (z, kind) => {
+        const color = kind === "spawn" ? "#a3e635" : "#60a5fa"
         const tl = this.renderer.tileToScreen(z.x1, z.y1)
         const br = this.renderer.tileToScreen(z.x2 + 1, z.y2 + 1)
         if (!tl || !br) return
+
+        const isSelected = this._selectedZone &&
+                           this._selectedZone.kind === kind &&
+                           this._selectedZone.id === z.id
+
         const box = document.createElement("div")
+        box.dataset.zoneKind = kind
+        box.dataset.zoneId = z.id
+        const w = Math.max(0, br.sx - tl.sx - 1)
+        const h = Math.max(0, br.sy - tl.sy - 1)
         box.style.cssText = `
           position:absolute;
           left:${tl.sx}px;
           top:${tl.sy}px;
-          width:${br.sx - tl.sx - 1}px;
-          height:${br.sy - tl.sy - 1}px;
-          border:1px dashed ${color};
-          background:${color}18;
-          pointer-events:none;
+          width:${w}px;
+          height:${h}px;
+          border:${isSelected ? 2 : 1}px ${isSelected ? "solid" : "dashed"} ${color};
+          background:${color}${isSelected ? "33" : "18"};
+          pointer-events:auto;
+          cursor:${isSelected ? "move" : "pointer"};
+          box-sizing:border-box;
         `
+
         const tag = document.createElement("div")
-        tag.textContent = label
+        tag.textContent = kind
         tag.style.cssText = `
           position:absolute;left:2px;top:2px;font:9px monospace;
           color:${color};background:#000a;padding:0 3px;border-radius:2px;
+          pointer-events:none;
         `
         box.appendChild(tag)
+
+        // Click to select / deselect.
+        box.addEventListener("click", (e) => {
+          e.stopPropagation()
+          this.pushEventTo(el, "zone:select", { kind, id: z.id })
+        })
+
+        if (isSelected) {
+          // Eight resize handles + center move handle.
+          const handleStyle = (cursor) => `
+            position:absolute;
+            width:10px;height:10px;
+            background:${color};
+            border:1.5px solid #0008;
+            border-radius:2px;
+            cursor:${cursor};
+            pointer-events:auto;
+            z-index:2;
+          `
+          const handles = [
+            { name: "nw", left: -5, top: -5, cursor: "nwse-resize" },
+            { name: "n",  left: w / 2 - 5, top: -5, cursor: "ns-resize" },
+            { name: "ne", left: w - 5, top: -5, cursor: "nesw-resize" },
+            { name: "e",  left: w - 5, top: h / 2 - 5, cursor: "ew-resize" },
+            { name: "se", left: w - 5, top: h - 5, cursor: "nwse-resize" },
+            { name: "s",  left: w / 2 - 5, top: h - 5, cursor: "ns-resize" },
+            { name: "sw", left: -5, top: h - 5, cursor: "nesw-resize" },
+            { name: "w",  left: -5, top: h / 2 - 5, cursor: "ew-resize" },
+          ]
+          handles.forEach((hd) => {
+            const handle = document.createElement("div")
+            handle.dataset.handle = hd.name
+            handle.style.cssText = handleStyle(hd.cursor) +
+              `left:${hd.left}px;top:${hd.top}px;`
+            handle.addEventListener("pointerdown", (e) => this._beginZoneDrag(e, z, kind, hd.name))
+            box.appendChild(handle)
+          })
+
+          // Drag the body itself = move zone.
+          box.addEventListener("pointerdown", (e) => {
+            // Ignore handle clicks (they have their own listener)
+            if (e.target !== box) return
+            this._beginZoneDrag(e, z, kind, "move")
+          })
+        }
+
         this.zoneOverlay.appendChild(box)
       }
 
-      ;(spawn_zones || []).forEach((z) => drawZoneBox(z, "#a3e635", "spawn"))
-      ;(sound_zones || []).forEach((z) => drawZoneBox(z, "#60a5fa", "sound"))
+      this._lastSpawnZones.forEach((z) => drawZoneBox(z, "spawn"))
+      this._lastSoundZones.forEach((z) => drawZoneBox(z, "sound"))
+
+      // Re-draw spawn marker on top.
+      if (this._spawnPoint) this._renderSpawnMarker(this._spawnPoint)
+    }
+
+    // Begin a drag for a zone resize/move. Tracks pointer until release;
+    // commits the new bounds via "zone:update_rect" once released.
+    this._beginZoneDrag = (e, zone, kind, handle) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const start = this._pointerToTile(e) || { tileX: 0, tileY: 0 }
+      const orig = { x1: zone.x1, y1: zone.y1, x2: zone.x2, y2: zone.y2 }
+      let current = { ...orig }
+
+      const computeRect = (cur) => {
+        const dx = cur.tileX - start.tileX
+        const dy = cur.tileY - start.tileY
+        let r = { ...orig }
+        if (handle === "move") {
+          r = { x1: orig.x1 + dx, y1: orig.y1 + dy, x2: orig.x2 + dx, y2: orig.y2 + dy }
+        } else {
+          if (handle.includes("n")) r.y1 = orig.y1 + dy
+          if (handle.includes("s")) r.y2 = orig.y2 + dy
+          if (handle.includes("w")) r.x1 = orig.x1 + dx
+          if (handle.includes("e")) r.x2 = orig.x2 + dx
+          // Normalize so x1<=x2, y1<=y2 in case user drags past opposite edge.
+          if (r.x1 > r.x2) [r.x1, r.x2] = [r.x2, r.x1]
+          if (r.y1 > r.y2) [r.y1, r.y2] = [r.y2, r.y1]
+        }
+        return r
+      }
+
+      const onMove = (ev) => {
+        const cur = this._pointerToTile(ev)
+        if (!cur) return
+        current = computeRect(cur)
+        // Optimistic local re-draw using a transient zone copy.
+        Object.assign(zone, current)
+        this._redrawZones()
+      }
+
+      const onUp = (_ev) => {
+        window.removeEventListener("pointermove", onMove)
+        window.removeEventListener("pointerup", onUp)
+        // Tell the server to persist (it'll broadcast a fresh map:zones).
+        this.pushEventTo(el, "zone:update_rect", {
+          kind,
+          id: zone.id,
+          x1: current.x1, y1: current.y1,
+          x2: current.x2, y2: current.y2,
+        })
+      }
+
+      window.addEventListener("pointermove", onMove)
+      window.addEventListener("pointerup", onUp, { once: true })
+    }
+
+    // Helper: pointer event → tile coords, sharing the same projection
+    // logic as handlePointerDown. Returns null if outside the canvas.
+    this._pointerToTile = (e) => {
+      const target = this.getPointerTarget()
+      const rect = target.getBoundingClientRect()
+      const scaleX = target.clientWidth > 0 ? rect.width / target.clientWidth : 1
+      const scaleY = target.clientHeight > 0 ? rect.height / target.clientHeight : 1
+      const localX = (e.clientX - rect.left) / (scaleX || 1)
+      const localY = (e.clientY - rect.top) / (scaleY || 1)
+      return this.renderer.screenToTile(localX, localY)
+    }
+
+    // ── D10: spawn marker (single tile, distinct from spawn zones) ──
+    // The Spawn TOOL's primary action is "set spawn point": click any
+    // tile and (spawn_x, spawn_y) on the map row updates. The marker is
+    // a blue circle drawn in editor mode only — playmode has its own
+    // player marker that the renderer handles.
+    this._spawnPoint = null
+    this._renderSpawnMarker = (pt) => {
+      const existing = this.zoneOverlay.querySelector("[data-marker=spawn]")
+      if (existing) existing.remove()
+      if (!pt || pt.x == null || pt.y == null) return
+      if (el.dataset.canvasMode !== "edit") return
+      const tl = this.renderer && this.renderer.tileToScreen(pt.x, pt.y)
+      const br = this.renderer && this.renderer.tileToScreen(pt.x + 1, pt.y + 1)
+      if (!tl || !br) return
+      const w = br.sx - tl.sx
+      const h = br.sy - tl.sy
+      const dot = document.createElement("div")
+      dot.dataset.marker = "spawn"
+      dot.style.cssText = `
+        position:absolute;
+        left:${tl.sx + w * 0.15}px;
+        top:${tl.sy + h * 0.15}px;
+        width:${w * 0.7}px;
+        height:${h * 0.7}px;
+        border-radius:50%;
+        border:2px solid #38bdf8;
+        background:#0ea5e944;
+        box-shadow:0 0 8px #38bdf8aa;
+        pointer-events:none;
+      `
+      this.zoneOverlay.appendChild(dot)
+    }
+
+    this.handleEvent("map:spawn", ({ x, y }) => {
+      this._spawnPoint = { x, y }
+      this._renderSpawnMarker(this._spawnPoint)
+    })
+
+    // Audio preview for the Sound right-panel ▶ button. Plays the URL
+    // for max 2s at the requested volume so a long ambient loop doesn't
+    // hijack the editor session. Stops any prior preview first.
+    this.handleEvent("sound:preview", ({ url, volume }) => {
+      if (this._previewAudio) {
+        try { this._previewAudio.pause() } catch (_) {}
+      }
+      if (this._previewTimeout) {
+        clearTimeout(this._previewTimeout)
+        this._previewTimeout = null
+      }
+      if (!url) return
+      const audio = new Audio(url)
+      audio.volume = Math.max(0, Math.min(1, volume == null ? 0.6 : volume))
+      audio.play().catch((err) => console.warn("[sound:preview]", err))
+      this._previewAudio = audio
+      this._previewTimeout = setTimeout(() => {
+        try { audio.pause() } catch (_) {}
+        this._previewAudio = null
+        this._previewTimeout = null
+      }, 2000)
     })
 
     this.handleEvent("map:objects", () => {
@@ -741,6 +1032,11 @@ export const TwistedCanvas = {
   },
 
   destroyed() {
+    if (this.el) this.el._twistedMounted = false
+    if (this.resizeObserver) {
+      try { this.resizeObserver.disconnect() } catch (_e) {}
+      this.resizeObserver = null
+    }
     const target = this._pointerTarget || this.pixiWrapper || this.el
     if (this.handlePointerDownDrag) target.removeEventListener("pointerdown", this.handlePointerDownDrag)
     if (this.handlePointerMove) target.removeEventListener("pointermove", this.handlePointerMove)

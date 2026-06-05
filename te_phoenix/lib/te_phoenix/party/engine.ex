@@ -1235,12 +1235,16 @@ defmodule TePhoenix.Party.Engine do
       votes = decode_json(state.votes_json, %{})
       player_votes = votes |> Enum.reject(fn {k, _} -> String.starts_with?(k, "aud_") end) |> length()
       active = get_active_players(room_id)
-      submissions = decode_json(state.submissions_json, [])
 
-      # Players who submitted can't vote for themselves, but they can vote for others
-      # Subtract judge if judge-based
-      expected = if state.judge_id, do: 1, else: length(active) - length(submissions) + length(active) - 1
-      expected = max(1, length(active) - 1)
+      # Judge mode: only the judge votes, so 1 vote ends the round.
+      # Otherwise: every active player votes (can't vote for self → −1).
+      expected =
+        if state.judge_id do
+          1
+        else
+          max(1, length(active) - 1)
+        end
+
       player_votes >= expected
     end
   end

@@ -85,6 +85,14 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     {:noreply, assign(socket, narrative: text, narrative_loading: false)}
   end
 
+  def handle_info(:open_weather_picker, socket) do
+    maps = case Repo.query("SELECT id, name FROM game_maps WHERE is_active=1 ORDER BY name") do
+      {:ok, %{rows: rows}} -> Enum.map(rows, fn [id, name] -> %{id: id, name: name} end)
+      _ -> []
+    end
+    {:noreply, assign(socket, show_weather_picker: true, weather_maps: maps)}
+  end
+
   # Catch-all for other PubSub broadcasts we don't care about
   def handle_info(%Phoenix.Socket.Broadcast{}, socket), do: {:noreply, socket}
 
@@ -181,127 +189,6 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     end
   end
 
-  defp execute_non_ai_action(action, title, actor, socket) do
-    # Weather opens a picker instead of executing immediately
-    if action == "weather" do
-      maps = case Repo.query("SELECT id, name FROM game_maps WHERE is_active=1 ORDER BY name") do
-        {:ok, %{rows: rows}} -> Enum.map(rows, fn [id, name] -> %{id: id, name: name} end)
-        _ -> [%{id: 1, name: "Default"}]
-      end
-      {:noreply, assign(socket, show_weather_picker: true, weather_maps: maps)}
-    else
-
-    result = case action do
-      "broadcast" ->
-        msg = "📢 #{title}"
-        TePhoenixWeb.Endpoint.broadcast!("social:lobby", "system_broadcast", %{
-          message: msg, style: "info", from: "DIRECTOR", timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
-        })
-        TePhoenix.Game.AdminAudit.log("gm_broadcast", actor, nil, %{source: "director", message: msg})
-        "Broadcast sent."
-
-      "double_xp" ->
-        Repo.query("INSERT INTO system_settings (setting_key, setting_value) VALUES ('double_xp', '1') ON DUPLICATE KEY UPDATE setting_value='1'")
-        # Auto-disable after 1 hour
-        Task.start(fn ->
-          Process.sleep(3_600_000)
-          Repo.query("UPDATE system_settings SET setting_value='0' WHERE setting_key='double_xp'")
-        end)
-        broadcast_all("⚡ DOUBLE XP is now active for 1 hour!", "info", actor)
-        TePhoenix.Game.AdminAudit.log("gm_double_xp", actor, nil, "activated_1hr")
-        "Double XP activated for 1 hour (auto-disables)."
-
-      "tournament" ->
-        # Actually create a tournament match
-        try do
-          TePhoenix.Matches.Queue.join("1v1_duel", 0)
-        rescue
-          _ -> :ok
-        end
-        broadcast_all("⚔️ A tournament has been called! Report to the arena!", "warning", actor)
-        TePhoenix.Game.AdminAudit.log("gm_tournament", actor, nil, "called")
-        "Tournament announced."
-
-      "boss_spawn" ->
-        # Actually spawn a boss NPC on the most populated map (or map 1)
-        map_id = case Repo.query("SELECT map_id, COUNT(*) as c FROM characters WHERE is_online=1 GROUP BY map_id ORDER BY c DESC LIMIT 1") do
-          {:ok, %{rows: [[mid, _]]}} -> mid
-          _ -> 1
-        end
-        try do
-          Repo.query("INSERT INTO game_npcs (name, map_id, x, y, base_hp, base_atk, base_def, base_mo, base_md, base_speed, is_enemy, is_active, npc_level, icon, description) VALUES ('Ancient Fomorian', ?, ?, ?, 2000, 50, 30, 40, 25, 8, 1, 1, 20, '👹', 'A twisted fomorian lord risen from beneath the cairns')", [map_id, :rand.uniform(15), :rand.uniform(15)])
-        rescue
-          _ -> :ok
-        end
-        broadcast_all("💀 An Ancient Fomorian has appeared on the battlefield! Heroes, prepare yourselves!", "danger", actor)
-        TePhoenix.Game.AdminAudit.log("gm_boss_spawn", actor, nil, %{map_id: map_id, boss: "Ancient Fomorian"})
-        "Boss 'Ancient Fomorian' spawned on map #{map_id}."
-
-      "world_event" ->
-        # Set a world flag to trigger event
-        Repo.query("INSERT INTO game_world_flags (flag, value, updated_at) VALUES ('world_event_active', '1', NOW()) ON DUPLICATE KEY UPDATE value='1', updated_at=NOW()")
-        # Also broadcast to all map channels so clients receive it
-        case Repo.query("SELECT id FROM game_maps WHERE is_active=1") do
-          {:ok, %{rows: rows}} ->
-            for [map_id] <- rows do
-              Phoenix.PubSub.broadcast(TePhoenix.PubSub, "map:#{map_id}:world_flags", {:world_flag, "world_event_active", "1"})
-            end
-          _ -> :ok
-        end
-        broadcast_all("🌑 Something stirs in the ancient cairns... a world event has begun!", "warning", actor)
-        TePhoenix.Game.AdminAudit.log("gm_world_event", actor, nil, "activated")
-        "World event activated — flag broadcast to all maps."
-
-      "gold_drop" ->
-        # Actually give gold to all online characters
-        try do
-          Repo.query("UPDATE characters SET gold = gold + 100 WHERE is_online=1")
-        rescue
-          _ -> :ok
-        end
-        broadcast_all("💰 A rare merchant drops 100 gold for all active heroes!", "info", actor)
-        TePhoenix.Game.AdminAudit.log("gm_gold_drop", actor, nil, %{amount: 100, target: "all_online"})
-        "100 gold given to all online characters."
-
-      "raid" ->
-        raid_result = try do
-          case TePhoenix.Waves.Scheduler.start("horde_survival", map_id: 1) do
-            {:ok, wave} -> "Wave #{wave} started"
-            {:error, reason} -> "Could not start: #{inspect(reason)}"
-            _ -> "Attempted"
-          end
-        rescue
-          e -> "Error: #{Exception.message(e)}"
-        end
-        broadcast_all("🏰 A horde approaches! Defend the realm!", "danger", actor)
-        TePhoenix.Game.AdminAudit.log("gm_raid", actor, nil, "horde_survival_started")
-        "Raid: #{raid_result}. Broadcast sent."
-
-      "none" ->
-        "No action needed."
-
-      _ ->
-        "Unknown action: #{action}"
-    end
-
-    # For content-creation actions, redirect to the relevant editor
-    redirect_path = case action do
-      "create_quest" -> "/sauce/quests"
-      "create_npc" -> "/sauce/world"
-      "create_item" -> "/sauce/content"
-      "create_skill" -> "/sauce/combat"
-      "create_map" -> "/sauce/world"
-      _ -> nil
-    end
-
-    if redirect_path do
-      {:noreply, socket |> put_flash(:info, result) |> push_navigate(to: redirect_path)}
-    else
-      {:noreply, put_flash(socket, :info, result)}
-    end
-    end  # close weather if/else
-  end
-
   def handle_event("run_ai_insights", _params, socket) do
     socket = assign(socket, ai_insights_loading: true)
     pid = self()
@@ -384,14 +271,6 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
 
   def handle_event("close_weather_picker", _params, socket) do
     {:noreply, assign(socket, show_weather_picker: false)}
-  end
-
-  def handle_info(:open_weather_picker, socket) do
-    maps = case Repo.query("SELECT id, name FROM game_maps WHERE is_active=1 ORDER BY name") do
-      {:ok, %{rows: rows}} -> Enum.map(rows, fn [id, name] -> %{id: id, name: name} end)
-      _ -> []
-    end
-    {:noreply, assign(socket, show_weather_picker: true, weather_maps: maps)}
   end
 
   # ── Data loading ──────────────────────────────────────────────
@@ -1033,17 +912,6 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
     end
   end
 
-  defp role_name_color(role) do
-    case to_string(role) do
-      "OWNER" -> "text-red-400 font-bold"
-      "ADMIN" -> "text-red-400 font-medium"
-      "GM" -> "text-purple-400 font-medium"
-      "MOD" -> "text-blue-400"
-      "STAFF" -> "text-green-400"
-      _ -> "text-zinc-300"
-    end
-  end
-
   defp enrich_admin_presence(admins) do
     ids = Enum.map(admins, & &1[:user_id]) |> Enum.reject(&is_nil/1)
     if ids == [] do
@@ -1086,6 +954,127 @@ defmodule TePhoenixWeb.Admin.DashboardLive do
   defp insight_color("economy"), do: "text-yellow-400"
   defp insight_color("error"), do: "text-red-400"
   defp insight_color(_), do: "text-zinc-400"
+
+  defp execute_non_ai_action(action, title, actor, socket) do
+    # Weather opens a picker instead of executing immediately
+    if action == "weather" do
+      maps = case Repo.query("SELECT id, name FROM game_maps WHERE is_active=1 ORDER BY name") do
+        {:ok, %{rows: rows}} -> Enum.map(rows, fn [id, name] -> %{id: id, name: name} end)
+        _ -> [%{id: 1, name: "Default"}]
+      end
+      {:noreply, assign(socket, show_weather_picker: true, weather_maps: maps)}
+    else
+
+    result = case action do
+      "broadcast" ->
+        msg = "📢 #{title}"
+        TePhoenixWeb.Endpoint.broadcast!("social:lobby", "system_broadcast", %{
+          message: msg, style: "info", from: "DIRECTOR", timestamp: DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+        TePhoenix.Game.AdminAudit.log("gm_broadcast", actor, nil, %{source: "director", message: msg})
+        "Broadcast sent."
+
+      "double_xp" ->
+        Repo.query("INSERT INTO system_settings (setting_key, setting_value) VALUES ('double_xp', '1') ON DUPLICATE KEY UPDATE setting_value='1'")
+        # Auto-disable after 1 hour
+        Task.start(fn ->
+          Process.sleep(3_600_000)
+          Repo.query("UPDATE system_settings SET setting_value='0' WHERE setting_key='double_xp'")
+        end)
+        broadcast_all("⚡ DOUBLE XP is now active for 1 hour!", "info", actor)
+        TePhoenix.Game.AdminAudit.log("gm_double_xp", actor, nil, "activated_1hr")
+        "Double XP activated for 1 hour (auto-disables)."
+
+      "tournament" ->
+        # Actually create a tournament match
+        try do
+          TePhoenix.Matches.Queue.join("1v1_duel", 0)
+        rescue
+          _ -> :ok
+        end
+        broadcast_all("⚔️ A tournament has been called! Report to the arena!", "warning", actor)
+        TePhoenix.Game.AdminAudit.log("gm_tournament", actor, nil, "called")
+        "Tournament announced."
+
+      "boss_spawn" ->
+        # Actually spawn a boss NPC on the most populated map (or map 1)
+        map_id = case Repo.query("SELECT map_id, COUNT(*) as c FROM characters WHERE is_online=1 GROUP BY map_id ORDER BY c DESC LIMIT 1") do
+          {:ok, %{rows: [[mid, _]]}} -> mid
+          _ -> 1
+        end
+        try do
+          Repo.query("INSERT INTO game_npcs (name, map_id, x, y, base_hp, base_atk, base_def, base_mo, base_md, base_speed, is_enemy, is_active, npc_level, icon, description) VALUES ('Ancient Fomorian', ?, ?, ?, 2000, 50, 30, 40, 25, 8, 1, 1, 20, '👹', 'A twisted fomorian lord risen from beneath the cairns')", [map_id, :rand.uniform(15), :rand.uniform(15)])
+        rescue
+          _ -> :ok
+        end
+        broadcast_all("💀 An Ancient Fomorian has appeared on the battlefield! Heroes, prepare yourselves!", "danger", actor)
+        TePhoenix.Game.AdminAudit.log("gm_boss_spawn", actor, nil, %{map_id: map_id, boss: "Ancient Fomorian"})
+        "Boss 'Ancient Fomorian' spawned on map #{map_id}."
+
+      "world_event" ->
+        # Set a world flag to trigger event
+        Repo.query("INSERT INTO game_world_flags (flag, value, updated_at) VALUES ('world_event_active', '1', NOW()) ON DUPLICATE KEY UPDATE value='1', updated_at=NOW()")
+        # Also broadcast to all map channels so clients receive it
+        case Repo.query("SELECT id FROM game_maps WHERE is_active=1") do
+          {:ok, %{rows: rows}} ->
+            for [map_id] <- rows do
+              Phoenix.PubSub.broadcast(TePhoenix.PubSub, "map:#{map_id}:world_flags", {:world_flag, "world_event_active", "1"})
+            end
+          _ -> :ok
+        end
+        broadcast_all("🌑 Something stirs in the ancient cairns... a world event has begun!", "warning", actor)
+        TePhoenix.Game.AdminAudit.log("gm_world_event", actor, nil, "activated")
+        "World event activated — flag broadcast to all maps."
+
+      "gold_drop" ->
+        # Actually give gold to all online characters
+        try do
+          Repo.query("UPDATE characters SET gold = gold + 100 WHERE is_online=1")
+        rescue
+          _ -> :ok
+        end
+        broadcast_all("💰 A rare merchant drops 100 gold for all active heroes!", "info", actor)
+        TePhoenix.Game.AdminAudit.log("gm_gold_drop", actor, nil, %{amount: 100, target: "all_online"})
+        "100 gold given to all online characters."
+
+      "raid" ->
+        raid_result = try do
+          case TePhoenix.Waves.Scheduler.start("horde_survival", map_id: 1) do
+            {:ok, wave} -> "Wave #{wave} started"
+            {:error, reason} -> "Could not start: #{inspect(reason)}"
+            _ -> "Attempted"
+          end
+        rescue
+          e -> "Error: #{Exception.message(e)}"
+        end
+        broadcast_all("🏰 A horde approaches! Defend the realm!", "danger", actor)
+        TePhoenix.Game.AdminAudit.log("gm_raid", actor, nil, "horde_survival_started")
+        "Raid: #{raid_result}. Broadcast sent."
+
+      "none" ->
+        "No action needed."
+
+      _ ->
+        "Unknown action: #{action}"
+    end
+
+    # For content-creation actions, redirect to the relevant editor
+    redirect_path = case action do
+      "create_quest" -> "/sauce/quests"
+      "create_npc" -> "/sauce/world"
+      "create_item" -> "/sauce/content"
+      "create_skill" -> "/sauce/combat"
+      "create_map" -> "/sauce/world"
+      _ -> nil
+    end
+
+    if redirect_path do
+      {:noreply, socket |> put_flash(:info, result) |> push_navigate(to: redirect_path)}
+    else
+      {:noreply, put_flash(socket, :info, result)}
+    end
+    end  # close weather if/else
+  end
 
   defp generate_ai_insights do
     insights = []

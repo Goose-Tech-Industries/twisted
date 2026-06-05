@@ -304,16 +304,23 @@ defmodule TePhoenixWeb.MapChannel do
       map_id = socket.assigns.map_id
       author_id = socket.assigns[:user_id]
       author_name = socket.assigns[:username] || "staff"
-      patch_json = if is_binary(patch), do: patch, else: Jason.encode!(patch)
 
-      Repo.query(
-        """
-        INSERT IGNORE INTO game_map_ops_log
-          (map_id, op_id, op_type, patch_json, author_id, author_name)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        [map_id, op_id, op_type, patch_json, author_id, author_name]
-      )
+      # Phase 2B: route through MapOps so each persisted op gets a
+      # monotonic `sequence` per map (replayable history). The table
+      # is the same — `game_map_ops_log` — so existing readers are
+      # unaffected.
+      record =
+        case TePhoenix.Game.MapOps.append(
+               map_id,
+               op_id,
+               op_type,
+               patch,
+               user_id: author_id,
+               user_name: author_name
+             ) do
+          {:ok, r} -> r
+          _ -> nil
+        end
 
       broadcast_from!(socket, "editor_op", %{
         op_id: op_id,
@@ -321,6 +328,17 @@ defmodule TePhoenixWeb.MapChannel do
         patch: patch,
         author: author_name
       })
+
+      # Phase 2B.3: also bridge to the LV editor's PubSub topic so any
+      # admin who has the same map open in /sauce sees the op fan out
+      # to their History drawer + canvas. originator_id is nil here —
+      # channel-side ops aren't tied to an editor LV mount, so they
+      # always apply on every receiving LV (no self-skip).
+      Phoenix.PubSub.broadcast(
+        TePhoenix.PubSub,
+        "map:#{map_id}:editor",
+        {:remote_editor_op, %{patch: patch, record: record, originator_id: nil}}
+      )
 
       {:reply, {:ok, %{op_id: op_id}}, socket}
     else

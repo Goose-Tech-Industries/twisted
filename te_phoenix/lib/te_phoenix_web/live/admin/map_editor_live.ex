@@ -89,8 +89,41 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
          |> assign(:events, load_map_events(map.id))
          |> assign(:active_object_preset, "TORCH")
          |> assign(:active_event_kind, "TELEPORT")
+         # Phase 2A: Object/Event palette modals retired in favor of inline
+         # tool-context panels. Flags retained as no-ops in case anything
+         # still pushes them; can be removed after one stable release.
          |> assign(:object_palette_open, false)
          |> assign(:event_palette_open, false)
+         # Right-panel state (per-tool context panel, see right_panel_kind/1)
+         |> assign(:object_panel_mode, :place)
+         |> assign(:event_panel_mode, :place)
+         |> assign(:selected_object_id, nil)
+         |> assign(:selected_event_id, nil)
+         |> assign(:selected_spawn_zone_id, nil)
+         |> assign(:selected_sound_zone_id, nil)
+         |> assign(:pass_paint_value, 0)
+         |> assign(:pass_overlay_visible, true)
+         |> assign(:paint_elevation, 0)
+         |> assign(:event_form, default_event_form("TELEPORT"))
+         # When set, the next zone-tool click starts a 2-click drag-rect
+         # zone create. Reset after the second click. Default behavior of
+         # the spawn tool (when armed=false) is set_spawn (D10).
+         |> assign(:zone_creation_armed, false)
+         # Time-scrub state. When :scrub_active is true, the canvas shows
+         # the replayed state at :scrub_seq (read-only preview). Resetting
+         # to head (or closing the drawer) restores the live state.
+         |> assign(:scrub_active, false)
+         |> assign(:scrub_seq, 0)
+         # 2B.3: counts ops that arrived via PubSub while the user was
+         # scrubbing. Surfaces as a "+N new" badge so the user can choose
+         # to bring the preview back to head — auto-jumping past their
+         # cursor would feel jarring.
+         |> assign(:new_ops_since_scrub, 0)
+         # 2B.2: pending field-edit buffer. Maps {kind, target_id, field}
+         # → %{session_start_value, current_value, timer_ref}. A 500ms
+         # debounce timer flushes one op per editing session. Drag-release
+         # paths (zone:update_rect, etc.) bypass this and commit immediately.
+         |> assign(:pending_field_ops, %{})
          |> assign(:hover_tile, nil)
          |> assign(:inspector_open, true)
          |> assign(:show_grid, false)
@@ -131,11 +164,25 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   end
 
   def handle_event("select_tool", %{"tool" => tool}, socket) do
+    # 2B.2: switching tools commits any in-flight field edit so the user
+    # doesn't lose context (otherwise the buffer would just expire on its
+    # 500ms timer with no visible signal).
+    socket = flush_all_field_ops(socket)
+
     {:noreply,
      socket
      |> assign(:active_tool, tool)
      |> assign(:rect_anchor, nil)
      |> assign(:select_rect, nil)
+     # Drop tool-specific selection state when the active tool changes,
+     # so switching Object → Event doesn't keep a stale selected_object_id.
+     |> assign(:selected_object_id, nil)
+     |> assign(:selected_event_id, nil)
+     |> assign(:selected_spawn_zone_id, nil)
+     |> assign(:selected_sound_zone_id, nil)
+     |> assign(:object_panel_mode, :place)
+     |> assign(:event_panel_mode, :place)
+     |> assign(:zone_creation_armed, false)
      |> push_event("edit:set_preview", %{kind: nil})}
   end
 
@@ -304,16 +351,121 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   end
 
   def handle_event("history:open", _params, socket) do
-    versions = list_map_versions(socket.assigns.map.id)
-    {:noreply, assign(socket, :history_versions, versions) |> assign(:history_open, true)}
+    # 2B.2: flush any in-flight field edit so the drawer reflects the
+    # actual committed state (otherwise the user might open the drawer
+    # mid-typing and not see their own changes yet).
+    socket = flush_all_field_ops(socket)
+
+    # Phase 2B: history drawer pulls from the op log instead of the legacy
+    # snapshot-only versions table. Most-recent op first; capped at 200
+    # entries so a 10k-op map doesn't ship the world over the wire.
+    ops =
+      TePhoenix.Game.MapOps.list(
+        socket.assigns.map.id,
+        include_inverted: true
+      )
+      |> Enum.reverse()
+      |> Enum.take(200)
+
+    {:noreply,
+     socket
+     |> assign(:history_versions, ops)
+     |> assign(:history_open, true)}
   end
 
   def handle_event("history:close", _params, socket) do
-    {:noreply, assign(socket, :history_open, false)}
+    # If a preview was active, restore the live state so the user doesn't
+    # walk away with a stale-looking canvas.
+    socket =
+      if socket.assigns.scrub_active do
+        push_event(socket, "map:state", render_state(socket.assigns.map, socket.assigns))
+      else
+        socket
+      end
+
+    {:noreply,
+     socket
+     |> assign(:history_open, false)
+     |> assign(:scrub_active, false)
+     |> assign(:scrub_seq, 0)
+     |> assign(:new_ops_since_scrub, 0)}
   end
 
-  # ── Templates / generators ───────────────────────────────────
+  def handle_event("history:undo_op", %{"op_id" => op_id}, socket) do
+    case Repo.query("UPDATE game_map_ops_log SET inverted = 1 WHERE map_id = ? AND op_id = ?", [
+           socket.assigns.map.id,
+           op_id
+         ]) do
+      {:ok, _} ->
+        {:noreply, refresh_after_op_toggle(socket, "Op marked inverted — replay skips it")}
 
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Time-scrub: render the map state at a specific sequence as a preview.
+  # `value` comes from the slider's name="value" input.
+  def handle_event("history:scrub", %{"value" => seq_str}, socket) do
+    seq = to_int(seq_str) |> max(0)
+    map = socket.assigns.map
+    replayed = replay_map_state(map, up_to: seq)
+
+    preview_map = %{map | layers: replayed.layers}
+
+    {:noreply,
+     socket
+     |> assign(:scrub_active, true)
+     |> assign(:scrub_seq, seq)
+     |> push_event("map:state", render_state(preview_map, %{socket.assigns | objects: replayed.objects, events: replayed.events}))}
+  end
+
+  # Reset preview back to the live (head) state. Also clears the
+  # "+N new ops" badge counter so the next set of incoming ops starts
+  # fresh from the user's perspective.
+  def handle_event("history:scrub_reset", _params, socket) do
+    map = socket.assigns.map
+
+    {:noreply,
+     socket
+     |> assign(:scrub_active, false)
+     |> assign(:scrub_seq, 0)
+     |> assign(:new_ops_since_scrub, 0)
+     |> push_event("map:state", render_state(map, socket.assigns))}
+  end
+
+  # Restore: invert every op whose sequence > scrub_seq. The map then
+  # reflects the previewed state. This is destructive (writes inverted
+  # bits to many rows), so the UI confirms before firing.
+  def handle_event("history:restore_to_seq", %{"seq" => seq_str}, socket) do
+    seq = to_int(seq_str) |> max(0)
+    map_id = socket.assigns.map.id
+
+    Repo.query(
+      "UPDATE game_map_ops_log SET inverted = 1 WHERE map_id = ? AND sequence > ?",
+      [map_id, seq]
+    )
+
+    socket = socket |> assign(:scrub_active, false) |> assign(:scrub_seq, 0)
+    {:noreply, refresh_after_op_toggle(socket, "Restored to seq #{seq} — later ops marked inverted")}
+  end
+
+  def handle_event("history:redo_op", %{"op_id" => op_id}, socket) do
+    case Repo.query("UPDATE game_map_ops_log SET inverted = 0 WHERE map_id = ? AND op_id = ?", [
+           socket.assigns.map.id,
+           op_id
+         ]) do
+      {:ok, _} ->
+        {:noreply, refresh_after_op_toggle(socket, "Op restored — replay applies it")}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Re-replay the op log from base state and push a fresh map:state so
+  # the canvas reflects the inverted/restored bit immediately.
+  # Phase 2B follow-through — without this, the user would have to reload.
   def handle_event("templates:open", _params, socket),
     do: {:noreply, assign(socket, :templates_open, true)}
 
@@ -458,74 +610,436 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
     end
   end
 
-  defp reload_map_full(map) do
-    case Repo.query(
-           "SELECT name, width, height, render_mode, schema_version, layers_json, tiles_json, description, ambient_dark, min_level, tileset_url FROM game_maps WHERE id = ?",
-           [map.id]
-         ) do
-      {:ok, %{rows: [[name, w, h, render_mode, schema_v, lj, tj, description, ambient_dark, min_level, tileset_url]]}} ->
-        layers = parse_layers(lj, tj, w, h)
-
-        map
-        |> Map.put(:name, name)
-        |> Map.put(:width, w)
-        |> Map.put(:height, h)
-        |> Map.put(:render_mode, render_mode || "classic")
-        |> Map.put(:schema_version, schema_v || 1)
-        |> Map.put(:layers, layers)
-        |> Map.put(:description, description)
-        |> Map.put(:ambient_dark, ambient_dark)
-        |> Map.put(:min_level, min_level)
-        |> Map.put(:tileset_url, tileset_url)
-
-      _ ->
-        map
-    end
-  rescue
-    _ -> map
-  end
-
   def handle_event("resize:open", _params, socket),
     do: {:noreply, assign(socket, :resize_open, true)}
 
   def handle_event("resize:close", _params, socket),
     do: {:noreply, assign(socket, :resize_open, false)}
 
-  # ── Object / Event palettes ──────────────────────────────────
-
-  def handle_event("object_palette:open", _params, socket),
-    do: {:noreply, assign(socket, :object_palette_open, true)}
-
-  def handle_event("object_palette:close", _params, socket),
-    do: {:noreply, assign(socket, :object_palette_open, false)}
+  # ── Object / Event preset selection (now from right-panel inline) ──
 
   def handle_event("object_palette:select", %{"key" => key}, socket) do
     {:noreply,
      socket
      |> assign(:active_object_preset, key)
      |> assign(:active_tool, "object")
-     |> assign(:object_palette_open, false)}
+     |> assign(:object_panel_mode, :place)
+     |> assign(:selected_object_id, nil)}
   end
-
-  def handle_event("event_palette:open", _params, socket),
-    do: {:noreply, assign(socket, :event_palette_open, true)}
-
-  def handle_event("event_palette:close", _params, socket),
-    do: {:noreply, assign(socket, :event_palette_open, false)}
 
   def handle_event("event_palette:select", %{"kind" => kind}, socket) do
     {:noreply,
      socket
      |> assign(:active_event_kind, kind)
      |> assign(:active_tool, "event")
-     |> assign(:event_palette_open, false)}
+     |> assign(:event_form, default_event_form(kind))}
+  end
+
+  # ── Per-tool panel events ────────────────────────────────────────
+
+  def handle_event("pass:set_paint", %{"value" => v}, socket),
+    do: {:noreply, assign(socket, :pass_paint_value, to_int(v))}
+
+  def handle_event("pass:toggle_overlay", _params, socket),
+    do: {:noreply, assign(socket, :pass_overlay_visible, !socket.assigns.pass_overlay_visible)}
+
+  def handle_event("elev:set", %{"value" => v}, socket) do
+    n = to_int(v) |> max(0) |> min(15)
+    {:noreply, assign(socket, :paint_elevation, n)}
+  end
+
+  def handle_event("elev:step", %{"dir" => dir}, socket) do
+    delta = if dir in ["up", "+"], do: 1, else: -1
+    n = (socket.assigns.paint_elevation + delta) |> max(0) |> min(15)
+    {:noreply, assign(socket, :paint_elevation, n)}
+  end
+
+  def handle_event("event:set_form_field", %{"field" => field, "value" => value}, socket) do
+    form = Map.put(socket.assigns.event_form, field, value)
+    {:noreply, assign(socket, :event_form, form)}
+  end
+
+  def handle_event("object:set_panel_mode", %{"mode" => mode}, socket) do
+    m = if mode in ["edit", "Edit"], do: :edit, else: :place
+    {:noreply, assign(socket, :object_panel_mode, m)}
+  end
+
+  def handle_event("event:set_panel_mode", %{"mode" => mode}, socket) do
+    m = if mode in ["edit", "Edit"], do: :edit, else: :place
+    {:noreply, assign(socket, :event_panel_mode, m)}
+  end
+
+  # Save edits to the currently-selected event. Replaces the data map
+  # with the panel form's current state and writes an edit_event op.
+  def handle_event("event:save_edit", _params, socket) do
+    case socket.assigns[:selected_event_id] do
+      nil ->
+        {:noreply, assign(socket, :save_status, "No event selected")}
+
+      eid ->
+        prev = Enum.find(socket.assigns.events, &(&1.id == eid))
+        new_data = socket.assigns[:event_form] || %{}
+
+        events =
+          Enum.map(socket.assigns.events, fn ev ->
+            if ev.id == eid, do: %{ev | data: new_data}, else: ev
+          end)
+
+        persist_map_events(socket.assigns.map.id, events)
+
+        prev_data = (prev && prev.data) || %{}
+
+        {:noreply,
+         socket
+         |> append_phase2a_op("edit_event", %{
+           "event_id" => eid,
+           "fields" => %{"data" => new_data},
+           "prev_fields" => %{"data" => prev_data}
+         })
+         |> assign(:events, events)
+         |> assign(:dirty?, true)
+         |> assign(:save_status, "Event updated")
+         |> push_event("map:events", %{events: events})}
+    end
+  end
+
+  def handle_event("event:delete_selected", _params, socket) do
+    case socket.assigns[:selected_event_id] do
+      nil ->
+        {:noreply, socket}
+
+      eid ->
+        prev = Enum.find(socket.assigns.events, &(&1.id == eid))
+        events = Enum.reject(socket.assigns.events, &(&1.id == eid))
+        persist_map_events(socket.assigns.map.id, events)
+
+        {:noreply,
+         socket
+         |> append_phase2a_op("delete_event", %{"event_id" => eid, "prev_event" => prev})
+         |> assign(:events, events)
+         |> assign(:selected_event_id, nil)
+         |> assign(:event_panel_mode, :place)
+         |> assign(:dirty?, true)
+         |> assign(:save_status, "Event deleted")
+         |> push_event("map:events", %{events: events})}
+    end
+  end
+
+  def handle_event("spawn:select_zone", %{"id" => id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_spawn_zone_id, id)
+     |> push_event("zones:select", %{kind: "spawn", id: id})}
+  end
+
+  # Click on any zone box on the canvas — selects + switches the tool to
+  # match (so the right panel shows the zone's editor).
+  def handle_event("zone:select", %{"kind" => "spawn", "id" => id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:active_tool, "spawn_zone")
+     |> assign(:selected_spawn_zone_id, id)
+     |> assign(:selected_sound_zone_id, nil)
+     |> push_event("zones:select", %{kind: "spawn", id: id})}
+  end
+
+  def handle_event("zone:select", %{"kind" => "sound", "id" => id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:active_tool, "sound_zone")
+     |> assign(:selected_sound_zone_id, id)
+     |> assign(:selected_spawn_zone_id, nil)
+     |> push_event("zones:select", %{kind: "sound", id: id})}
+  end
+
+  # Drag-handle resize/move from the canvas. Clamps to map bounds, ensures
+  # at least 1×1, persists, logs an edit op, and pushes a fresh zones list.
+  def handle_event("zone:update_rect", %{"kind" => kind, "id" => id, "x1" => x1, "y1" => y1, "x2" => x2, "y2" => y2}, socket) do
+    map = socket.assigns.map
+    cx1 = clamp(to_int(x1), 0, map.width - 1)
+    cy1 = clamp(to_int(y1), 0, map.height - 1)
+    cx2 = clamp(to_int(x2), 0, map.width - 1)
+    cy2 = clamp(to_int(y2), 0, map.height - 1)
+
+    rect = %{
+      x1: min(cx1, cx2),
+      y1: min(cy1, cy2),
+      x2: max(cx1, cx2),
+      y2: max(cy1, cy2)
+    }
+
+    case kind do
+      "spawn" -> apply_zone_rect_update(socket, :spawn, id, rect)
+      "sound" -> apply_zone_rect_update(socket, :sound, id, rect)
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("spawn:deselect", _params, socket),
+    do: {:noreply, assign(socket, :selected_spawn_zone_id, nil)}
+
+  def handle_event("spawn:add_encounter", %{"id" => zone_id}, socket) do
+    zones =
+      Enum.map(socket.assigns.spawn_zones, fn z ->
+        if z.id == zone_id do
+          new_row = %{"npc_id" => "", "count" => 1, "level_scaling" => 1.0, "weight" => 1}
+          %{z | encounter_table: (z.encounter_table || []) ++ [new_row]}
+        else
+          z
+        end
+      end)
+
+    persist_spawn_zones(socket.assigns.map.id, zones)
+    {:noreply, assign(socket, :spawn_zones, zones)}
+  end
+
+  def handle_event("spawn:set_encounter", %{"id" => zone_id, "row" => row, "field" => field, "value" => value}, socket) do
+    row_idx = to_int(row)
+    new_value = normalize_encounter_value(field, value)
+
+    # Capture the prev value at the START of an editing session so the
+    # debounce buffer's invert-fidelity is correct (deferred 2B.2 follow).
+    prev_zone = Enum.find(socket.assigns.spawn_zones, &(&1.id == zone_id))
+    prev_row = prev_zone && Enum.at(prev_zone.encounter_table || [], row_idx) || %{}
+    prev_value = Map.get(prev_row, field)
+
+    zones =
+      Enum.map(socket.assigns.spawn_zones, fn z ->
+        if z.id == zone_id do
+          updated = List.update_at(z.encounter_table || [], row_idx, fn r ->
+            Map.put(r || %{}, field, new_value)
+          end)
+          %{z | encounter_table: updated}
+        else
+          z
+        end
+      end)
+
+    persist_spawn_zones(socket.assigns.map.id, zones)
+
+    {:noreply,
+     socket
+     |> assign(:spawn_zones, zones)
+     |> record_field_edit({:spawn_encounter, "#{zone_id}:#{row_idx}", field}, prev_value, new_value)}
+  end
+
+  def handle_event("spawn:remove_encounter", %{"id" => zone_id, "row" => row}, socket) do
+    row_idx = to_int(row)
+
+    zones =
+      Enum.map(socket.assigns.spawn_zones, fn z ->
+        if z.id == zone_id do
+          updated = List.delete_at(z.encounter_table || [], row_idx)
+          %{z | encounter_table: updated}
+        else
+          z
+        end
+      end)
+
+    persist_spawn_zones(socket.assigns.map.id, zones)
+    {:noreply, assign(socket, :spawn_zones, zones)}
+  end
+
+  def handle_event("spawn:set_field", %{"id" => zone_id, "field" => field, "value" => value}, socket) do
+    prev_zone = Enum.find(socket.assigns.spawn_zones, &(&1.id == zone_id))
+    prev_value = read_spawn_field(prev_zone, field)
+    new_value = normalize_spawn_field(field, value)
+
+    zones =
+      Enum.map(socket.assigns.spawn_zones, fn z ->
+        if z.id == zone_id, do: write_spawn_field(z, field, new_value), else: z
+      end)
+
+    persist_spawn_zones(socket.assigns.map.id, zones)
+
+    {:noreply,
+     socket
+     |> assign(:spawn_zones, zones)
+     # 2B.2: route the op log entry through the debounce buffer so a
+     # rapid sequence of keystrokes / slider ticks coalesces into one op.
+     |> record_field_edit({:spawn, zone_id, field}, prev_value, new_value)}
+  end
+
+  def handle_event("sound:select_zone", %{"id" => id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_sound_zone_id, id)
+     |> push_event("zones:select", %{kind: "sound", id: id})}
+  end
+
+  def handle_event("sound:deselect", _params, socket),
+    do: {:noreply, assign(socket, :selected_sound_zone_id, nil)}
+
+  def handle_event("sound:set_field", %{"id" => zone_id, "field" => field, "value" => value}, socket) do
+    prev_zone = Enum.find(socket.assigns.sound_zones, &(&1.id == zone_id))
+    prev_value = read_sound_field(prev_zone, field)
+    new_value = normalize_sound_field(field, value)
+
+    zones =
+      Enum.map(socket.assigns.sound_zones, fn z ->
+        if z.id == zone_id, do: write_sound_field(z, field, new_value), else: z
+      end)
+
+    persist_sound_zones(socket.assigns.map.id, zones)
+
+    {:noreply,
+     socket
+     |> assign(:sound_zones, zones)
+     |> record_field_edit({:sound, zone_id, field}, prev_value, new_value)
+     |> push_event("map:zones", zones_payload(socket.assigns, socket.assigns.spawn_zones, zones))}
+  end
+
+  def handle_event("set_spawn", %{"x" => x, "y" => y}, socket) do
+    map = socket.assigns.map
+    sx = to_int(x) |> max(0) |> min(map.width - 1)
+    sy = to_int(y) |> max(0) |> min(map.height - 1)
+
+    case Repo.query("UPDATE game_maps SET spawn_x = ?, spawn_y = ? WHERE id = ?", [sx, sy, map.id]) do
+      {:ok, _} ->
+        updated_map = %{map | spawn_x: sx, spawn_y: sy}
+
+        {:noreply,
+         socket
+         |> assign(:map, updated_map)
+         |> assign(:save_status, "Spawn set to (#{sx}, #{sy})")
+         |> push_event("map:spawn", %{x: sx, y: sy})}
+
+      {:error, _} ->
+        {:noreply, assign(socket, :save_status, "Failed to update spawn")}
+    end
+  end
+
+  def handle_event("event:set_form_field_form", params, socket) do
+    case params["_target"] do
+      [field] when is_binary(field) ->
+        value = Map.get(params, field, "")
+        form = Map.put(socket.assigns.event_form, field, value)
+        {:noreply, assign(socket, :event_form, form)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("zone:arm_creation", %{"kind" => kind}, socket) when kind in ["spawn_zone", "sound_zone"] do
+    {:noreply,
+     socket
+     |> assign(:zone_creation_armed, true)
+     |> assign(:active_tool, kind)
+     |> assign(:save_status, "Drag a rectangle on the canvas to draw the zone")}
+  end
+
+  # Audio preview for a sound zone. The actual play happens client-side; we
+  # push the sound URL and volume so the canvas hook (or a small helper)
+  # can play a transient <audio> element. No-op if URL is blank.
+  def handle_event("sound:preview", %{"id" => zone_id}, socket) do
+    case Enum.find(socket.assigns.sound_zones, &(&1.id == zone_id)) do
+      nil ->
+        {:noreply, socket}
+
+      %{sound_url: url} when url in [nil, ""] ->
+        {:noreply, assign(socket, :save_status, "No URL set for this zone")}
+
+      zone ->
+        {:noreply, push_event(socket, "sound:preview", %{url: zone.sound_url, volume: zone.volume})}
+    end
+  end
+
+  # Save edits to an existing object. Updates label/sprite/data; position
+  # is unchanged here (drag-to-move is a future addition).
+  def handle_event("object:save_edit", params, socket) do
+    id = params["object_id"]
+
+    parsed_data =
+      case Jason.decode(params["data_json"] || "") do
+        {:ok, m} when is_map(m) -> m
+        _ -> %{}
+      end
+
+    fields_new = %{
+      "label" => params["label"] || "",
+      "sprite_url" => params["sprite_url"] || "",
+      "data" => parsed_data
+    }
+
+    prev_obj = Enum.find(socket.assigns.objects, &(&1.id == id))
+
+    fields_prev =
+      case prev_obj do
+        nil -> %{}
+        o -> %{
+          "label" => Map.get(o, :label, ""),
+          "sprite_url" => Map.get(o, :sprite_url, ""),
+          "data" => Map.get(o, :data, %{}) || %{}
+        }
+      end
+
+    objects =
+      Enum.map(socket.assigns.objects, fn obj ->
+        if obj.id == id do
+          obj
+          |> Map.put(:label, params["label"] || obj.label)
+          |> Map.put(:sprite_url, params["sprite_url"] || "")
+          |> Map.put(:data, parsed_data)
+        else
+          obj
+        end
+      end)
+
+    persist_map_objects(socket.assigns.map.id, objects)
+
+    {:noreply,
+     socket
+     |> append_phase2a_op("edit_object", %{
+       "object_id" => id,
+       "fields" => fields_new,
+       "prev_fields" => fields_prev
+     })
+     |> assign(:objects, objects)
+     |> assign(:dirty?, true)
+     |> assign(:save_status, "Object updated")
+     |> push_event("map:state", render_state(socket.assigns.map, %{socket.assigns | objects: objects}))}
+  end
+
+  # Save current selection as a named stamp. Reuses persist_saved_stamp/4
+  # (clipboard-keyed) but snapshots the selection on the fly so the user
+  # doesn't have to Copy first.
+  def handle_event("select:save_stamp", %{"name" => name}, socket) do
+    case socket.assigns.select_rect do
+      nil ->
+        {:noreply, assign(socket, :save_status, "No selection to save")}
+
+      rect ->
+        layer = socket.assigns.active_layer
+        snapshot = snapshot_region(socket.assigns.map, layer, rect)
+
+        case persist_saved_stamp(socket.assigns.map.id, name, layer, snapshot) do
+          :ok ->
+            {:noreply,
+             socket
+             |> assign(:saved_stamps, list_saved_stamps(socket.assigns.map.id))
+             |> assign(:save_status, "Stamp “#{name}” saved")}
+
+          {:error, reason} ->
+            {:noreply, assign(socket, :save_status, "Stamp save failed: #{inspect(reason)}")}
+        end
+    end
   end
 
   def handle_event("object:delete", %{"id" => id}, socket) do
+    prev_obj = Enum.find(socket.assigns.objects, &(&1.id == id))
     objects = Enum.reject(socket.assigns.objects, &(&1.id == id))
     persist_map_objects(socket.assigns.map.id, objects)
 
-    socket = assign(socket, :objects, objects) |> assign(:dirty?, true)
+    socket =
+      socket
+      |> append_phase2a_op("delete_object", %{
+        "object_id" => id,
+        "prev_object" => prev_obj
+      })
+      |> assign(:objects, objects)
+      |> assign(:dirty?, true)
+
     {:noreply, push_event(socket, "map:state", render_state(socket.assigns.map, socket.assigns))}
   end
 
@@ -638,7 +1152,10 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
           encounter_table: parse_encounter_table(params["encounter_table"]),
           scaling_factor: parse_float(params["scaling_factor"], 1.0),
           flag: params["flag"] || "",
-          enabled: params["enabled"] == "on" or params["enabled"] == "true"
+          enabled: params["enabled"] == "on" or params["enabled"] == "true",
+          # 2A.5/E3 defaults
+          cooldown_seconds: 30,
+          max_concurrent: 4
         }
 
         zones = [zone | socket.assigns.spawn_zones]
@@ -646,6 +1163,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
         {:noreply,
          socket
+         |> append_phase2a_op("place_spawn_zone", %{"zone" => zone})
          |> assign(:spawn_zones, zones)
          |> assign(:pending_zone, nil)
          |> assign(:dirty?, true)
@@ -673,6 +1191,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
         {:noreply,
          socket
+         |> append_phase2a_op("place_sound_zone", %{"zone" => zone})
          |> assign(:sound_zones, zones)
          |> assign(:pending_zone, nil)
          |> assign(:dirty?, true)
@@ -684,8 +1203,10 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   end
 
   def handle_event("spawn_zone:delete", %{"id" => id}, socket) do
+    prev_zone = Enum.find(socket.assigns.spawn_zones, &(&1.id == id))
     zones = Enum.reject(socket.assigns.spawn_zones, &(&1.id == id))
     persist_spawn_zones(socket.assigns.map.id, zones)
+    socket = append_phase2a_op(socket, "delete_spawn_zone", %{"zone_id" => id, "prev_zone" => prev_zone})
 
     {:noreply,
      socket
@@ -694,8 +1215,10 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   end
 
   def handle_event("sound_zone:delete", %{"id" => id}, socket) do
+    prev_zone = Enum.find(socket.assigns.sound_zones, &(&1.id == id))
     zones = Enum.reject(socket.assigns.sound_zones, &(&1.id == id))
     persist_sound_zones(socket.assigns.map.id, zones)
+    socket = append_phase2a_op(socket, "delete_sound_zone", %{"zone_id" => id, "prev_zone" => prev_zone})
 
     {:noreply,
      socket
@@ -760,9 +1283,21 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
   # ── Playtest-in-editor ───────────────────────────────────────
 
+  # D10v2: playmode initial position uses the persisted spawn point
+  # (set via the Spawn tool). Falls back to first walkable tile, then
+  # to map center, if no spawn is set. spawn_x/spawn_y is NEVER mutated
+  # by playmode — it's a fixed start tile per the D10 contract.
   def handle_event("play:start", _params, socket) do
     map = socket.assigns.map
-    {sx, sy} = first_walkable(map) || {div(map.width, 2), div(map.height, 2)}
+
+    {sx, sy} =
+      cond do
+        is_integer(map.spawn_x) and is_integer(map.spawn_y) ->
+          {map.spawn_x, map.spawn_y}
+
+        true ->
+          first_walkable(map) || {div(map.width, 2), div(map.height, 2)}
+      end
 
     socket =
       socket
@@ -785,6 +1320,11 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
      |> push_event("map:state", render_state(socket.assigns.map, socket.assigns))}
   end
 
+  # D10 invariant: play:step writes ONLY to the transient :play_x / :play_y
+  # assigns. It must NEVER touch :spawn_x / :spawn_y (those are persisted
+  # on the map row and represent the fixed start tile). Covered by the
+  # MapOps test "set_spawn does NOT touch :play_x / :play_y" — and by
+  # this code review check: grep for `spawn_x` in this clause; expected: 0.
   def handle_event("play:step", %{"dx" => dx, "dy" => dy}, socket) do
     if socket.assigns.play_mode do
       map = socket.assigns.map
@@ -913,6 +1453,12 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   # ── Grid toggle ──
   def handle_event("toggle_grid", _params, socket) do
     {:noreply, assign(socket, :show_grid, !Map.get(socket.assigns, :show_grid, false))}
+  end
+
+  # ── Fit to Screen — tells the canvas hook to resize the Pixi backing
+  # buffer to the available container space, preserving map aspect ratio.
+  def handle_event("fit_to_screen", _params, socket) do
+    {:noreply, push_event(socket, "fit_to_screen", %{})}
   end
 
   # ── Right-click eyedropper ──
@@ -1075,6 +1621,33 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   end
 
   def handle_event(_unhandled, _params, socket), do: {:noreply, socket}
+
+  defp reload_map_full(map) do
+    case Repo.query(
+           "SELECT name, width, height, render_mode, schema_version, layers_json, tiles_json, description, ambient_dark, min_level, tileset_url FROM game_maps WHERE id = ?",
+           [map.id]
+         ) do
+      {:ok, %{rows: [[name, w, h, render_mode, schema_v, lj, tj, description, ambient_dark, min_level, tileset_url]]}} ->
+        layers = parse_layers(lj, tj, w, h)
+
+        map
+        |> Map.put(:name, name)
+        |> Map.put(:width, w)
+        |> Map.put(:height, h)
+        |> Map.put(:render_mode, render_mode || "classic")
+        |> Map.put(:schema_version, schema_v || 1)
+        |> Map.put(:layers, layers)
+        |> Map.put(:description, description)
+        |> Map.put(:ambient_dark, ambient_dark)
+        |> Map.put(:min_level, min_level)
+        |> Map.put(:tileset_url, tileset_url)
+
+      _ ->
+        map
+    end
+  rescue
+    _ -> map
+  end
 
   defp first_walkable(map) do
     pass = Map.get(map.layers, "passability", [])
@@ -1256,32 +1829,22 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
     end
   end
 
-  defp handle_tool_click(zone_tool, x, y, socket) when zone_tool in ["spawn_zone", "sound_zone"] do
-    case socket.assigns.zone_anchor do
-      nil ->
-        {:noreply,
-         socket
-         |> assign(:zone_anchor, {x, y, zone_tool})
-         |> push_event("edit:set_preview", %{kind: "rect", anchor: %{x: x, y: y}})}
+  # D10: Spawn tool's primary action is set_spawn (single tile). Zone
+  # creation is opt-in via the right panel's "+ New zone" button which
+  # sets :zone_creation_armed=true. Once armed, the next two clicks
+  # create a zone (existing 2-click drag-rect flow), then disarm.
+  defp handle_tool_click("spawn_zone", x, y, socket) do
+    cond do
+      socket.assigns.zone_anchor != nil or socket.assigns.zone_creation_armed ->
+        handle_zone_tool_click("spawn_zone", x, y, socket)
 
-      {ax, ay, ^zone_tool} ->
-        rect = %{
-          x1: min(ax, x),
-          y1: min(ay, y),
-          x2: max(ax, x),
-          y2: max(ay, y)
-        }
-
-        {:noreply,
-         socket
-         |> assign(:zone_anchor, nil)
-         |> assign(:pending_zone, %{kind: zone_tool, rect: rect})
-         |> push_event("edit:set_preview", %{kind: nil})}
-
-      _stale ->
-        {:noreply, assign(socket, :zone_anchor, {x, y, zone_tool})}
+      true ->
+        handle_set_spawn(x, y, socket)
     end
   end
+
+  defp handle_tool_click("sound_zone", x, y, socket),
+    do: handle_zone_tool_click("sound_zone", x, y, socket)
 
   defp handle_tool_click("object", x, y, socket) do
     preset = object_preset(socket.assigns.active_object_preset)
@@ -1301,30 +1864,39 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
     objects = [object | socket.assigns.objects]
     persist_map_objects(socket.assigns.map.id, objects)
 
-    socket = assign(socket, :objects, objects) |> assign(:dirty?, true)
+    socket =
+      socket
+      |> append_phase2a_op("place_object", %{"object" => object})
+      |> assign(:objects, objects)
+      |> assign(:dirty?, true)
 
     {:noreply, push_event(socket, "map:state", render_state(socket.assigns.map, socket.assigns))}
   end
 
   defp handle_tool_click("event", x, y, socket) do
-    event = %{
-      id: object_id(),
-      x: x,
-      y: y,
-      kind: socket.assigns.active_event_kind,
-      script_id: nil,
-      data: nil
-    }
+    # 2A.5 / E2 Edit mode: clicking on an existing event tile selects it
+    # for editing instead of placing a new one. Otherwise, place a new
+    # event with the panel's current kind + form data.
+    case Enum.find(socket.assigns.events, fn ev -> ev.x == x and ev.y == y end) do
+      nil ->
+        place_new_event(x, y, socket)
 
-    events = [event | socket.assigns.events]
-    persist_map_events(socket.assigns.map.id, events)
+      existing ->
+        # Pre-populate the form with the selected event's data so the
+        # Edit tab shows the right values.
+        form =
+          case existing.data do
+            m when is_map(m) -> m
+            _ -> default_event_form(existing.kind)
+          end
 
-    {:noreply,
-     socket
-     |> assign(:events, events)
-     |> assign(:dirty?, true)
-     |> assign(:event_picker_target, event.id)
-     |> push_event("map:events", %{events: events})}
+        {:noreply,
+         socket
+         |> assign(:selected_event_id, existing.id)
+         |> assign(:event_panel_mode, :edit)
+         |> assign(:active_event_kind, existing.kind)
+         |> assign(:event_form, form)}
+    end
   end
 
   defp handle_tool_click("brush", x, y, socket) do
@@ -1354,6 +1926,25 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
     end
   end
 
+  # Phase 2A: passability paints the panel-selected value (0=passable / 1=blocked)
+  # rather than cycling through 0/1/2. The Pass right-panel makes the choice
+  # explicit so users don't have to triple-click to get back where they started.
+  defp handle_tool_click("passability", x, y, socket) do
+    case set_tile(socket.assigns.map, "passability", x, y, socket.assigns.pass_paint_value) do
+      {:ok, updated_map, op} -> commit_op(socket, updated_map, op)
+      {:error, _} -> {:noreply, socket}
+    end
+  end
+
+  # Phase 2A: elevation paints the panel-selected value (0..15) rather than
+  # cycling 0..3. Wider range reflects the renderer's full elevation support.
+  defp handle_tool_click("elevation", x, y, socket) do
+    case set_tile(socket.assigns.map, "elevation", x, y, socket.assigns.paint_elevation) do
+      {:ok, updated_map, op} -> commit_op(socket, updated_map, op)
+      {:error, _} -> {:noreply, socket}
+    end
+  end
+
   defp handle_tool_click(tool, x, y, socket) do
     map = socket.assigns.map
     layer = socket.assigns.active_layer
@@ -1372,19 +1963,22 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
     end
   end
 
-  # Brush footprint for size N.
+  # Brush footprint for size N. `size` is the diameter; all sizes are odd
+  # so the brush is symmetrically centered on (x,y).
   #   1 → a single cell at (x,y)
-  #   2 → a 2×2 square anchored top-left at (x,y)
   #   3 → a 3×3 square centered on (x,y)
-  #   5 → a 5×5 disc-ish square centered on (x,y) with the four corners removed
+  #   5 → a 5×5 disc-ish centered on (x,y) with the four corners removed
+  #   7 → a 7×7 disc-ish centered on (x,y) with the four corners removed
   defp brush_cells(1, x, y), do: [{x, y}]
-
-  defp brush_cells(2, x, y), do: for(dy <- 0..1, dx <- 0..1, do: {x + dx, y + dy})
 
   defp brush_cells(3, x, y), do: for(dy <- -1..1, dx <- -1..1, do: {x + dx, y + dy})
 
   defp brush_cells(5, x, y) do
     for dy <- -2..2, dx <- -2..2, not (abs(dx) == 2 and abs(dy) == 2), do: {x + dx, y + dy}
+  end
+
+  defp brush_cells(7, x, y) do
+    for dy <- -3..3, dx <- -3..3, not (abs(dx) == 3 and abs(dy) == 3), do: {x + dx, y + dy}
   end
 
   defp brush_cells(_, x, y), do: [{x, y}]
@@ -1438,14 +2032,25 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   end
 
   defp commit_op(socket, updated_map, op) do
-    persist_op(updated_map.id, op)
-    broadcast_op(updated_map.id, op)
+    # Phase 2B.3: thread the op record (sequence/op_id/user_name) through
+    # broadcast so receivers can update their History drawers without a
+    # round-trip refetch. originator_id lets us skip our own broadcast.
+    record =
+      case persist_op(updated_map.id, op) do
+        {:ok, persisted} -> persisted
+        _ -> nil
+      end
+
+    broadcast_op(updated_map.id, op, record, socket.assigns[:editor_id])
+
     undo_stack = [op | Enum.take(socket.assigns.undo_stack, 49)]
     persist_draft_stacks(updated_map.id, undo_stack, [])
 
+    new_head = (record && record.sequence) || updated_map[:head_seq] || 0
+
     {:noreply,
      socket
-     |> assign(:map, updated_map)
+     |> assign(:map, Map.put(updated_map, :head_seq, max(new_head, updated_map[:head_seq] || 0)))
      |> assign(:dirty?, true)
      |> assign(:undo_stack, undo_stack)
      |> assign(:redo_stack, [])
@@ -1475,20 +2080,29 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   # ── PubSub — remote editor_op from another editor ──────────
 
   @impl true
-  def handle_info({:remote_editor_op, op}, socket) do
-    # Apply the remote patch to our local map state
-    case apply_remote_op(socket.assigns.map, op) do
-      {:ok, updated_map} ->
-        {:noreply,
-         socket
-         |> assign(:map, updated_map)
-         |> push_event("map:state", render_state(updated_map, socket.assigns))}
-
-      _ ->
-        {:noreply, socket}
+  def handle_info({:remote_editor_op, %{originator_id: oid} = msg}, socket) when is_binary(oid) do
+    # Skip our own broadcast (we already applied it locally in commit_op).
+    if oid == socket.assigns[:editor_id] do
+      {:noreply, socket}
+    else
+      apply_remote_msg(msg, socket)
     end
   end
 
+  # New envelope format with no originator (e.g. server-side scripted ops).
+  def handle_info({:remote_editor_op, %{patch: _} = msg}, socket),
+    do: apply_remote_msg(msg, socket)
+
+  # Legacy shape: raw patch without envelope. Pre-2B.3 producers send this.
+  def handle_info({:remote_editor_op, op}, socket) when is_map(op),
+    do: apply_remote_msg(%{patch: op, record: nil, originator_id: nil}, socket)
+
+  # 2B.2: debounce timer fired — commit the buffered field-op.
+  def handle_info({:flush_field_op, key}, socket),
+    do: {:noreply, flush_field_op(socket, key)}
+
+  # Phase 2B.3: apply remote op to local state AND keep the History drawer
+  # / head_seq fresh so two concurrent editors see the same op log.
   def handle_info({:remote_cursor, cursor}, socket) do
     remote = Map.put(socket.assigns.remote_cursors, cursor.id, cursor)
 
@@ -1591,7 +2205,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
           <div class="flex items-center gap-0.5 ml-1">
             <span class="text-[10px] text-zinc-500 mr-1">Size</span>
-            <button :for={n <- [1, 2, 3, 5]}
+            <button :for={n <- [1, 3, 5, 7]}
               phx-click="set_brush_size" phx-value-size={n}
               title={"Brush size #{n}"}
               class={["w-6 h-6 rounded text-[10px] font-bold transition-colors",
@@ -1627,14 +2241,6 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
             <span :if={@dirty?} class="text-[10px] text-yellow-400">● unsaved</span>
             <span :if={@save_status} class="text-[10px] text-green-400">{@save_status}</span>
-            <button phx-click="object_palette:open" title="Object palette"
-              class="px-2 py-1.5 rounded text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
-              🪵 Object: {@active_object_preset}
-            </button>
-            <button phx-click="event_palette:open" title="Event palette"
-              class="px-2 py-1.5 rounded text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
-              ✨ Event: {@active_event_kind}
-            </button>
             <button phx-click="templates:open" title="Templates & generators"
               class="px-2 py-1.5 rounded text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
               🎲 Templates
@@ -1642,10 +2248,6 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
             <button phx-click="stamps:open" title="Saved stamps"
               class="px-2 py-1.5 rounded text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
               📑 Stamps
-            </button>
-            <button phx-click="properties:open" title="Map properties"
-              class="px-2 py-1.5 rounded text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
-              ⚙ Props
             </button>
             <button phx-click="resize:open" title="Resize map"
               class="px-2 py-1.5 rounded text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
@@ -1667,6 +2269,10 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
                 Map.get(assigns, :show_grid, false) && "bg-amber-600 text-black font-bold",
                 !Map.get(assigns, :show_grid, false) && "bg-zinc-800 hover:bg-zinc-700 text-zinc-300"]}>
               # Grid
+            </button>
+            <button type="button" phx-click="fit_to_screen" title="Fit map to screen"
+              class="px-2 py-1.5 rounded text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
+              ⛶ Fit
             </button>
             <button :if={!@play_mode} phx-click="play:start" title="Playtest in editor (P)"
               class="px-3 py-1.5 rounded text-xs bg-emerald-700 hover:bg-emerald-600 text-white font-bold">
@@ -1713,50 +2319,770 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
         </main>
       </div>
 
-      <!-- Right: Brush palette -->
-      <aside class="w-48 bg-zinc-900/80 border-l border-zinc-800 flex flex-col shrink-0 overflow-hidden">
-        <div class="px-3 py-2 border-b border-zinc-800">
-          <span class="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Brush Palette</span>
-          <form phx-change="palette_search" class="mt-2">
-            <input type="text" name="q" value={@palette_search} placeholder="search tiles…"
-              class="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-amber-500" />
-          </form>
-        </div>
-
-        <div :if={@recent_tiles != []} class="px-3 py-2 border-b border-zinc-800">
-          <div class="text-[9px] text-zinc-600 uppercase mb-1">Recent</div>
-          <div class="flex gap-1 flex-wrap">
-            <button :for={id <- @recent_tiles}
-              phx-click="set_brush_tile" phx-value-id={id}
-              title={"tile #{id}"}
-              class={["w-6 h-6 rounded border hover:scale-110 transition-transform",
-                @brush_tile_id == id && "border-amber-400 ring-2 ring-amber-400/40",
-                @brush_tile_id != id && "border-zinc-700"]}
-              style={"background: #{palette_color(@palette, id)}"}>
-            </button>
+      <!-- Right: tool-context panel (Phase 2A — reshapes per @right_panel_kind) -->
+      <aside class="w-72 bg-zinc-900/80 border-l border-zinc-800 flex flex-col shrink-0 overflow-hidden">
+        <!-- Consistent panel header -->
+        <div class="px-3 py-2 border-b border-zinc-800 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-base shrink-0">{panel_icon(right_panel_kind(@active_tool))}</span>
+            <span class="text-[11px] font-bold uppercase tracking-widest text-zinc-300 truncate">
+              {panel_title(right_panel_kind(@active_tool))}
+            </span>
           </div>
+          <span class="text-[9px] text-zinc-600 shrink-0">{@active_tool}</span>
         </div>
 
-        <div class="flex-1 overflow-y-auto px-3 py-2">
-          <div class="grid grid-cols-6 gap-1">
-            <button :for={entry <- filter_palette(@palette, @palette_search)}
-              phx-click="set_brush_tile" phx-value-id={entry.id}
-              title={"#{entry.label} (id #{entry.id})"}
-              class={["w-7 h-7 rounded border transition-all hover:scale-110",
-                @brush_tile_id == entry.id && "border-amber-400 ring-2 ring-amber-400/40 scale-110",
-                @brush_tile_id != entry.id && "border-zinc-700"]}
-              style={"background: #{entry.color}"}>
-            </button>
-          </div>
-        </div>
+        <%= case right_panel_kind(@active_tool) do %>
+          <% :tile_palette -> %>
+            <div class="px-3 py-2 border-b border-zinc-800">
+              <form phx-change="palette_search">
+                <input type="text" name="q" value={@palette_search} placeholder="search tiles…"
+                  class="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-amber-500" />
+              </form>
+            </div>
 
-        <div class="px-3 py-2 border-t border-zinc-800 text-[9px] text-zinc-600 flex items-center justify-between">
-          <span>Selected: tile #<%= @brush_tile_id %></span>
-          <button phx-click="tile_anim:open" phx-value-tile_id={@brush_tile_id}
-            class="text-amber-500 hover:text-amber-300 text-[10px]" title="Animate this tile">
-            🎞 Animate
-          </button>
-        </div>
+            <div :if={@recent_tiles != []} class="px-3 py-2 border-b border-zinc-800">
+              <div class="text-[9px] text-zinc-600 uppercase mb-1">Recent</div>
+              <div class="flex gap-1 flex-wrap">
+                <button :for={id <- @recent_tiles}
+                  phx-click="set_brush_tile" phx-value-id={id}
+                  title={"tile #{id}"}
+                  class={["w-6 h-6 rounded border hover:scale-110 transition-transform",
+                    @brush_tile_id == id && "border-amber-400 ring-2 ring-amber-400/40",
+                    @brush_tile_id != id && "border-zinc-700"]}
+                  style={"background: #{palette_color(@palette, id)}"}>
+                </button>
+              </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto px-3 py-2">
+              <div class="grid grid-cols-7 gap-1">
+                <button :for={entry <- filter_palette(@palette, @palette_search)}
+                  phx-click="set_brush_tile" phx-value-id={entry.id}
+                  title={"#{entry.label} (id #{entry.id})"}
+                  class={["w-7 h-7 rounded border transition-all hover:scale-110",
+                    @brush_tile_id == entry.id && "border-amber-400 ring-2 ring-amber-400/40 scale-110",
+                    @brush_tile_id != entry.id && "border-zinc-700"]}
+                  style={"background: #{entry.color}"}>
+                </button>
+              </div>
+            </div>
+
+            <div class="px-3 py-2 border-t border-zinc-800 text-[9px] text-zinc-600 flex items-center justify-between">
+              <span>Selected: tile #<%= @brush_tile_id %></span>
+              <button phx-click="tile_anim:open" phx-value-tile_id={@brush_tile_id}
+                class="text-amber-500 hover:text-amber-300 text-[10px]" title="Animate this tile">
+                🎞 Animate
+              </button>
+            </div>
+
+          <% :pass -> %>
+            <div class="flex-1 overflow-y-auto p-3 space-y-3">
+              <div class="grid grid-cols-2 gap-2">
+                <button phx-click="pass:set_paint" phx-value-value="0"
+                  class={["px-3 py-3 rounded text-xs font-bold border-2 transition-colors",
+                    @pass_paint_value == 0 && "bg-emerald-700/30 border-emerald-500 text-emerald-300",
+                    @pass_paint_value != 0 && "bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600"]}>
+                  ✓ Passable
+                </button>
+                <button phx-click="pass:set_paint" phx-value-value="1"
+                  class={["px-3 py-3 rounded text-xs font-bold border-2 transition-colors",
+                    @pass_paint_value == 1 && "bg-rose-700/30 border-rose-500 text-rose-300",
+                    @pass_paint_value != 1 && "bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-600"]}>
+                  🚫 Blocked
+                </button>
+              </div>
+              <label class="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer">
+                <input type="checkbox" checked={@pass_overlay_visible}
+                  phx-click="pass:toggle_overlay" class="accent-amber-500" />
+                Show passability overlay on canvas
+              </label>
+              <div class="text-[10px] text-zinc-500 leading-relaxed border-t border-zinc-800 pt-2">
+                Click cells on the canvas to paint
+                <span class={[
+                  @pass_paint_value == 0 && "text-emerald-400 font-bold",
+                  @pass_paint_value != 0 && "text-rose-400 font-bold"
+                ]}>{if @pass_paint_value == 0, do: "passable (walkable)", else: "blocked"}</span>.
+                Switch tools to brush to paint terrain instead.
+              </div>
+            </div>
+
+          <% :auto -> %>
+            <div class="flex-1 overflow-y-auto p-3 space-y-2">
+              <div :if={@autotile_groups == []} class="text-[10px] text-zinc-500 italic py-4 text-center">
+                No autotile groups configured.<br/>
+                Configure groups in
+                <a href="/sauce/settings/autotile" class="text-amber-500 hover:text-amber-300 underline">Autotile Settings</a>.
+              </div>
+              <div :for={group <- @autotile_groups}
+                class={["rounded border p-2 transition-colors",
+                  @brush_tile_id == group.base_tile_id && "bg-amber-900/20 border-amber-500",
+                  @brush_tile_id != group.base_tile_id && "bg-zinc-800/50 border-zinc-700 hover:border-zinc-600"]}>
+                <div class="flex items-center gap-2">
+                  <div class="w-7 h-7 rounded border border-zinc-700"
+                    style={"background: #{palette_color(@palette, group.base_tile_id)}"}></div>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-xs font-bold text-zinc-200 truncate">{group.name}</div>
+                    <div class="text-[9px] text-zinc-500">base id #{group.base_tile_id} · {MapSet.size(group.members)} members</div>
+                  </div>
+                  <button phx-click="set_brush_tile" phx-value-id={group.base_tile_id}
+                    class="px-2 py-1 text-[10px] bg-zinc-700 hover:bg-amber-700 text-zinc-200 hover:text-black rounded">
+                    Use
+                  </button>
+                </div>
+              </div>
+              <div class="text-[10px] text-zinc-500 border-t border-zinc-800 pt-2 mt-2 leading-relaxed">
+                Pick a group's base tile, then paint on the canvas — neighbor variants will fill in automatically.
+              </div>
+            </div>
+
+          <% :elev -> %>
+            <div class="flex-1 overflow-y-auto p-3 space-y-3">
+              <div class="text-center">
+                <div class="text-[10px] text-zinc-500 uppercase tracking-wide mb-1">Painting elevation</div>
+                <div class="flex items-center justify-center gap-2">
+                  <button phx-click="elev:step" phx-value-dir="down"
+                    class="w-8 h-8 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-base font-bold disabled:opacity-30"
+                    disabled={@paint_elevation <= 0}>−</button>
+                  <form phx-change="elev:set" class="inline-block">
+                    <input type="number" name="value" min="0" max="15" value={@paint_elevation}
+                      class="w-16 px-2 py-1 text-center text-lg font-mono bg-zinc-800 border border-zinc-700 rounded text-amber-400" />
+                  </form>
+                  <button phx-click="elev:step" phx-value-dir="up"
+                    class="w-8 h-8 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-base font-bold disabled:opacity-30"
+                    disabled={@paint_elevation >= 15}>+</button>
+                </div>
+              </div>
+              <div class="border-t border-zinc-800 pt-3">
+                <div class="text-[9px] text-zinc-500 uppercase mb-2">Legend (0 → 15)</div>
+                <div class="flex h-3 rounded overflow-hidden border border-zinc-700">
+                  <div :for={n <- 0..15}
+                    class={["flex-1", @paint_elevation == n && "ring-2 ring-amber-400 ring-inset"]}
+                    style={"background: hsl(0, 0%, #{8 + n * 5}%)"}
+                    title={"elevation #{n}"}></div>
+                </div>
+                <div class="flex justify-between text-[9px] text-zinc-600 mt-1">
+                  <span>flat</span><span>peak</span>
+                </div>
+              </div>
+              <div class="text-[10px] text-zinc-500 leading-relaxed border-t border-zinc-800 pt-2">
+                Click cells to paint elevation level <span class="text-amber-400 font-bold">{@paint_elevation}</span>.
+                Higher values render brighter in the editor preview.
+              </div>
+            </div>
+
+          <% :object -> %>
+            <div class="flex-1 flex flex-col overflow-hidden">
+              <!-- Mode tabs -->
+              <div class="flex border-b border-zinc-800">
+                <button phx-click="object:set_panel_mode" phx-value-mode="place"
+                  class={["flex-1 px-3 py-2 text-xs font-bold transition-colors",
+                    @object_panel_mode == :place && "bg-zinc-800 text-amber-400 border-b-2 border-amber-500",
+                    @object_panel_mode != :place && "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"]}>
+                  Place
+                </button>
+                <button phx-click="object:set_panel_mode" phx-value-mode="edit"
+                  disabled={is_nil(@selected_object_id)}
+                  class={["flex-1 px-3 py-2 text-xs font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed",
+                    @object_panel_mode == :edit && "bg-zinc-800 text-amber-400 border-b-2 border-amber-500",
+                    @object_panel_mode != :edit && "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"]}>
+                  Edit selected
+                </button>
+              </div>
+
+              <!-- Place mode: preset grid -->
+              <div :if={@object_panel_mode == :place} class="flex-1 overflow-y-auto p-3 space-y-3">
+                <div :for={group <- ~w(LIGHT PROP DECO)}>
+                  <h4 class="text-[9px] font-bold uppercase tracking-widest text-zinc-500 mb-1">{group}</h4>
+                  <div class="grid grid-cols-3 gap-1.5">
+                    <button :for={p <- Enum.filter(object_presets(), &(&1.group == group))}
+                      phx-click="object_palette:select" phx-value-key={p.key}
+                      title={p.label}
+                      class={["flex flex-col items-center justify-center p-2 rounded border transition-colors",
+                        @active_object_preset == p.key && "bg-amber-900/40 border-amber-500",
+                        @active_object_preset != p.key && "bg-zinc-800 border-zinc-700 hover:border-zinc-600"]}>
+                      <div class="text-lg leading-none">{p.icon}</div>
+                      <div class="text-[9px] text-zinc-400 mt-0.5 truncate w-full text-center">{p.label}</div>
+                    </button>
+                  </div>
+                </div>
+                <div class="text-[10px] text-zinc-500 leading-relaxed border-t border-zinc-800 pt-2">
+                  Active: <span class="text-amber-400 font-bold">{@active_object_preset}</span>.
+                  Click on the canvas to place it.
+                </div>
+              </div>
+
+              <!-- Edit mode: inspector for selected object -->
+              <div :if={@object_panel_mode == :edit} class="flex-1 overflow-y-auto p-3 space-y-3">
+                <%= case Enum.find(@objects, &(&1.id == @selected_object_id)) do %>
+                  <% nil -> %>
+                    <div class="text-[10px] text-zinc-500 italic text-center py-4">
+                      Click an existing object on the canvas to edit it.
+                    </div>
+                  <% obj -> %>
+                    <form phx-submit="object:save_edit" class="space-y-2">
+                      <input type="hidden" name="object_id" value={obj.id} />
+                      <div>
+                        <label class="text-[9px] text-zinc-500 uppercase">Label</label>
+                        <input type="text" name="label" value={obj.label}
+                          class="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                      </div>
+                      <div>
+                        <label class="text-[9px] text-zinc-500 uppercase">Sprite (URL or preset)</label>
+                        <input type="text" name="sprite_url" value={Map.get(obj, :sprite_url, "")}
+                          placeholder="leave blank for preset icon"
+                          class="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600" />
+                      </div>
+                      <div>
+                        <label class="text-[9px] text-zinc-500 uppercase">Custom data (JSON)</label>
+                        <textarea name="data_json" rows="3"
+                          class="w-full px-2 py-1 text-[10px] font-mono bg-zinc-800 border border-zinc-700 rounded text-zinc-200">{Jason.encode!(Map.get(obj, :data, %{}) || %{})}</textarea>
+                      </div>
+                      <div class="flex items-center justify-between gap-2 pt-1">
+                        <button type="submit"
+                          class="flex-1 px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-black rounded text-xs font-bold">
+                          Save
+                        </button>
+                        <button type="button" phx-click="object:delete" phx-value-id={obj.id}
+                          data-confirm={"Delete object #{obj.label}?"}
+                          class="px-3 py-1.5 bg-rose-800 hover:bg-rose-700 text-white rounded text-xs">
+                          Delete
+                        </button>
+                      </div>
+                      <div class="text-[10px] text-zinc-500 pt-1 border-t border-zinc-800">
+                        Position: ({obj.x}, {obj.y}) · drag on canvas to move (coming soon)
+                      </div>
+                    </form>
+                <% end %>
+              </div>
+            </div>
+
+          <% :event -> %>
+            <div class="flex flex-col flex-1 overflow-hidden">
+              <!-- Place / Edit tabs -->
+              <div class="flex border-b border-zinc-800 shrink-0">
+                <button phx-click="event:set_panel_mode" phx-value-mode="place"
+                  class={["flex-1 px-3 py-2 text-xs font-bold transition-colors",
+                    @event_panel_mode == :place && "bg-zinc-800 text-amber-400 border-b-2 border-amber-500",
+                    @event_panel_mode != :place && "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"]}>
+                  Place
+                </button>
+                <button phx-click="event:set_panel_mode" phx-value-mode="edit"
+                  disabled={is_nil(@selected_event_id)}
+                  class={["flex-1 px-3 py-2 text-xs font-bold transition-colors disabled:opacity-30 disabled:cursor-not-allowed",
+                    @event_panel_mode == :edit && "bg-zinc-800 text-amber-400 border-b-2 border-amber-500",
+                    @event_panel_mode != :edit && "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"]}>
+                  Edit selected
+                </button>
+              </div>
+
+            <div :if={@event_panel_mode == :place} class="flex-1 overflow-y-auto p-3 space-y-3">
+              <div class="text-[10px] text-zinc-500 italic">
+                Click on an existing event tile to edit it, or click empty ground to place a new {@active_event_kind} event with the form values.
+              </div>
+              <!-- Kind picker with icons + descriptions -->
+              <div class="grid grid-cols-2 gap-1.5">
+                <button :for={kind <- event_kinds()}
+                  phx-click="event_palette:select" phx-value-kind={kind}
+                  title={event_kind_description(kind)}
+                  class={["flex flex-col items-start p-2 rounded border text-left transition-colors",
+                    @active_event_kind == kind && "bg-amber-900/40 border-amber-500",
+                    @active_event_kind != kind && "bg-zinc-800 border-zinc-700 hover:border-zinc-600"]}>
+                  <div class="flex items-center gap-1.5 w-full">
+                    <span>{event_kind_icon(kind)}</span>
+                    <span class={[
+                      "text-[10px] font-bold",
+                      @active_event_kind == kind && "text-amber-300",
+                      @active_event_kind != kind && "text-zinc-300"
+                    ]}>{kind}</span>
+                  </div>
+                  <div class="text-[9px] text-zinc-500 mt-0.5 leading-tight">{event_kind_description(kind)}</div>
+                </button>
+              </div>
+
+              <!-- Per-kind data form. Single form, phx-change → event:set_form_field
+                   uses _target to dispatch which field changed. -->
+              <form phx-change="event:set_form_field_form" class="border-t border-zinc-800 pt-3 space-y-2">
+                <div class="text-[9px] uppercase text-zinc-500 mb-1">{@active_event_kind} settings</div>
+
+                <%= case @active_event_kind do %>
+                  <% "TELEPORT" -> %>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Target map id</span>
+                      <input type="text" name="target_map_id" value={Map.get(@event_form, "target_map_id", "")}
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </label>
+                    <div class="grid grid-cols-2 gap-2">
+                      <label>
+                        <span class="text-[9px] text-zinc-500 uppercase">Target X</span>
+                        <input type="number" name="target_x" value={Map.get(@event_form, "target_x", "0")}
+                          class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                      </label>
+                      <label>
+                        <span class="text-[9px] text-zinc-500 uppercase">Target Y</span>
+                        <input type="number" name="target_y" value={Map.get(@event_form, "target_y", "0")}
+                          class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                      </label>
+                    </div>
+
+                  <% "LOOT" -> %>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Items table (JSON)</span>
+                      <textarea name="items_table" rows="3"
+                        class="w-full px-2 py-1 text-[10px] font-mono bg-zinc-800 border border-zinc-700 rounded text-zinc-200"
+                      >{Map.get(@event_form, "items_table", "[]")}</textarea>
+                    </label>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Respawn (seconds)</span>
+                      <input type="number" min="0" name="respawn_seconds"
+                        value={Map.get(@event_form, "respawn_seconds", "0")}
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </label>
+
+                  <% "SHOP" -> %>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Shop id</span>
+                      <input type="text" name="shop_id" value={Map.get(@event_form, "shop_id", "")}
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </label>
+
+                  <% "NPC" -> %>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">NPC template id</span>
+                      <input type="text" name="npc_template_id" value={Map.get(@event_form, "npc_template_id", "")}
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </label>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Dialogue id (optional)</span>
+                      <input type="text" name="dialogue_id" value={Map.get(@event_form, "dialogue_id", "")}
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </label>
+
+                  <% "ENEMY" -> %>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Enemy template id</span>
+                      <input type="text" name="enemy_template_id" value={Map.get(@event_form, "enemy_template_id", "")}
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </label>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Level scaling</span>
+                      <input type="number" step="0.1" min="0" name="level_scaling"
+                        value={Map.get(@event_form, "level_scaling", "1.0")}
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </label>
+
+                  <% "SCRIPT" -> %>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Script id</span>
+                      <input type="text" name="script_id" value={Map.get(@event_form, "script_id", "")}
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </label>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Params (JSON)</span>
+                      <textarea name="params" rows="3"
+                        class="w-full px-2 py-1 text-[10px] font-mono bg-zinc-800 border border-zinc-700 rounded text-zinc-200"
+                      >{Map.get(@event_form, "params", "{}")}</textarea>
+                    </label>
+
+                  <% "TERRAIN" -> %>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Terrain modifier</span>
+                      <input type="text" name="terrain_modifier"
+                        value={Map.get(@event_form, "terrain_modifier", "")}
+                        placeholder="slow / poison / heal / …"
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600" />
+                    </label>
+                    <label class="block">
+                      <span class="text-[9px] text-zinc-500 uppercase">Amount</span>
+                      <input type="number" step="0.1" name="amount"
+                        value={Map.get(@event_form, "amount", "0")}
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </label>
+
+                  <% _ -> %>
+                    <div class="text-[10px] text-zinc-500 italic">No additional fields for this kind.</div>
+                <% end %>
+              </form>
+
+              <div class="text-[10px] text-zinc-500 leading-relaxed border-t border-zinc-800 pt-2">
+                Click on the canvas to place a <span class="text-amber-400 font-bold">{@active_event_kind}</span> event with the settings above. The form values save into <code class="bg-zinc-800 px-1 rounded">events.data</code>.
+              </div>
+            </div>
+
+            <!-- Edit-selected mode: pre-populated form for the selected event -->
+            <div :if={@event_panel_mode == :edit} class="flex-1 overflow-y-auto p-3 space-y-3">
+              <%= case Enum.find(@events, &(&1.id == @selected_event_id)) do %>
+                <% nil -> %>
+                  <div class="text-[10px] text-zinc-500 italic text-center py-4">
+                    Click an existing event on the canvas to edit it.
+                  </div>
+                <% ev -> %>
+                  <div class="bg-zinc-800/50 rounded border border-zinc-700 p-2 text-[10px]">
+                    <div class="text-zinc-400">
+                      <span>{event_kind_icon(ev.kind)}</span>
+                      <span class="font-bold text-zinc-200 ml-1">{ev.kind}</span>
+                      <span class="text-zinc-500 ml-2 font-mono">at ({ev.x}, {ev.y})</span>
+                    </div>
+                  </div>
+
+                  <form phx-change="event:set_form_field_form" class="space-y-2">
+                    <div class="text-[9px] uppercase text-zinc-500 mb-1">{ev.kind} settings</div>
+
+                    <%= case ev.kind do %>
+                      <% "TELEPORT" -> %>
+                        <label class="block">
+                          <span class="text-[9px] text-zinc-500 uppercase">Target map id</span>
+                          <input type="text" name="target_map_id" value={Map.get(@event_form, "target_map_id", "")}
+                            class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+                        <div class="grid grid-cols-2 gap-2">
+                          <label>
+                            <span class="text-[9px] text-zinc-500 uppercase">Target X</span>
+                            <input type="number" name="target_x" value={Map.get(@event_form, "target_x", "0")}
+                              class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                          </label>
+                          <label>
+                            <span class="text-[9px] text-zinc-500 uppercase">Target Y</span>
+                            <input type="number" name="target_y" value={Map.get(@event_form, "target_y", "0")}
+                              class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                          </label>
+                        </div>
+
+                      <% "LOOT" -> %>
+                        <label class="block">
+                          <span class="text-[9px] text-zinc-500 uppercase">Items table (JSON)</span>
+                          <textarea name="items_table" rows="3"
+                            class="w-full px-2 py-1 text-[10px] font-mono bg-zinc-800 border border-zinc-700 rounded text-zinc-200"
+                          >{Map.get(@event_form, "items_table", "[]")}</textarea>
+                        </label>
+
+                      <% "SHOP" -> %>
+                        <label class="block">
+                          <span class="text-[9px] text-zinc-500 uppercase">Shop id</span>
+                          <input type="text" name="shop_id" value={Map.get(@event_form, "shop_id", "")}
+                            class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+
+                      <% "NPC" -> %>
+                        <label class="block">
+                          <span class="text-[9px] text-zinc-500 uppercase">NPC template id</span>
+                          <input type="text" name="npc_template_id" value={Map.get(@event_form, "npc_template_id", "")}
+                            class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+
+                      <% "ENEMY" -> %>
+                        <label class="block">
+                          <span class="text-[9px] text-zinc-500 uppercase">Enemy template id</span>
+                          <input type="text" name="enemy_template_id" value={Map.get(@event_form, "enemy_template_id", "")}
+                            class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+                        <label class="block">
+                          <span class="text-[9px] text-zinc-500 uppercase">Level scaling</span>
+                          <input type="number" step="0.1" min="0" name="level_scaling"
+                            value={Map.get(@event_form, "level_scaling", "1.0")}
+                            class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+
+                      <% "SCRIPT" -> %>
+                        <label class="block">
+                          <span class="text-[9px] text-zinc-500 uppercase">Script id</span>
+                          <input type="text" name="script_id" value={Map.get(@event_form, "script_id", "")}
+                            class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+
+                      <% "TERRAIN" -> %>
+                        <label class="block">
+                          <span class="text-[9px] text-zinc-500 uppercase">Terrain modifier</span>
+                          <input type="text" name="terrain_modifier"
+                            value={Map.get(@event_form, "terrain_modifier", "")}
+                            class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+
+                      <% _ -> %>
+                        <div class="text-[10px] text-zinc-500 italic">No additional fields for this kind.</div>
+                    <% end %>
+                  </form>
+
+                  <div class="flex items-center justify-between gap-2 pt-1 border-t border-zinc-800">
+                    <button phx-click="event:save_edit"
+                      class="flex-1 px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-black rounded text-xs font-bold">
+                      Save changes
+                    </button>
+                    <button phx-click="event:delete_selected"
+                      data-confirm={"Delete this #{ev.kind} event?"}
+                      class="px-3 py-1.5 bg-rose-800 hover:bg-rose-700 text-white rounded text-xs">
+                      Delete
+                    </button>
+                  </div>
+              <% end %>
+            </div>
+            </div>
+
+          <% :spawn -> %>
+            <div class="flex-1 overflow-y-auto p-3 space-y-3">
+              <!-- Spawn point indicator -->
+              <div class="bg-blue-950/30 border border-blue-800 rounded p-2 text-[10px]">
+                <div class="text-blue-300 font-bold mb-0.5">🎯 Spawn point</div>
+                <%= case {@map.spawn_x, @map.spawn_y} do %>
+                  <% {nil, _} -> %>
+                    <div class="text-zinc-400">Not set — click any tile to place spawn at that position.</div>
+                  <% {_, nil} -> %>
+                    <div class="text-zinc-400">Not set — click any tile to place spawn at that position.</div>
+                  <% {sx, sy} -> %>
+                    <div class="text-zinc-300">Currently at (<span class="font-mono text-amber-400">{sx}, {sy}</span>) · click another tile to move it.</div>
+                <% end %>
+              </div>
+
+              <!-- Zone list -->
+              <div>
+                <div class="text-[9px] uppercase text-zinc-500 mb-1 flex items-center justify-between">
+                  <span>Spawn zones ({length(@spawn_zones)})</span>
+                  <button phx-click="zone:arm_creation" phx-value-kind="spawn_zone"
+                    class="text-amber-500 hover:text-amber-300 text-[10px]" title="Drag a rectangle to create a zone">
+                    + New zone
+                  </button>
+                </div>
+                <div :if={@spawn_zones == []} class="text-[10px] text-zinc-600 italic py-2">No zones — click + New zone, then drag a rectangle on the canvas.</div>
+                <ul class="space-y-1">
+                  <li :for={z <- @spawn_zones}
+                    class={["rounded border text-[10px]",
+                      @selected_spawn_zone_id == z.id && "border-amber-500 bg-amber-900/10",
+                      @selected_spawn_zone_id != z.id && "border-zinc-700 bg-zinc-800/40"]}>
+                    <button phx-click="spawn:select_zone" phx-value-id={z.id}
+                      class="w-full text-left px-2 py-1.5 hover:bg-zinc-800 flex items-center justify-between gap-2">
+                      <span class="font-mono text-zinc-300">({z.rect.x1},{z.rect.y1}) → ({z.rect.x2},{z.rect.y2})</span>
+                      <span class="text-zinc-500">{length(z.encounter_table || [])} enc</span>
+                    </button>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- Selected zone editor -->
+              <%= case Enum.find(@spawn_zones, &(&1.id == @selected_spawn_zone_id)) do %>
+                <% nil -> %><span></span>
+                <% z -> %>
+                  <div class="border-t border-zinc-800 pt-3 space-y-2">
+                    <div class="text-[9px] uppercase text-zinc-500">Encounter table</div>
+                    <div :if={(z.encounter_table || []) == []} class="text-[10px] text-zinc-600 italic">
+                      No encounters yet.
+                    </div>
+                    <div :for={{row, idx} <- Enum.with_index(z.encounter_table || [])}
+                      class="bg-zinc-800/50 rounded border border-zinc-700 p-2 space-y-1">
+                      <div class="flex gap-1 items-center">
+                        <input type="text" value={Map.get(row, "npc_id", "")}
+                          phx-blur="spawn:set_encounter" phx-value-id={z.id} phx-value-row={idx} phx-value-field="npc_id"
+                          placeholder="NPC id"
+                          class="flex-1 px-1.5 py-0.5 text-[10px] bg-zinc-900 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600" />
+                        <button phx-click="spawn:remove_encounter" phx-value-id={z.id} phx-value-row={idx}
+                          class="px-1.5 py-0.5 text-[10px] text-rose-400 hover:text-rose-300">×</button>
+                      </div>
+                      <div class="grid grid-cols-3 gap-1 text-[9px] text-zinc-500">
+                        <label class="flex flex-col gap-0.5">
+                          <span>Count</span>
+                          <input type="number" min="1" value={Map.get(row, "count", 1)}
+                            phx-blur="spawn:set_encounter" phx-value-id={z.id} phx-value-row={idx} phx-value-field="count"
+                            class="px-1 py-0.5 bg-zinc-900 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+                        <label class="flex flex-col gap-0.5">
+                          <span>Weight</span>
+                          <input type="number" min="1" value={Map.get(row, "weight", 1)}
+                            phx-blur="spawn:set_encounter" phx-value-id={z.id} phx-value-row={idx} phx-value-field="weight"
+                            class="px-1 py-0.5 bg-zinc-900 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+                        <label class="flex flex-col gap-0.5">
+                          <span>Scale</span>
+                          <input type="number" min="0" step="0.1" value={Map.get(row, "level_scaling", 1.0)}
+                            phx-blur="spawn:set_encounter" phx-value-id={z.id} phx-value-row={idx} phx-value-field="level_scaling"
+                            class="px-1 py-0.5 bg-zinc-900 border border-zinc-700 rounded text-zinc-200" />
+                        </label>
+                      </div>
+                    </div>
+                    <button phx-click="spawn:add_encounter" phx-value-id={z.id}
+                      class="w-full px-2 py-1 text-[10px] bg-zinc-800 hover:bg-zinc-700 border border-dashed border-zinc-600 rounded text-zinc-300">
+                      + Add encounter
+                    </button>
+                    <div class="grid grid-cols-2 gap-1 pt-2 border-t border-zinc-800">
+                      <label class="text-[9px] text-zinc-500 flex flex-col gap-0.5">
+                        <span>Scaling factor</span>
+                        <input type="number" min="0" step="0.1" value={z.scaling_factor}
+                          phx-blur="spawn:set_field" phx-value-id={z.id} phx-value-field="scaling_factor"
+                          class="px-1.5 py-0.5 text-[10px] bg-zinc-900 border border-zinc-700 rounded text-zinc-200" />
+                      </label>
+                      <label class="text-[9px] text-zinc-500 flex flex-col gap-0.5">
+                        <span>Flag</span>
+                        <input type="text" value={z.flag}
+                          phx-blur="spawn:set_field" phx-value-id={z.id} phx-value-field="flag"
+                          class="px-1.5 py-0.5 text-[10px] bg-zinc-900 border border-zinc-700 rounded text-zinc-200" />
+                      </label>
+                      <label class="text-[9px] text-zinc-500 flex flex-col gap-0.5">
+                        <span>Cooldown (s)</span>
+                        <input type="number" min="0" step="1" value={Map.get(z, :cooldown_seconds, 30)}
+                          phx-blur="spawn:set_field" phx-value-id={z.id} phx-value-field="cooldown_seconds"
+                          class="px-1.5 py-0.5 text-[10px] bg-zinc-900 border border-zinc-700 rounded text-zinc-200" />
+                      </label>
+                      <label class="text-[9px] text-zinc-500 flex flex-col gap-0.5">
+                        <span>Max concurrent</span>
+                        <input type="number" min="1" max="50" step="1" value={Map.get(z, :max_concurrent, 4)}
+                          phx-blur="spawn:set_field" phx-value-id={z.id} phx-value-field="max_concurrent"
+                          class="px-1.5 py-0.5 text-[10px] bg-zinc-900 border border-zinc-700 rounded text-zinc-200" />
+                      </label>
+                    </div>
+                    <div class="flex items-center justify-between pt-1">
+                      <label class="flex items-center gap-1.5 text-[10px] text-zinc-400 cursor-pointer">
+                        <input type="checkbox" checked={z.enabled}
+                          phx-click="spawn:set_field" phx-value-id={z.id} phx-value-field="enabled" phx-value-value={if z.enabled, do: "false", else: "true"}
+                          class="accent-amber-500" />
+                        Enabled
+                      </label>
+                      <button phx-click="spawn_zone:delete" phx-value-id={z.id}
+                        data-confirm="Delete this spawn zone?"
+                        class="text-[10px] text-rose-500 hover:text-rose-300">
+                        Delete zone
+                      </button>
+                    </div>
+                  </div>
+              <% end %>
+            </div>
+
+          <% :sound -> %>
+            <div class="flex-1 overflow-y-auto p-3 space-y-3">
+              <div>
+                <div class="text-[9px] uppercase text-zinc-500 mb-1 flex items-center justify-between">
+                  <span>Sound zones ({length(@sound_zones)})</span>
+                  <button phx-click="zone:arm_creation" phx-value-kind="sound_zone"
+                    class="text-amber-500 hover:text-amber-300 text-[10px]" title="Drag a rectangle to create a zone">
+                    + New zone
+                  </button>
+                </div>
+                <div :if={@sound_zones == []} class="text-[10px] text-zinc-600 italic py-2">No zones — click + New zone, then drag a rectangle on the canvas.</div>
+                <ul class="space-y-1">
+                  <li :for={z <- @sound_zones}
+                    class={["rounded border text-[10px]",
+                      @selected_sound_zone_id == z.id && "border-amber-500 bg-amber-900/10",
+                      @selected_sound_zone_id != z.id && "border-zinc-700 bg-zinc-800/40"]}>
+                    <button phx-click="sound:select_zone" phx-value-id={z.id}
+                      class="w-full text-left px-2 py-1.5 hover:bg-zinc-800 flex items-center justify-between gap-2">
+                      <span class="font-mono text-zinc-300 truncate">{if z.sound_url == "", do: "(no audio)", else: short_url(z.sound_url)}</span>
+                      <span class="text-zinc-500">{trunc(z.volume * 100)}%</span>
+                    </button>
+                  </li>
+                </ul>
+              </div>
+
+              <%= case Enum.find(@sound_zones, &(&1.id == @selected_sound_zone_id)) do %>
+                <% nil -> %><span></span>
+                <% z -> %>
+                  <div class="border-t border-zinc-800 pt-3 space-y-3">
+                    <div>
+                      <label class="text-[9px] text-zinc-500 uppercase">Audio source URL</label>
+                      <input type="url" value={z.sound_url}
+                        phx-blur="sound:set_field" phx-value-id={z.id} phx-value-field="sound_url"
+                        placeholder="https://..."
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600" />
+                    </div>
+                    <div>
+                      <div class="flex items-center justify-between text-[9px] text-zinc-500 uppercase mb-1">
+                        <span>Volume</span>
+                        <span class="font-mono text-amber-400">{trunc(z.volume * 100)}%</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <form phx-change="sound:set_field" phx-value-id={z.id} phx-value-field="volume" class="flex-1">
+                          <input type="range" min="0" max="1" step="0.01" value={z.volume}
+                            name="value"
+                            class="w-full accent-amber-500" />
+                        </form>
+                        <button phx-click="sound:preview" phx-value-id={z.id}
+                          title="Preview"
+                          class="px-2 py-1 text-[10px] bg-zinc-800 hover:bg-amber-700 hover:text-black border border-zinc-700 rounded text-zinc-300">
+                          ▶
+                        </button>
+                      </div>
+                    </div>
+                    <label class="flex items-center gap-2 text-[10px] text-zinc-400 cursor-pointer">
+                      <input type="checkbox" checked={z.loop}
+                        phx-click="sound:set_field" phx-value-id={z.id} phx-value-field="loop" phx-value-value={if z.loop, do: "false", else: "true"}
+                        class="accent-amber-500" />
+                      Loop
+                    </label>
+                    <div>
+                      <label class="text-[9px] text-zinc-500 uppercase">Fade (seconds)</label>
+                      <input type="number" min="0" step="0.1" value={z.fade_seconds}
+                        phx-blur="sound:set_field" phx-value-id={z.id} phx-value-field="fade_seconds"
+                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                    </div>
+                    <div class="flex items-center justify-between pt-2 border-t border-zinc-800">
+                      <span class="text-[10px] text-zinc-500 font-mono">({z.rect.x1},{z.rect.y1}) → ({z.rect.x2},{z.rect.y2})</span>
+                      <button phx-click="sound_zone:delete" phx-value-id={z.id}
+                        data-confirm="Delete this sound zone?"
+                        class="text-[10px] text-rose-500 hover:text-rose-300">
+                        Delete zone
+                      </button>
+                    </div>
+                  </div>
+              <% end %>
+            </div>
+
+          <% :select -> %>
+            <div class="flex-1 overflow-y-auto p-3 space-y-3">
+              <%= case @select_rect do %>
+                <% nil -> %>
+                  <div class="text-[10px] text-zinc-500 italic text-center py-6 leading-relaxed">
+                    Drag on the canvas to select a region.<br/><br/>
+                    Or pick another tool to start painting.
+                  </div>
+                <% rect -> %>
+                  <div class="bg-zinc-800/50 rounded border border-zinc-700 p-2 space-y-1 text-[10px]">
+                    <div class="text-zinc-400">
+                      <span class="text-zinc-500">From:</span>
+                      <span class="font-mono text-zinc-200">({rect.x1}, {rect.y1})</span>
+                    </div>
+                    <div class="text-zinc-400">
+                      <span class="text-zinc-500">To:</span>
+                      <span class="font-mono text-zinc-200">({rect.x2}, {rect.y2})</span>
+                    </div>
+                    <div class="text-zinc-400">
+                      <span class="text-zinc-500">Size:</span>
+                      <span class="font-mono text-amber-400">{rect.x2 - rect.x1 + 1} × {rect.y2 - rect.y1 + 1}</span>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-1.5">
+                    <button phx-click="select:copy"
+                      class="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-xs text-zinc-200">
+                      Copy <span class="text-[9px] text-zinc-500 ml-1">⌘C</span>
+                    </button>
+                    <button phx-click="select:cut"
+                      class="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-xs text-zinc-200">
+                      Cut <span class="text-[9px] text-zinc-500 ml-1">⌘X</span>
+                    </button>
+                    <button phx-click="select:paste" disabled={is_nil(@select_clipboard)}
+                      class="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-xs text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed">
+                      Paste <span class="text-[9px] text-zinc-500 ml-1">⌘V</span>
+                    </button>
+                    <button phx-click="select:delete"
+                      class="px-2 py-1.5 bg-rose-900/40 hover:bg-rose-800/50 border border-rose-800 rounded text-xs text-rose-200">
+                      Delete <span class="text-[9px] text-rose-400 ml-1">⌫</span>
+                    </button>
+                  </div>
+
+                  <form phx-submit="select:save_stamp" class="border-t border-zinc-800 pt-3 space-y-1.5">
+                    <label class="text-[9px] text-zinc-500 uppercase">Save as stamp</label>
+                    <div class="flex gap-1">
+                      <input type="text" name="name" required placeholder="stamp name"
+                        class="flex-1 px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600" />
+                      <button type="submit"
+                        class="px-3 py-1 bg-amber-700 hover:bg-amber-600 text-black rounded text-xs font-bold">
+                        Save
+                      </button>
+                    </div>
+                  </form>
+
+                  <div class="text-[10px] text-zinc-500 border-t border-zinc-800 pt-2">
+                    Clipboard: <%= if is_nil(@select_clipboard), do: "empty", else: "ready" %>
+                  </div>
+              <% end %>
+            </div>
+        <% end %>
       </aside>
 
       <!-- Templates & generators modal -->
@@ -1883,6 +3209,24 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
               <input type="number" name="min_level" step="1" min="1" value="1"
                 class="w-full mt-1 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
             </label>
+            <%!-- Phase 1.5e — Fog of War per-map controls. Uses the
+                  existing `fog_of_war` column (tinyint, default 0).
+                  Capability `:fog_of_war` must also be ON globally
+                  for fog to actually render. ambient_visibility 0 =
+                  pitch black outside vision; 1+ = N tiles of passive
+                  terrain visible at the edge of fog. --%>
+            <fieldset class="border border-zinc-800 rounded p-2 space-y-2">
+              <legend class="text-[10px] uppercase tracking-wider text-amber-400/70 px-1">Fog of War</legend>
+              <label class="flex items-center gap-2">
+                <input type="checkbox" name="fog_of_war" value="1" checked={Map.get(@map, :fog_of_war, false) == true} />
+                <span class="text-zinc-400">Fog enabled on this map</span>
+              </label>
+              <label class="block">
+                <span class="text-zinc-400">Ambient visibility (tiles past vision)</span>
+                <input type="number" name="ambient_visibility" step="1" min="0" max="5" value={Map.get(@map, :ambient_visibility, 0)}
+                  class="w-full mt-1 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+              </label>
+            </fieldset>
             <label class="block">
               <span class="text-zinc-400">Description</span>
               <textarea name="description" rows="3"
@@ -1924,41 +3268,23 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
             <fieldset>
               <legend class="text-zinc-400 mb-1">Anchor</legend>
               <div class="grid grid-cols-3 gap-1 w-32">
-                <label class="flex items-center justify-center h-8 bg-zinc-800 border border-zinc-700 rounded cursor-pointer hover:bg-zinc-700">
-                  <input type="radio" name="anchor" value="tl" class="hidden peer" />
-                  <span class="text-zinc-500 peer-checked:text-amber-400">↖</span>
-                </label>
-                <label class="flex items-center justify-center h-8 bg-zinc-800 border border-zinc-700 rounded cursor-pointer hover:bg-zinc-700">
-                  <input type="radio" name="anchor" value="t" class="hidden peer" disabled />
-                  <span class="text-zinc-700">·</span>
-                </label>
-                <label class="flex items-center justify-center h-8 bg-zinc-800 border border-zinc-700 rounded cursor-pointer hover:bg-zinc-700">
-                  <input type="radio" name="anchor" value="tr" class="hidden peer" />
-                  <span class="text-zinc-500 peer-checked:text-amber-400">↗</span>
-                </label>
-                <label class="flex items-center justify-center h-8 bg-zinc-800 border border-zinc-700 rounded cursor-pointer hover:bg-zinc-700">
-                  <input type="radio" name="anchor" value="l" class="hidden peer" disabled />
-                  <span class="text-zinc-700">·</span>
-                </label>
-                <label class="flex items-center justify-center h-8 bg-zinc-800 border border-zinc-700 rounded cursor-pointer hover:bg-zinc-700">
-                  <input type="radio" name="anchor" value="center" class="hidden peer" checked />
-                  <span class="text-zinc-500 peer-checked:text-amber-400">●</span>
-                </label>
-                <label class="flex items-center justify-center h-8 bg-zinc-800 border border-zinc-700 rounded cursor-pointer hover:bg-zinc-700">
-                  <input type="radio" name="anchor" value="r" class="hidden peer" disabled />
-                  <span class="text-zinc-700">·</span>
-                </label>
-                <label class="flex items-center justify-center h-8 bg-zinc-800 border border-zinc-700 rounded cursor-pointer hover:bg-zinc-700">
-                  <input type="radio" name="anchor" value="bl" class="hidden peer" />
-                  <span class="text-zinc-500 peer-checked:text-amber-400">↙</span>
-                </label>
-                <label class="flex items-center justify-center h-8 bg-zinc-800 border border-zinc-700 rounded cursor-pointer hover:bg-zinc-700">
-                  <input type="radio" name="anchor" value="b" class="hidden peer" disabled />
-                  <span class="text-zinc-700">·</span>
-                </label>
-                <label class="flex items-center justify-center h-8 bg-zinc-800 border border-zinc-700 rounded cursor-pointer hover:bg-zinc-700">
-                  <input type="radio" name="anchor" value="br" class="hidden peer" />
-                  <span class="text-zinc-500 peer-checked:text-amber-400">↘</span>
+                <label
+                  :for={{value, glyph, disabled?} <- [
+                        {"tl", "↖", false}, {"t", "·", true},  {"tr", "↗", false},
+                        {"l",  "·", true},  {"center", "●", false}, {"r",  "·", true},
+                        {"bl", "↙", false}, {"b", "·", true},  {"br", "↘", false}
+                      ]}
+                  class={[
+                    "flex items-center justify-center h-8 rounded border transition-colors",
+                    disabled? && "bg-zinc-900 border-zinc-800 cursor-not-allowed",
+                    !disabled? && "bg-zinc-800 border-zinc-700 cursor-pointer hover:bg-zinc-700 has-[:checked]:bg-amber-950/40 has-[:checked]:border-amber-500"
+                  ]}>
+                  <input type="radio" name="anchor" value={value} class="sr-only peer"
+                    disabled={disabled?} checked={value == "center"} />
+                  <span class={[
+                    disabled? && "text-zinc-700",
+                    !disabled? && "text-zinc-600 peer-checked:text-amber-400 peer-checked:font-bold"
+                  ]}>{glyph}</span>
                 </label>
               </div>
             </fieldset>
@@ -1972,53 +3298,8 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
         </div>
       </div>
 
-      <!-- Object palette modal -->
-      <div :if={@object_palette_open} class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"
-           phx-click="object_palette:close">
-        <div class="w-[680px] max-h-[80vh] bg-zinc-900 border border-zinc-700 rounded-lg flex flex-col overflow-hidden"
-             phx-click-away="object_palette:close">
-          <div class="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-            <h3 class="text-sm font-bold text-amber-400">Object Palette — 25 presets</h3>
-            <button phx-click="object_palette:close" class="text-zinc-500 hover:text-zinc-200 text-lg">✕</button>
-          </div>
-          <div class="flex-1 overflow-y-auto p-4 space-y-4">
-            <div :for={group <- ~w(LIGHT PROP DECO)}>
-              <h4 class="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">{group}</h4>
-              <div class="grid grid-cols-5 gap-2">
-                <button :for={p <- Enum.filter(object_presets(), &(&1.group == group))}
-                  phx-click="object_palette:select" phx-value-key={p.key}
-                  class={["p-2 rounded border text-center transition-colors",
-                    @active_object_preset == p.key && "bg-amber-900/40 border-amber-500",
-                    @active_object_preset != p.key && "bg-zinc-800 hover:bg-zinc-700 border-zinc-700"]}>
-                  <div class="text-xl">{p.icon}</div>
-                  <div class="text-[10px] text-zinc-400 mt-0.5">{p.label}</div>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Event palette modal -->
-      <div :if={@event_palette_open} class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"
-           phx-click="event_palette:close">
-        <div class="w-[440px] bg-zinc-900 border border-zinc-700 rounded-lg flex flex-col overflow-hidden"
-             phx-click-away="event_palette:close">
-          <div class="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-            <h3 class="text-sm font-bold text-amber-400">Event Kind</h3>
-            <button phx-click="event_palette:close" class="text-zinc-500 hover:text-zinc-200 text-lg">✕</button>
-          </div>
-          <div class="p-4 grid grid-cols-2 gap-2">
-            <button :for={kind <- event_kinds()}
-              phx-click="event_palette:select" phx-value-kind={kind}
-              class={["px-3 py-2 text-xs rounded border transition-colors",
-                @active_event_kind == kind && "bg-amber-900/40 border-amber-500 text-amber-300",
-                @active_event_kind != kind && "bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-300"]}>
-              {kind}
-            </button>
-          </div>
-        </div>
-      </div>
+      <!-- Phase 2A: Object/Event palette modals retired — now inline in
+           the right-side panel via @right_panel_kind = :object | :event. -->
 
       <!-- Cell inspector / object & event list (right of canvas, slides over palette) -->
       <div :if={@inspector_open} class="absolute left-4 bottom-4 w-64 bg-zinc-900/95 border border-zinc-700 rounded-lg shadow-xl text-xs z-30 max-h-[40vh] overflow-y-auto">
@@ -2252,28 +3533,87 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
         </div>
       </div>
 
-      <!-- Version history modal -->
+      <!-- History drawer (Phase 2B: op log instead of snapshot list) -->
       <div :if={@history_open} class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center"
            phx-click="history:close">
-        <div class="w-[640px] max-h-[80vh] bg-zinc-900 border border-zinc-700 rounded-lg flex flex-col overflow-hidden"
+        <div class="w-[720px] max-h-[80vh] bg-zinc-900 border border-zinc-700 rounded-lg flex flex-col overflow-hidden"
              phx-click-away="history:close">
           <div class="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-            <h3 class="text-sm font-bold text-amber-400">Version History — {@map.name}</h3>
+            <div>
+              <h3 class="text-sm font-bold text-amber-400">Op History — {@map.name}</h3>
+              <p class="text-[10px] text-zinc-500 mt-0.5">
+                head_seq <span class="font-mono text-zinc-300">{Map.get(@map, :head_seq, "?")}</span>
+                · {length(@history_versions)} most-recent ops shown
+                · inverted ops are skipped during replay
+              </p>
+            </div>
             <button phx-click="history:close" class="text-zinc-500 hover:text-zinc-200 text-lg">✕</button>
           </div>
+
+          <!-- Time-scrub slider — drag to preview state at any sequence -->
+          <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-950/50 space-y-2">
+            <div class="flex items-center justify-between text-[10px]">
+              <span class={[@scrub_active && "text-amber-400 font-bold", !@scrub_active && "text-zinc-500"]}>
+                <%= if @scrub_active, do: "🕒 Previewing at seq #{@scrub_seq}", else: "Live state" %>
+              </span>
+              <div class="flex items-center gap-2">
+                <span :if={@scrub_active && @new_ops_since_scrub > 0}
+                  class="px-1.5 py-0.5 bg-emerald-700/40 border border-emerald-500 text-emerald-200 rounded text-[10px] font-bold animate-pulse"
+                  title="Other editors have appended ops while you were scrubbing">
+                  +{@new_ops_since_scrub} new
+                </span>
+                <button :if={@scrub_active} phx-click="history:scrub_reset"
+                  class="text-[10px] text-zinc-400 hover:text-zinc-200 underline">
+                  Reset to head
+                </button>
+                <button :if={@scrub_active && @scrub_seq < Map.get(@map, :head_seq, 0)}
+                  phx-click="history:restore_to_seq" phx-value-seq={@scrub_seq}
+                  data-confirm={"Mark all ops with seq > #{@scrub_seq} as inverted? This is reversible per-op via Redo, but affects many rows."}
+                  class="px-2 py-0.5 text-[10px] bg-rose-900/40 hover:bg-rose-800 text-rose-200 rounded">
+                  Restore to here
+                </button>
+              </div>
+            </div>
+            <form phx-change="history:scrub" class="flex items-center gap-2">
+              <span class="text-[9px] text-zinc-600 font-mono w-6 text-right">0</span>
+              <input type="range" min="0" max={Map.get(@map, :head_seq, 0)}
+                value={if @scrub_active, do: @scrub_seq, else: Map.get(@map, :head_seq, 0)}
+                name="value" step="1"
+                class="flex-1 accent-amber-500" />
+              <span class="text-[9px] text-zinc-600 font-mono w-12">{Map.get(@map, :head_seq, 0)}</span>
+            </form>
+          </div>
+
           <div class="flex-1 overflow-y-auto">
             <div :if={@history_versions == []} class="p-6 text-center text-zinc-500 text-xs">
-              No version history yet. Save the map to create the first snapshot.
+              No ops logged yet. Paint or place something to start the history.
             </div>
             <ul class="divide-y divide-zinc-800">
-              <li :for={v <- @history_versions} class="px-4 py-2 flex items-center justify-between hover:bg-zinc-800/50">
-                <div>
-                  <div class="text-xs text-zinc-200 font-mono">v{v.version_num} — {v.label}</div>
-                  <div class="text-[10px] text-zinc-500">{v.at} · {v.by}</div>
+              <li :for={op <- @history_versions}
+                class={["px-4 py-2 flex items-center justify-between gap-3 transition-colors",
+                  op.inverted && "opacity-50 bg-rose-950/10",
+                  !op.inverted && "hover:bg-zinc-800/50"]}>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2 text-xs">
+                    <span class="font-mono text-zinc-500 shrink-0">#{op.sequence}</span>
+                    <span class={["px-1.5 py-0.5 rounded text-[10px] font-bold uppercase shrink-0",
+                      op_type_color(op.op_type)]}>{op.op_type}</span>
+                    <span class="text-zinc-300 truncate">{op_summary(op)}</span>
+                  </div>
+                  <div class="text-[10px] text-zinc-500 mt-0.5">
+                    {op.user_name || "(system)"} · <span class="font-mono">{format_op_timestamp(op.created_at)}</span>
+                    <span :if={op.inverted} class="ml-2 text-rose-400 font-bold">[inverted]</span>
+                  </div>
                 </div>
-                <button phx-click="history:restore" phx-value-version_id={v.id}
-                  class="px-2 py-1 text-[10px] bg-amber-700 hover:bg-amber-600 text-black rounded font-bold">
-                  Restore
+                <button :if={!op.inverted} phx-click="history:undo_op" phx-value-op_id={op.op_id}
+                  title="Mark this op as inverted — replay will skip it"
+                  class="px-2 py-1 text-[10px] bg-zinc-800 hover:bg-rose-800 hover:text-white text-zinc-300 rounded shrink-0">
+                  Undo
+                </button>
+                <button :if={op.inverted} phx-click="history:redo_op" phx-value-op_id={op.op_id}
+                  title="Re-apply this op"
+                  class="px-2 py-1 text-[10px] bg-zinc-800 hover:bg-emerald-700 hover:text-white text-zinc-300 rounded shrink-0">
+                  Redo
                 </button>
               </li>
             </ul>
@@ -2309,13 +3649,13 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
       {id, _} when id > 0 ->
         case Repo.query(
                """
-               SELECT id, name, width, height, tiles_json, layers_json, schema_version, render_mode
+               SELECT id, name, width, height, tiles_json, layers_json, schema_version, render_mode, spawn_x, spawn_y
                FROM game_maps
                WHERE id = ?
                """,
                [id]
              ) do
-          {:ok, %{rows: [[id, name, w, h, tiles_json, layers_json, schema_v, render_mode]]}} ->
+          {:ok, %{rows: [[id, name, w, h, tiles_json, layers_json, schema_v, render_mode, spawn_x, spawn_y]]}} ->
             layers = parse_layers(layers_json, tiles_json, w, h)
 
             {:ok,
@@ -2326,7 +3666,9 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
                height: h,
                render_mode: render_mode || "classic",
                schema_version: schema_v || 1,
-               layers: layers
+               layers: layers,
+               spawn_x: spawn_x,
+               spawn_y: spawn_y
              }}
 
           _ ->
@@ -2338,19 +3680,26 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
     end
   end
 
-  defp parse_layers(layers_json, _tiles_json, _w, _h) when is_binary(layers_json) and layers_json != "" do
+  defp parse_layers(layers_json, _tiles_json, w, h) when is_binary(layers_json) and layers_json != "" do
     case Jason.decode(layers_json) do
       {:ok, %{"layers" => layers}} when is_map(layers) ->
+        # Pad each layer to mapWidth*mapHeight. Without this, a map with
+        # an empty/short layer in JSON would silently no-op every paint
+        # (List.replace_at on an empty list returns []), leaving the
+        # unsaved flag flipped but no tile change. Caught by JARVIS in
+        # the T2 verification — paint dispatched but nothing visible.
+        size = max(w, 1) * max(h, 1)
+
         %{
-          "ground" => Map.get(layers, "ground", []),
-          "overlay" => Map.get(layers, "overlay", []),
-          "passability" => Map.get(layers, "passability", []),
-          "fringe" => Map.get(layers, "fringe", []),
-          "elevation" => Map.get(layers, "elevation", [])
+          "ground" => ensure_len(Map.get(layers, "ground", []), size, 0),
+          "overlay" => ensure_len(Map.get(layers, "overlay", []), size, -1),
+          "passability" => ensure_len(Map.get(layers, "passability", []), size, 0),
+          "fringe" => ensure_len(Map.get(layers, "fringe", []), size, -1),
+          "elevation" => ensure_len(Map.get(layers, "elevation", []), size, 0)
         }
 
       _ ->
-        empty_layers(1, 1)
+        empty_layers(w, h)
     end
   end
 
@@ -2401,16 +3750,18 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
     }
   end
 
-  defp ensure_len(list, target) when is_list(list) do
+  defp ensure_len(list, target), do: ensure_len(list, target, 0)
+
+  defp ensure_len(list, target, fill) when is_list(list) do
     cur = length(list)
     cond do
       cur == target -> list
       cur > target -> Enum.take(list, target)
-      true -> list ++ List.duplicate(0, target - cur)
+      true -> list ++ List.duplicate(fill, target - cur)
     end
   end
 
-  defp ensure_len(_, target), do: List.duplicate(0, target)
+  defp ensure_len(_, target, fill), do: List.duplicate(fill, target)
 
   # ── Tools ──────────────────────────────────────────────────
 
@@ -2471,33 +3822,225 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
   defp layer_names, do: ~w(ground overlay fringe passability elevation)
 
-  # Default 64-tile palette. Mirrors DEFAULT_TILE_COLORS in
-  # packages/render/src/renderer.ts for named tiles and fills the rest with
-  # a synthesized HSL spread so every slot is pickable.
+  # Default 64-tile palette. Names + hex tuned for the dark Celtic fantasy
+  # aesthetic — natural terrain (8–23), masonry (24–31), wood/vegetation
+  # (32–39), cave/underworld (40–47), magical (48–55), structural (56–63).
+  # Mirrors DEFAULT_TILE_COLORS in packages/render/src/renderer.ts for the
+  # subset of tiles the renderer needs at boot.
+  @tile_palette [
+    # 0–7 — base terrain (legacy fixed)
+    {0, "grass",          "#2e5d31"},
+    {1, "stone",          "#3a3a3a"},
+    {2, "dirt",           "#3a2a0a"},
+    {3, "water",          "#1e3a5f"},
+    {4, "wood",           "#7a5a2a"},
+    {5, "cobble",         "#8a8a8a"},
+    {6, "cave",           "#2a2a2a"},
+    {7, "void",           "#1a1a1a"},
+    # 8–23 — natural terrain
+    {8,  "sand",          "#c9b27a"},
+    {9,  "snow",          "#e8edf2"},
+    {10, "ice",           "#a4c8e0"},
+    {11, "mud",           "#4a3520"},
+    {12, "lava",          "#c1331a"},
+    {13, "ash",           "#5a544f"},
+    {14, "tall grass",    "#4a7a3a"},
+    {15, "heather",       "#8a5d8a"},
+    {16, "moss",          "#3a5a30"},
+    {17, "bog",           "#3d3823"},
+    {18, "peat",          "#2b1f10"},
+    {19, "mire",          "#3a3a25"},
+    {20, "shallows",      "#3d6385"},
+    {21, "ocean",         "#14304f"},
+    {22, "river",         "#2d5478"},
+    {23, "rapids",        "#5a8aaa"},
+    # 24–31 — stone & masonry
+    {24, "marble",        "#d6d2c8"},
+    {25, "slate",         "#4a525a"},
+    {26, "brick",         "#813833"},
+    {27, "granite",       "#6d6e72"},
+    {28, "sandstone",     "#b08a5a"},
+    {29, "ruined cobble", "#5a574d"},
+    {30, "ancient brick", "#5d3329"},
+    {31, "dolmen",        "#3a3530"},
+    # 32–39 — wood & vegetation
+    {32, "planks",        "#6e4a25"},
+    {33, "oak floor",     "#855e2e"},
+    {34, "bark",          "#4a311a"},
+    {35, "roots",         "#2d2010"},
+    {36, "bramble",       "#4a3a3a"},
+    {37, "fern",          "#3d6535"},
+    {38, "thorns",        "#2a1f1a"},
+    {39, "ivy",           "#2d5025"},
+    # 40–47 — cave & underworld
+    {40, "bone",          "#d8d0b8"},
+    {41, "blood earth",   "#4a1c1c"},
+    {42, "gore",          "#6e1c1c"},
+    {43, "cinder",        "#1f1a18"},
+    {44, "ember",         "#b8501a"},
+    {45, "shadow",        "#15131a"},
+    {46, "void rift",     "#1a0d2a"},
+    {47, "blight",        "#3a3520"},
+    # 48–55 — magic & rune
+    {48, "rune",          "#6a5aa0"},
+    {49, "ward",          "#5a8a90"},
+    {50, "ley line",      "#80c0e8"},
+    {51, "crystal",       "#8aa8d0"},
+    {52, "amethyst",      "#7a4ab0"},
+    {53, "emerald moss",  "#1a6a4a"},
+    {54, "faerie ring",   "#d090b8"},
+    {55, "ogham stone",   "#5a5040"},
+    # 56–63 — structural & decorative
+    {56, "trapdoor",      "#3a2515"},
+    {57, "stairs up",     "#6a5a4a"},
+    {58, "stairs down",   "#2a1f15"},
+    {59, "pit",           "#050505"},
+    {60, "spike",         "#8a8a90"},
+    {61, "torch ground",  "#c08a35"},
+    {62, "bridge plank",  "#5a4530"},
+    {63, "doorstep",      "#4a4035"}
+  ]
+
   defp palette do
-    named = %{
-      0 => {"grass", "#2e5d31"},
-      1 => {"stone", "#3a3a3a"},
-      2 => {"dirt", "#3a2a0a"},
-      3 => {"water", "#1e3a5f"},
-      4 => {"wood", "#7a5a2a"},
-      5 => {"cobble", "#8a8a8a"},
-      6 => {"cave", "#2a2a2a"},
-      7 => {"void", "#1a1a1a"}
-    }
-
-    for id <- 0..63 do
-      case Map.get(named, id) do
-        {label, hex} -> %{id: id, label: label, color: hex}
-        nil -> %{id: id, label: "tile #{id}", color: hsl_for(id)}
-      end
-    end
+    Enum.map(@tile_palette, fn {id, label, color} ->
+      %{id: id, label: label, color: color}
+    end)
   end
 
-  defp hsl_for(id) do
-    hue = rem(id * 137, 360)
-    "hsl(#{hue}, 45%, 40%)"
+  # ── Right-panel-kind dispatch ──────────────────────────────
+  #
+  # Phase 2A: the right-side aside reshapes per the active tool. Painting
+  # tools all share the tile palette; tools that have their own deep
+  # config (object/event/zones/etc.) get a panel dedicated to that tool.
+  defp right_panel_kind(tool) when tool in ~w(brush fill rect eraser eyedrop), do: :tile_palette
+  defp right_panel_kind("passability"), do: :pass
+  defp right_panel_kind("autotile"), do: :auto
+  defp right_panel_kind("elevation"), do: :elev
+  defp right_panel_kind("object"), do: :object
+  defp right_panel_kind("event"), do: :event
+  defp right_panel_kind("spawn_zone"), do: :spawn
+  defp right_panel_kind("sound_zone"), do: :sound
+  defp right_panel_kind("select"), do: :select
+  defp right_panel_kind(_), do: :tile_palette
+
+  defp panel_title(:tile_palette), do: "Tile Palette"
+  defp panel_title(:pass), do: "Passability"
+  defp panel_title(:auto), do: "Autotile"
+  defp panel_title(:elev), do: "Elevation"
+  defp panel_title(:object), do: "Objects"
+  defp panel_title(:event), do: "Events"
+  defp panel_title(:spawn), do: "Spawn Zones"
+  defp panel_title(:sound), do: "Sound Zones"
+  defp panel_title(:select), do: "Selection"
+
+  defp panel_icon(:tile_palette), do: "🎨"
+  defp panel_icon(:pass), do: "⛔"
+  defp panel_icon(:auto), do: "🧩"
+  defp panel_icon(:elev), do: "⛰️"
+  defp panel_icon(:object), do: "🪵"
+  defp panel_icon(:event), do: "✨"
+  defp panel_icon(:spawn), do: "🐾"
+  defp panel_icon(:sound), do: "🔊"
+  defp panel_icon(:select), do: "⬚"
+
+  # Default event form payload per kind. The form persists into events.data
+  # JSON column when the user clicks the canvas with the Event tool.
+  defp default_event_form("TELEPORT"), do: %{"target_map_id" => "", "target_x" => "0", "target_y" => "0"}
+  defp default_event_form("LOOT"), do: %{"items_table" => "[]", "respawn_seconds" => "0"}
+  defp default_event_form("SHOP"), do: %{"shop_id" => ""}
+  defp default_event_form("NPC"), do: %{"npc_template_id" => "", "dialogue_id" => ""}
+  defp default_event_form("ENEMY"), do: %{"enemy_template_id" => "", "level_scaling" => "1.0"}
+  defp default_event_form("SCRIPT"), do: %{"script_id" => "", "params" => "{}"}
+  defp default_event_form("TERRAIN"), do: %{"terrain_modifier" => "", "amount" => "0"}
+  defp default_event_form(_), do: %{}
+
+  defp event_kind_icon("TELEPORT"), do: "🌀"
+  defp event_kind_icon("LOOT"), do: "💰"
+  defp event_kind_icon("SHOP"), do: "🛒"
+  defp event_kind_icon("NPC"), do: "👤"
+  defp event_kind_icon("ENEMY"), do: "⚔️"
+  defp event_kind_icon("SCRIPT"), do: "📜"
+  defp event_kind_icon("TERRAIN"), do: "🌫"
+  defp event_kind_icon(_), do: "✨"
+
+  defp event_kind_description("TELEPORT"), do: "Move player to another map/coords"
+  defp event_kind_description("LOOT"), do: "Pickable items + respawn"
+  defp event_kind_description("SHOP"), do: "Open a vendor's inventory"
+  defp event_kind_description("NPC"), do: "Talk-to actor + dialogue"
+  defp event_kind_description("ENEMY"), do: "Hostile encounter trigger"
+  defp event_kind_description("SCRIPT"), do: "Custom Visual Script"
+  defp event_kind_description("TERRAIN"), do: "Damage/heal/slow zone"
+  defp event_kind_description(_), do: ""
+
+  # Compact a URL for display in the sound-zone list (drop scheme, trim).
+  defp short_url(""), do: ""
+  defp short_url(nil), do: ""
+
+  defp short_url(url) when is_binary(url) do
+    trimmed =
+      url
+      |> String.replace_prefix("https://", "")
+      |> String.replace_prefix("http://", "")
+
+    if String.length(trimmed) > 28, do: String.slice(trimmed, 0, 25) <> "…", else: trimmed
   end
+
+  # ── History drawer formatting (Phase 2B) ────────────────────────
+
+  defp op_type_color("paint_tile"), do: "bg-amber-900/40 text-amber-300"
+  defp op_type_color("rect"), do: "bg-amber-800/40 text-amber-200"
+  defp op_type_color("fill"), do: "bg-orange-800/40 text-orange-200"
+  defp op_type_color("stamp"), do: "bg-violet-800/40 text-violet-200"
+  defp op_type_color("place_object"), do: "bg-emerald-800/40 text-emerald-200"
+  defp op_type_color("delete_object"), do: "bg-rose-900/40 text-rose-200"
+  defp op_type_color("place_event"), do: "bg-cyan-800/40 text-cyan-200"
+  defp op_type_color("delete_event"), do: "bg-rose-900/40 text-rose-200"
+  defp op_type_color("replace_layers"), do: "bg-zinc-700 text-zinc-200"
+  defp op_type_color("seed_from_snapshot"), do: "bg-zinc-700 text-zinc-300"
+  defp op_type_color("set_property"), do: "bg-blue-800/40 text-blue-200"
+  defp op_type_color(_), do: "bg-zinc-800 text-zinc-400"
+
+  defp op_summary(%{op_type: "paint_tile", patch: %{"layer" => layer, "x" => x, "y" => y, "id" => id}}),
+    do: "#{layer} (#{x},#{y}) ← tile #{id}"
+
+  defp op_summary(%{op_type: "rect", patch: %{"layer" => layer, "value" => v, "cells" => cells}}),
+    do: "#{layer} ← #{v} × #{length(cells)} cells"
+
+  defp op_summary(%{op_type: "fill", patch: %{"layer" => layer, "value" => v, "cells" => cells}}),
+    do: "fill #{layer} #{v} × #{length(cells)}"
+
+  defp op_summary(%{op_type: "stamp", patch: %{"layer" => layer, "x" => x, "y" => y}}),
+    do: "stamp on #{layer} at (#{x},#{y})"
+
+  defp op_summary(%{op_type: "place_object", patch: %{"object" => o}}),
+    do: "place #{Map.get(o, "preset", "object")} at (#{Map.get(o, "x", "?")},#{Map.get(o, "y", "?")})"
+
+  defp op_summary(%{op_type: "delete_object", patch: %{"object_id" => id}}),
+    do: "delete object #{String.slice(to_string(id), 0, 8)}"
+
+  defp op_summary(%{op_type: "place_event", patch: %{"event" => ev}}),
+    do: "place #{Map.get(ev, "kind", "event")} at (#{Map.get(ev, "x", "?")},#{Map.get(ev, "y", "?")})"
+
+  defp op_summary(%{op_type: "replace_layers"}),
+    do: "full save (legacy bulk save)"
+
+  defp op_summary(%{op_type: "seed_from_snapshot"}),
+    do: "root snapshot (history seed)"
+
+  defp op_summary(%{op_type: "set_property", patch: %{"field" => f, "new" => v}}),
+    do: "#{f} → #{inspect(v)}"
+
+  defp op_summary(%{op_type: type}), do: "(#{type})"
+
+  defp format_op_timestamp(nil), do: ""
+
+  defp format_op_timestamp(%NaiveDateTime{} = ts),
+    do: Calendar.strftime(ts, "%Y-%m-%d %H:%M:%S")
+
+  defp format_op_timestamp(%DateTime{} = ts),
+    do: Calendar.strftime(ts, "%Y-%m-%d %H:%M:%S")
+
+  defp format_op_timestamp(other), do: to_string(other)
 
   # ── Autotile ───────────────────────────────────────────────
   #
@@ -2742,7 +4285,11 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
   defp clamp(v, lo, hi), do: v |> max(lo) |> min(hi)
 
-  defp empty_value_for(layer) when layer in ["ground", "elevation", "passability"], do: 0
+  # Empty-cell sentinel per layer.
+  #   ground  → -1 (matches overlay/fringe; renderer falls back to zinc).
+  #   elevation/passability → 0 (real numeric defaults — flat ground, walkable).
+  defp empty_value_for("ground"), do: -1
+  defp empty_value_for(layer) when layer in ["elevation", "passability"], do: 0
   defp empty_value_for(_), do: -1
 
   defp snapshot_region(map, layer, %{x1: x1, y1: y1, x2: x2, y2: y2}) do
@@ -2995,22 +4542,31 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
   defp normalize_op_value(_, v), do: v
 
+  # Phase 2B: route through Te.Game.MapOps so each op gets a monotonic
+  # `sequence` per map (used by replay + history drawer + auto-snapshot).
+  # The legacy table column layout is unchanged — Ops.append/5 hits the
+  # same `game_map_ops_log` table.
   defp persist_op(map_id, op) do
-    Repo.query(
-      """
-      INSERT IGNORE INTO game_map_ops_log
-        (map_id, op_id, op_type, patch_json, author_id, author_name)
-      VALUES (?, ?, ?, ?, ?, ?)
-      """,
-      [map_id, op.op_id, op.op_type, Jason.encode!(op), nil, "editor"]
+    user_id = Map.get(op, :user_id) || Map.get(op, "user_id")
+
+    TePhoenix.Game.MapOps.append(
+      map_id,
+      op.op_id,
+      op.op_type,
+      op,
+      user_id: user_id,
+      user_name: Map.get(op, :user_name) || "editor"
     )
   end
 
-  defp broadcast_op(map_id, op) do
+  # Broadcast a freshly-applied op to all peers on this map. `record` is
+  # the persisted MapOps row (or nil if persist failed); `originator_id` is
+  # the editor_id that produced the op so receivers can skip their own.
+  defp broadcast_op(map_id, op, record, originator_id) do
     Phoenix.PubSub.broadcast(
       TePhoenix.PubSub,
       "map:#{map_id}:editor",
-      {:remote_editor_op, op}
+      {:remote_editor_op, %{patch: op, record: record, originator_id: originator_id}}
     )
   end
 
@@ -3216,6 +4772,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
         "map:zones",
         zones_payload(socket.assigns, socket.assigns.spawn_zones, socket.assigns.sound_zones)
       )
+      |> push_event("map:spawn", %{x: map.spawn_x, y: map.spawn_y})
     else
       socket
     end
@@ -3302,23 +4859,6 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
       "p" -> "passability"
       _ -> nil
     end
-  end
-
-  defp list_map_versions(map_id) do
-    case Repo.query(
-           "SELECT id, version_num, label, created_by, created_at FROM game_map_versions WHERE map_id = ? ORDER BY version_num DESC LIMIT 20",
-           [map_id]
-         ) do
-      {:ok, %{rows: rows}} ->
-        Enum.map(rows, fn [id, num, label, by, at] ->
-          %{id: id, version_num: num, label: label || "", by: by || "", at: to_string(at)}
-        end)
-
-      _ ->
-        []
-    end
-  rescue
-    _ -> []
   end
 
   # ── Templates / stamps / resize / properties ────────────────
@@ -3426,12 +4966,24 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   end
 
   defp persist_map_properties(map_id, params) do
+    # Phase 1.5e — make sure the fog columns exist before we try to
+    # write them. ensure_schema is persistent_term-cached so this is
+    # a single :ets read after the first call.
+    TePhoenix.Game.Fog.ensure_schema()
+
+    # Checkboxes only submit when checked. Coerce missing fog_of_war
+    # to "0" so unchecking actually persists. The generic filter
+    # below drops nil/"" but accepts "0".
+    fog_flag = params["fog_of_war"] || "0"
+
     raw_fields = [
       {"render_mode", :render_mode, :string, params["render_mode"]},
       {"tileset_url", :tileset_url, :string, params["tileset_url"]},
       {"ambient_dark", :ambient_dark, :float, params["ambient_dark"]},
       {"min_level", :min_level, :int, params["min_level"]},
-      {"description", :description, :string, params["description"]}
+      {"description", :description, :string, params["description"]},
+      {"fog_of_war", :fog_of_war, :int, fog_flag},
+      {"ambient_visibility", :ambient_visibility, :int, params["ambient_visibility"]}
     ]
 
     fields =
@@ -3880,7 +5432,10 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
       encounter_table: z["encounter_table"] || [],
       scaling_factor: z["scaling_factor"] || 1.0,
       flag: z["flag"] || "",
-      enabled: z["enabled"] != false
+      enabled: z["enabled"] != false,
+      # 2A.5/E3 additions:
+      cooldown_seconds: z["cooldown_seconds"] || 30,
+      max_concurrent: z["max_concurrent"] || 4
     }
   end
 
@@ -4017,7 +5572,18 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
 
   defp parse_int_list(_), do: []
 
-  defp zones_payload(_assigns, spawn_zones, sound_zones) do
+  defp zones_payload(assigns, spawn_zones, sound_zones) do
+    selected =
+      cond do
+        assigns[:selected_spawn_zone_id] -> %{kind: "spawn", id: assigns.selected_spawn_zone_id}
+        assigns[:selected_sound_zone_id] -> %{kind: "sound", id: assigns.selected_sound_zone_id}
+        true -> nil
+      end
+
+    do_zones_payload(spawn_zones, sound_zones, selected)
+  end
+
+  defp do_zones_payload(spawn_zones, sound_zones, selected) do
     %{
       spawn_zones:
         Enum.map(spawn_zones, fn z ->
@@ -4036,7 +5602,8 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
             loop: z.loop,
             fade_seconds: z.fade_seconds
           }
-        end)
+        end),
+      selected: selected
     }
   end
 
@@ -4081,4 +5648,407 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
         {:error, :not_found}
     end
   end
+  # ── Helpers grouped here (Tier α + 2A/2B) ──
+  # Moved out of the handle_event/handle_tool_click/handle_info clusters
+  # so the compiler sees those clauses contiguously. Pure relocation;
+  # no behavior change. Originally interleaved for topical reading.
+
+  defp refresh_after_op_toggle(socket, status) do
+    map = socket.assigns.map
+    replayed = replay_map_state(map)
+
+    updated_map = %{map | layers: replayed.layers}
+    new_objects = replayed.objects
+    new_events = replayed.events
+
+    ops =
+      TePhoenix.Game.MapOps.list(map.id, include_inverted: true)
+      |> Enum.reverse()
+      |> Enum.take(200)
+
+    socket
+    |> assign(:map, updated_map)
+    |> assign(:objects, new_objects)
+    |> assign(:events, new_events)
+    |> assign(:history_versions, ops)
+    |> assign(:save_status, status)
+    |> push_event("map:state", render_state(updated_map, %{socket.assigns | objects: new_objects, events: new_events}))
+  end
+
+  # ── 2B.2: Debounced field-op buffer ─────────────────────────────
+  #
+  # Continuous edits (slider drag, text typing) call record_field_edit/4
+  # which captures the FIRST edit's prev value and resets a 500ms timer.
+  # On flush, ONE op is appended carrying session_start_value as `prev`
+  # and the latest current_value as `new`. Net: no log flooding, full
+  # undo fidelity (prev value matches what the user saw before editing).
+  @debounce_ms 500
+
+  defp record_field_edit(socket, key, prev_value, new_value) do
+    pending = socket.assigns[:pending_field_ops] || %{}
+    new_ref = Process.send_after(self(), {:flush_field_op, key}, @debounce_ms)
+
+    entry =
+      case Map.get(pending, key) do
+        nil ->
+          %{session_start_value: prev_value, current_value: new_value, timer_ref: new_ref}
+
+        %{timer_ref: old_ref} = existing ->
+          Process.cancel_timer(old_ref)
+          %{existing | current_value: new_value, timer_ref: new_ref}
+      end
+
+    assign(socket, :pending_field_ops, Map.put(pending, key, entry))
+  end
+
+  # Force-flush any pending edit for `key` immediately (used by drag-release
+  # paths and tool-switches that should commit an in-flight session).
+  defp flush_field_op(socket, key) do
+    case Map.get(socket.assigns[:pending_field_ops] || %{}, key) do
+      nil ->
+        socket
+
+      %{timer_ref: ref} = entry ->
+        Process.cancel_timer(ref)
+        commit_field_edit(socket, key, entry)
+    end
+  end
+
+  # Flush every pending entry. Used on tool change / drawer close so
+  # nothing lingers as a half-committed op.
+  defp flush_all_field_ops(socket) do
+    pending = socket.assigns[:pending_field_ops] || %{}
+
+    Enum.reduce(pending, socket, fn {key, _entry}, acc -> flush_field_op(acc, key) end)
+  end
+
+  defp commit_field_edit(socket, {kind, target_id, field}, entry) do
+    pending = Map.delete(socket.assigns[:pending_field_ops] || %{}, {kind, target_id, field})
+
+    if entry.session_start_value == entry.current_value do
+      # Net no-op (user typed and reverted, or value identical) — drop.
+      assign(socket, :pending_field_ops, pending)
+    else
+      payload = field_op_payload(kind, target_id, field, entry)
+
+      socket
+      |> append_phase2a_op(field_op_type(kind), payload)
+      |> assign(:pending_field_ops, pending)
+    end
+  end
+
+  defp field_op_type(:spawn), do: "edit_spawn_zone"
+  defp field_op_type(:sound), do: "edit_sound_zone"
+  defp field_op_type(:object), do: "edit_object"
+  defp field_op_type(:event), do: "edit_event"
+  defp field_op_type(:spawn_encounter), do: "edit_spawn_encounter"
+
+  defp field_op_payload(kind, target_id, field, entry) when kind in [:spawn, :sound] do
+    %{
+      "zone_id" => target_id,
+      "fields" => %{field => entry.current_value},
+      "prev_fields" => %{field => entry.session_start_value}
+    }
+  end
+
+  defp field_op_payload(:object, target_id, field, entry) do
+    %{
+      "object_id" => target_id,
+      "fields" => %{field => entry.current_value},
+      "prev_fields" => %{field => entry.session_start_value}
+    }
+  end
+
+  defp field_op_payload(:event, target_id, field, entry) do
+    %{
+      "event_id" => target_id,
+      "fields" => %{field => entry.current_value},
+      "prev_fields" => %{field => entry.session_start_value}
+    }
+  end
+
+  defp field_op_payload(:spawn_encounter, target_id, field, entry) do
+    [zone_id, row_idx_str] = String.split(target_id, ":", parts: 2)
+
+    %{
+      "zone_id" => zone_id,
+      "row" => to_int(row_idx_str),
+      "field" => field,
+      "new" => entry.current_value,
+      "prev" => entry.session_start_value
+    }
+  end
+
+  # Append a Phase 2A op to the log. Doesn't broadcast (broadcasting is
+  # for collaborative live-share via PubSub; these ops are local mutations
+  # whose effect is already pushed via map:state). Returns the socket
+  # unchanged on append failure (we never want a logging hiccup to abort
+  # an editor mutation).
+  defp append_phase2a_op(socket, op_type, payload) do
+    map_id = socket.assigns.map.id
+
+    TePhoenix.Game.MapOps.append(
+      map_id,
+      object_id(),
+      op_type,
+      payload,
+      user_id: socket.assigns[:editor_id],
+      user_name: "editor"
+    )
+
+    socket
+  end
+
+  # Replay all non-inverted ops for a map onto a blank base. Used by
+  # undo/redo and the time-scrub slider.
+  defp replay_map_state(map, opts \\ []) do
+    base = %{
+      width: map.width,
+      height: map.height,
+      layers: %{
+        "ground" => List.duplicate(-1, map.width * map.height),
+        "overlay" => List.duplicate(-1, map.width * map.height),
+        "passability" => List.duplicate(0, map.width * map.height),
+        "fringe" => List.duplicate(-1, map.width * map.height),
+        "elevation" => List.duplicate(0, map.width * map.height)
+      },
+      objects: [],
+      events: [],
+      properties: %{}
+    }
+
+    TePhoenix.Game.MapOps.replay(map.id, base, opts)
+  end
+
+  # ── Templates / generators ───────────────────────────────────
+
+  defp apply_zone_rect_update(socket, :spawn, id, rect) do
+    {prev, zones} =
+      Enum.map_reduce(socket.assigns.spawn_zones, nil, fn z, acc ->
+        if z.id == id, do: {%{z | rect: rect}, z.rect}, else: {z, acc}
+      end)
+
+    persist_spawn_zones(socket.assigns.map.id, prev)
+
+    socket =
+      socket
+      |> append_phase2a_op("edit_spawn_zone", %{
+        "zone_id" => id,
+        "fields" => %{"rect" => rect},
+        "prev_fields" => %{"rect" => zones}
+      })
+      |> assign(:spawn_zones, prev)
+
+    {:noreply,
+     push_event(socket, "map:zones", zones_payload(socket.assigns, prev, socket.assigns.sound_zones))}
+  end
+
+  defp apply_zone_rect_update(socket, :sound, id, rect) do
+    {prev, zones} =
+      Enum.map_reduce(socket.assigns.sound_zones, nil, fn z, acc ->
+        if z.id == id, do: {%{z | rect: rect}, z.rect}, else: {z, acc}
+      end)
+
+    persist_sound_zones(socket.assigns.map.id, prev)
+
+    socket =
+      socket
+      |> append_phase2a_op("edit_sound_zone", %{
+        "zone_id" => id,
+        "fields" => %{"rect" => rect},
+        "prev_fields" => %{"rect" => zones}
+      })
+      |> assign(:sound_zones, prev)
+
+    {:noreply,
+     push_event(socket, "map:zones", zones_payload(socket.assigns, socket.assigns.spawn_zones, prev))}
+  end
+
+  defp read_spawn_field(nil, _field), do: nil
+  defp read_spawn_field(z, "scaling_factor"), do: z.scaling_factor
+  defp read_spawn_field(z, "flag"), do: z.flag
+  defp read_spawn_field(z, "enabled"), do: z.enabled
+  defp read_spawn_field(z, "cooldown_seconds"), do: Map.get(z, :cooldown_seconds, 30)
+  defp read_spawn_field(z, "max_concurrent"), do: Map.get(z, :max_concurrent, 4)
+  defp read_spawn_field(_, _), do: nil
+
+  defp normalize_spawn_field("scaling_factor", v), do: parse_float(v, 1.0)
+  defp normalize_spawn_field("flag", v), do: v
+  defp normalize_spawn_field("enabled", v), do: v in ["true", "on", true]
+  defp normalize_spawn_field("cooldown_seconds", v), do: to_int(v) |> max(0)
+  defp normalize_spawn_field("max_concurrent", v), do: to_int(v) |> max(1) |> min(50)
+  defp normalize_spawn_field(_, v), do: v
+
+  defp write_spawn_field(z, "scaling_factor", v), do: %{z | scaling_factor: v}
+  defp write_spawn_field(z, "flag", v), do: %{z | flag: v}
+  defp write_spawn_field(z, "enabled", v), do: %{z | enabled: v}
+  defp write_spawn_field(z, "cooldown_seconds", v), do: Map.put(z, :cooldown_seconds, v)
+  defp write_spawn_field(z, "max_concurrent", v), do: Map.put(z, :max_concurrent, v)
+  defp write_spawn_field(z, _, _), do: z
+
+  defp read_sound_field(nil, _field), do: nil
+  defp read_sound_field(z, "sound_url"), do: z.sound_url
+  defp read_sound_field(z, "volume"), do: z.volume
+  defp read_sound_field(z, "loop"), do: z.loop
+  defp read_sound_field(z, "fade_seconds"), do: z.fade_seconds
+  defp read_sound_field(_, _), do: nil
+
+  defp normalize_sound_field("sound_url", v), do: v
+  defp normalize_sound_field("volume", v), do: parse_float(v, 0.6) |> max(0.0) |> min(1.0)
+  defp normalize_sound_field("loop", v), do: v in ["true", "on", true]
+  defp normalize_sound_field("fade_seconds", v), do: parse_float(v, 1.0) |> max(0.0)
+  defp normalize_sound_field(_, v), do: v
+
+  defp write_sound_field(z, "sound_url", v), do: %{z | sound_url: v}
+  defp write_sound_field(z, "volume", v), do: %{z | volume: v}
+  defp write_sound_field(z, "loop", v), do: %{z | loop: v}
+  defp write_sound_field(z, "fade_seconds", v), do: %{z | fade_seconds: v}
+  defp write_sound_field(z, _, _), do: z
+
+  # D10: spawn-as-fixed-start-tile. Persists the (x,y) on the map row.
+  # Playmode movement updates the transient :play_x/:play_y assigns and
+  # MUST NEVER touch :spawn_x/:spawn_y. See test in test/te_phoenix_web/
+  # live/admin/map_editor_spawn_test.exs.
+  defp normalize_encounter_value("count", v), do: to_int(v) |> max(1)
+  defp normalize_encounter_value("weight", v), do: to_int(v) |> max(1)
+  defp normalize_encounter_value("level_scaling", v), do: parse_float(v, 1.0)
+  defp normalize_encounter_value(_, v), do: v
+
+  # Form-based event-form update. The form posts every named field; we use
+  # _target to know which field changed, then update only that one.
+  defp handle_zone_tool_click(zone_tool, x, y, socket) when zone_tool in ["spawn_zone", "sound_zone"] do
+    case socket.assigns.zone_anchor do
+      nil ->
+        {:noreply,
+         socket
+         |> assign(:zone_anchor, {x, y, zone_tool})
+         |> push_event("edit:set_preview", %{kind: "rect", anchor: %{x: x, y: y}})}
+
+      {ax, ay, ^zone_tool} ->
+        rect = %{
+          x1: min(ax, x),
+          y1: min(ay, y),
+          x2: max(ax, x),
+          y2: max(ay, y)
+        }
+
+        {:noreply,
+         socket
+         |> assign(:zone_anchor, nil)
+         |> assign(:zone_creation_armed, false)
+         |> assign(:pending_zone, %{kind: zone_tool, rect: rect})
+         |> push_event("edit:set_preview", %{kind: nil})}
+
+      _stale ->
+        {:noreply, assign(socket, :zone_anchor, {x, y, zone_tool})}
+    end
+  end
+
+  # Shared between handle_event("set_spawn", ...) and handle_tool_click("spawn_zone", ...).
+  defp handle_set_spawn(x, y, socket) do
+    map = socket.assigns.map
+    sx = max(0, min(x, map.width - 1))
+    sy = max(0, min(y, map.height - 1))
+
+    case Repo.query("UPDATE game_maps SET spawn_x = ?, spawn_y = ? WHERE id = ?", [sx, sy, map.id]) do
+      {:ok, _} ->
+        updated_map = %{map | spawn_x: sx, spawn_y: sy}
+
+        {:noreply,
+         socket
+         |> append_phase2a_op("set_spawn", %{
+           "x" => sx,
+           "y" => sy,
+           "prev_x" => map.spawn_x,
+           "prev_y" => map.spawn_y
+         })
+         |> assign(:map, updated_map)
+         |> assign(:save_status, "Spawn set to (#{sx}, #{sy})")
+         |> push_event("map:spawn", %{x: sx, y: sy})}
+
+      {:error, _} ->
+        {:noreply, assign(socket, :save_status, "Failed to update spawn")}
+    end
+  end
+
+  defp place_new_event(x, y, socket) do
+    event = %{
+      id: object_id(),
+      x: x,
+      y: y,
+      kind: socket.assigns.active_event_kind,
+      script_id: nil,
+      data: socket.assigns[:event_form] || %{}
+    }
+
+    events = [event | socket.assigns.events]
+    persist_map_events(socket.assigns.map.id, events)
+
+    {:noreply,
+     socket
+     |> append_phase2a_op("place_event", %{"event" => event})
+     |> assign(:events, events)
+     |> assign(:dirty?, true)
+     |> assign(:event_picker_target, event.id)
+     |> push_event("map:events", %{events: events})}
+  end
+
+  defp apply_remote_msg(%{patch: patch, record: record}, socket) do
+    case apply_remote_op(socket.assigns.map, patch) do
+      {:ok, updated_map} ->
+        # Bump head_seq to the incoming sequence (if greater).
+        new_head =
+          case record do
+            %{sequence: s} -> max(s, updated_map[:head_seq] || 0)
+            _ -> updated_map[:head_seq] || 0
+          end
+
+        socket =
+          socket
+          |> assign(:map, Map.put(updated_map, :head_seq, new_head))
+          |> push_event("map:state", render_state(updated_map, socket.assigns))
+
+        socket = maybe_refresh_history_drawer(socket, record)
+
+        {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # If the History drawer is open, prepend the new op to the visible list.
+  # If the user is time-scrubbing back, don't auto-scroll past their cursor —
+  # bump :new_ops_since_scrub so the drawer can show a "+N new" badge.
+  defp maybe_refresh_history_drawer(socket, nil), do: socket
+
+  defp maybe_refresh_history_drawer(socket, record) do
+    if Map.get(socket.assigns, :history_open) do
+      drawer_op = %{
+        op_id: record.op_id,
+        op_type: record.op_type,
+        sequence: record.sequence,
+        patch: record.patch,
+        user_name: record.user_name,
+        inverted: false,
+        created_at: record[:created_at] || NaiveDateTime.utc_now()
+      }
+
+      versions = [drawer_op | List.wrap(socket.assigns[:history_versions])] |> Enum.take(200)
+
+      cond do
+        Map.get(socket.assigns, :scrub_active) ->
+          assign(socket,
+            history_versions: versions,
+            new_ops_since_scrub: (socket.assigns[:new_ops_since_scrub] || 0) + 1
+          )
+
+        true ->
+          assign(socket, :history_versions, versions)
+      end
+    else
+      socket
+    end
+  end
+
 end

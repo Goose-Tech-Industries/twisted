@@ -9,6 +9,8 @@ defmodule TePhoenixWeb.UserSocket do
   channel "raid:*", TePhoenixWeb.RaidChannel
   channel "battle_ref:*", TePhoenixWeb.BattleRefChannel
   channel "player:*", TePhoenixWeb.PlayerChannel
+  channel "party:*", TePhoenixWeb.PartyChannel
+  channel "guild:*", TePhoenixWeb.GuildChannel
 
   @impl true
   def connect(%{"token" => token}, socket, _connect_info) do

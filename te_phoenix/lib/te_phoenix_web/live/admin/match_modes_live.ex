@@ -3,11 +3,18 @@ defmodule TePhoenixWeb.Admin.MatchModesLive do
   use TePhoenixWeb, :live_view
 
   alias TePhoenix.Matches.Registry
+  alias TePhoenixWeb.Components.PowerUserField
+  alias TePhoenixWeb.Components.RuleTreeBuilder
+  alias TePhoenixWeb.Components.RuleSchemas.MatchMode
 
   @queue_types ~w(casual ranked custom)
 
   @impl true
   def mount(_params, _session, socket) do
+    user_id = socket.assigns[:session_user_id]
+    role_weight = PowerUserField.role_weight_for(socket.assigns[:session_role])
+    field_views = PowerUserField.load_field_views(user_id)
+
     {:ok,
      socket
      |> assign(:active_tab, :gameplay)
@@ -15,7 +22,12 @@ defmodule TePhoenixWeb.Admin.MatchModesLive do
      |> assign(:modes, Registry.list_all() |> Enum.sort_by(& &1.key))
      |> assign(:editing, nil)
      |> assign(:flash_msg, nil)
-     |> assign(:queue_types, @queue_types)}
+     |> assign(:queue_types, @queue_types)
+     |> assign(:role_weight, role_weight)
+     |> assign(:field_views, field_views)
+     |> assign(:settings_schema, MatchMode.settings_schema())
+     |> assign(:win_condition_schema, MatchMode.win_condition_schema())
+     |> assign(:rewards_schema, MatchMode.rewards_schema())}
   end
 
   @impl true
@@ -27,7 +39,21 @@ defmodule TePhoenixWeb.Admin.MatchModesLive do
           <h1 class="text-xl font-bold text-amber-400">Match Modes</h1>
           <p class="text-xs text-zinc-500 mt-1"><%= length(@modes) %> modes. Queue, lobby, match lifecycle — all data-driven.</p>
         </div>
-        <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">+ New Mode</button>
+        <div class="flex items-center gap-2">
+          <.live_component
+            module={TePhoenixWeb.Components.AiAssist}
+            id="ai-match-win"
+            feature_key="match_win_condition"
+            user_id={@session_user_id}
+            role={@session_role}
+            role_weight={@role_weight}
+            trigger_label="✨ Suggest mode"
+            context={%{
+              before_value: (@editing && (@editing["win_conditions_json"] || "")) || ""
+            }}
+            on_accept={Phoenix.LiveView.JS.push("ai:apply_match_suggestion")} />
+          <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">+ New Mode</button>
+        </div>
       </header>
 
       <div :if={@flash_msg} class="mb-4 p-3 bg-emerald-900/40 border border-emerald-700 text-emerald-200 text-sm rounded"><%= @flash_msg %></div>
@@ -75,18 +101,73 @@ defmodule TePhoenixWeb.Admin.MatchModesLive do
             <textarea name="description" rows="2" class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"><%= @editing["description"] %></textarea>
           </label>
           <div class="grid grid-cols-2 gap-3">
-            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="match_win" field_name="win_conditions_json" schema={:match_win_condition} label="Win Condition" value={@editing["win_conditions_json"]} />
-            <.live_component module={TePhoenixWeb.Components.RuleBuilder} id="match_rewards" field_name="rewards_json" schema={:match_rewards} label="Rewards" value={@editing["rewards_json"]} />
+            <PowerUserField.power_user_field
+              label="Win Condition"
+              help_text="How the match resolves — elimination, score target, time limit, objective capture."
+              form_id="match_mode"
+              field_name="win_conditions_json"
+              user_id={@session_user_id}
+              role_weight={@role_weight}
+              view={Map.get(@field_views, "match_mode.win_conditions_json", "structured")}>
+              <:structured>
+                <RuleTreeBuilder.rule_tree_builder
+                  kind={:condition_tree}
+                  schema={@win_condition_schema}
+                  field_name="win_conditions_json"
+                  value={@editing["win_conditions_json"]} />
+              </:structured>
+              <:raw>
+                <textarea name="win_conditions_json" rows="3"
+                  class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["win_conditions_json"] %></textarea>
+              </:raw>
+            </PowerUserField.power_user_field>
+
+            <PowerUserField.power_user_field
+              label="Rewards"
+              help_text="XP, gold, rank points awarded per match outcome."
+              form_id="match_mode"
+              field_name="rewards_json"
+              user_id={@session_user_id}
+              role_weight={@role_weight}
+              view={Map.get(@field_views, "match_mode.rewards_json", "structured")}>
+              <:structured>
+                <RuleTreeBuilder.rule_tree_builder
+                  kind={:action_list}
+                  schema={@rewards_schema}
+                  field_name="rewards_json"
+                  value={@editing["rewards_json"]} />
+              </:structured>
+              <:raw>
+                <textarea name="rewards_json" rows="3"
+                  class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["rewards_json"] %></textarea>
+              </:raw>
+            </PowerUserField.power_user_field>
           </div>
           <div class="grid grid-cols-2 gap-3">
             <label class="block">
               <span class="text-xs text-zinc-400">Map Pool (comma-separated map IDs)</span>
               <input name="map_pool_json" value={@editing["map_pool_json"]} class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono" />
             </label>
-            <label class="block">
-              <span class="text-xs text-zinc-400">Settings JSON (advanced)</span>
-              <textarea name="settings_json" rows="2" class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["settings_json"] %></textarea>
-            </label>
+            <PowerUserField.power_user_field
+              label="Settings"
+              help_text="Asymmetric, ranked, queue threshold, lobby timeout, rewards. Add an action per setting."
+              form_id="match_mode"
+              field_name="settings_json"
+              user_id={@session_user_id}
+              role_weight={@role_weight}
+              view={Map.get(@field_views, "match_mode.settings_json", "structured")}>
+              <:structured>
+                <RuleTreeBuilder.rule_tree_builder
+                  kind={:action_list}
+                  schema={@settings_schema}
+                  field_name="settings_json"
+                  value={@editing["settings_json"]} />
+              </:structured>
+              <:raw>
+                <textarea name="settings_json" rows="3"
+                  class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs font-mono"><%= @editing["settings_json"] %></textarea>
+              </:raw>
+            </PowerUserField.power_user_field>
           </div>
           <div class="flex gap-2 pt-2">
             <button type="submit" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">Save</button>
@@ -143,6 +224,48 @@ defmodule TePhoenixWeb.Admin.MatchModesLive do
     d = from_form(params)
     Registry.upsert(d)
     {:noreply, socket |> assign(:editing, nil) |> assign(:modes, Registry.list_all() |> Enum.sort_by(& &1.key)) |> assign(:flash_msg, "Saved #{d.key}")}
+  end
+
+  # Tier α infrastructure events
+  def handle_event("rb:" <> _ = ev, params, socket),
+    do: RuleTreeBuilder.dispatch(ev, params, socket, assign: :editing)
+
+  def handle_event("power_user_field:toggle", params, socket),
+    do: PowerUserField.handle_toggle(params, socket)
+
+  # AI Assist accept — merge suggestion into current editing state
+  def handle_event("ai:apply_match_suggestion", %{"suggestion" => json}, socket) do
+    editing = socket.assigns.editing || blank()
+
+    new_editing =
+      case Jason.decode(json) do
+        {:ok, %{} = parsed} ->
+          editing
+          |> apply_if(parsed, "name", "name")
+          |> apply_if(parsed, "description", "description")
+          |> apply_if(parsed, "win_conditions_json", "win_conditions")
+          |> apply_if(parsed, "rewards_json", "rewards")
+          |> apply_if(parsed, "settings_json", "settings")
+
+        _ ->
+          Map.put(editing, "description", json)
+      end
+
+    {:noreply,
+     socket
+     |> assign(:editing, new_editing)
+     |> assign(:flash_msg, "AI suggestion applied — review and Save to commit.")}
+  end
+
+  def handle_event("ai:apply_match_suggestion", _, socket), do: {:noreply, socket}
+
+  defp apply_if(editing, parsed, target_key, source_key) do
+    case Map.get(parsed, source_key) do
+      nil -> editing
+      "" -> editing
+      val when is_binary(val) -> Map.put(editing, target_key, val)
+      val -> Map.put(editing, target_key, Jason.encode!(val))
+    end
   end
 
   defp blank do

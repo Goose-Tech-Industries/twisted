@@ -16,9 +16,22 @@ defmodule TePhoenixWeb.Admin.HubCrudComponents do
     <div>
       <div class="flex items-center justify-between mb-6">
         <h2 class="text-2xl font-bold text-amber-400">{@hub_title}</h2>
-        <button phx-click="new" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded-lg text-sm transition">
-          + New {@tab_label}
-        </button>
+        <div class="flex items-center gap-2">
+          <%= if feature_key = Map.get(assigns[:ai_features] || %{}, @tab) do %>
+            <.live_component
+              module={TePhoenixWeb.Components.AiAssist}
+              id={"ai-hub-" <> @tab}
+              feature_key={feature_key}
+              user_id={Map.get(assigns, :session_user_id)}
+              role={Map.get(assigns, :session_role)}
+              trigger_label={"✨ Suggest " <> String.downcase(@tab_label)}
+              context={%{before_value: ""}}
+              on_accept={Phoenix.LiveView.JS.push("ai:apply_hub_suggestion")} />
+          <% end %>
+          <button phx-click="new" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded-lg text-sm transition">
+            + New {@tab_label}
+          </button>
+        </div>
       </div>
 
       <%!-- Tab Bar --%>
@@ -89,6 +102,25 @@ defmodule TePhoenixWeb.Admin.HubCrudComponents do
               <td :for={col <- @columns}
                 class="px-3 py-2 text-sm text-zinc-300 max-w-[200px] truncate whitespace-nowrap">{format_cell(row[col])}</td>
               <td class="px-3 py-2 flex gap-2 sticky right-0 bg-zinc-900">
+                <%!-- Phase 1.5b: per-tab Test Craft button — only renders
+                     for the recipes tab. Designers verify a recipe's
+                     wiring without grinding a test character. --%>
+                <button :if={@tab == "game_craft_recipes"}
+                  phx-click="test_craft" phx-value-id={row["id"]}
+                  class="text-xs text-emerald-500 hover:text-emerald-400 font-medium"
+                  title="Run this recipe against a test character (skips level/learned gates)">
+                  Test Craft
+                </button>
+                <%!-- Phase 1.5d: per-tab Test Cast button — only renders
+                     for the spells tab. Force-unlocks oghams + skips
+                     anam/cooldown so designers can verify effect_json
+                     without prepping a test character. --%>
+                <button :if={@tab == "game_spells"}
+                  phx-click="test_cast" phx-value-id={row["id"]}
+                  class="text-xs text-violet-400 hover:text-violet-300 font-medium"
+                  title="Cast this spell against a test target (force-unlocks oghams, skips anam/cooldown)">
+                  Test Cast
+                </button>
                 <button phx-click="edit" phx-value-id={row["id"]} class="text-xs text-amber-500 hover:text-amber-400 font-medium">Edit</button>
                 <button phx-click="delete" phx-value-id={row["id"]} data-confirm={"Delete ##{row["id"]}?"}
                   class="text-xs text-red-500 hover:text-red-400">Del</button>

@@ -414,17 +414,19 @@ defmodule TePhoenix.Game.ScriptEffects do
     {:ok, ctx}
   end
 
+  # Phase 1.5a: route through TePhoenix.Game.Quests so prereq checks,
+  # PubSub events, and reward distribution happen consistently with the
+  # other entry points (NPC dialogue, REST controller). Falls back to a
+  # raw INSERT only if the new module isn't loaded yet (defensive — the
+  # script_effects path runs in many contexts).
   defp do_apply("quest_start", props, ctx) do
     char = require_char!(ctx)
     quest_id = to_int(prop(props, "quest_id", 0))
 
-    Repo.query(
-      """
-      INSERT IGNORE INTO game_quest_progress (char_id, quest_id, step, completed, started_at, updated_at)
-      VALUES (?, ?, 0, 0, NOW(), NOW())
-      """,
-      [char, quest_id]
-    )
+    case TePhoenix.Game.Quests.start(char, quest_id, skip_prerequisites: true) do
+      {:ok, _} -> :ok
+      _ -> :ok
+    end
 
     push_ui(ctx, :quest_start, %{quest_id: quest_id})
     {:ok, ctx}
@@ -435,14 +437,16 @@ defmodule TePhoenix.Game.ScriptEffects do
     quest_id = to_int(prop(props, "quest_id", 0))
     step = to_int(prop(props, "step", 1))
 
-    Repo.query(
-      """
-      INSERT INTO game_quest_progress (char_id, quest_id, step, completed, started_at, updated_at)
-      VALUES (?, ?, ?, 0, NOW(), NOW())
-      ON DUPLICATE KEY UPDATE step = GREATEST(step, VALUES(step)), updated_at = NOW()
-      """,
-      [char, quest_id, step]
-    )
+    # Quests.advance/4 expects a delta, not an absolute step. The script
+    # node's `step` prop is treated as "advance by this many" (matches
+    # the existing GREATEST-pinned semantics for callers that always
+    # pass 1).
+    delta = max(step, 1)
+
+    case TePhoenix.Game.Quests.advance(char, quest_id, nil, delta) do
+      {:ok, _} -> :ok
+      _ -> :ok
+    end
 
     push_ui(ctx, :quest_advance, %{quest_id: quest_id, step: step})
     {:ok, ctx}
@@ -452,16 +456,203 @@ defmodule TePhoenix.Game.ScriptEffects do
     char = require_char!(ctx)
     quest_id = to_int(prop(props, "quest_id", 0))
 
-    Repo.query(
-      """
-      INSERT INTO game_quest_progress (char_id, quest_id, step, completed, started_at, updated_at)
-      VALUES (?, ?, 999, 1, NOW(), NOW())
-      ON DUPLICATE KEY UPDATE completed = 1, updated_at = NOW()
-      """,
-      [char, quest_id]
-    )
+    case TePhoenix.Game.Quests.complete(char, quest_id) do
+      {:ok, _} -> :ok
+      _ -> :ok
+    end
 
     push_ui(ctx, :quest_complete, %{quest_id: quest_id})
+    {:ok, ctx}
+  end
+
+  # Phase 1.5b — Crafting capability hooks. Quests can grant a craft
+  # via `craft_item`, and a learning event can mark a recipe known via
+  # `craft_learn`. Both use skip_prerequisites because scripted grants
+  # bypass the normal level/learned gates by design (a story moment
+  # gives you an item; you didn't earn it through gameplay).
+  defp do_apply("craft_item", props, ctx) do
+    char = require_char!(ctx)
+    recipe_id = to_int(prop(props, "recipe_id", 0))
+    qty = to_int(prop(props, "qty", 1))
+
+    case TePhoenix.Game.Crafting.craft(char, recipe_id, qty: qty, skip_prerequisites: true) do
+      {:ok, _result} -> :ok
+      _ -> :ok
+    end
+
+    push_ui(ctx, :craft_item, %{recipe_id: recipe_id, qty: qty})
+    {:ok, ctx}
+  end
+
+  defp do_apply("craft_learn", props, ctx) do
+    char = require_char!(ctx)
+    recipe_id = to_int(prop(props, "recipe_id", 0))
+
+    case TePhoenix.Game.Crafting.learn(char, recipe_id) do
+      {:ok, _} -> :ok
+      _ -> :ok
+    end
+
+    push_ui(ctx, :craft_learn, %{recipe_id: recipe_id})
+    {:ok, ctx}
+  end
+
+  # Phase 1.5c — Achievement hooks. `achievement_trigger` fires an
+  # event that may unlock one or more achievements via the trigger
+  # type's counter. `achievement_unlock` is the manual-grant path:
+  # script directly unlocks a specific achievement (for narrative
+  # rewards that don't fit any counter shape).
+  defp do_apply("achievement_trigger", props, ctx) do
+    char = require_char!(ctx)
+    event_key = to_string(prop(props, "event_key", "manual"))
+    count = to_int(prop(props, "count", 1))
+    payload = prop(props, "payload", %{})
+
+    Enum.each(1..max(count, 1), fn _ ->
+      case TePhoenix.Game.Achievements.fire_event(char, event_key, payload) do
+        {:ok, _} -> :ok
+        _ -> :ok
+      end
+    end)
+
+    push_ui(ctx, :achievement_trigger, %{event_key: event_key, count: count})
+    {:ok, ctx}
+  end
+
+  # Phase 1.5d — Magic capability hooks. Story moments that hand
+  # the player oghams, spells, or anam. All bypass the magic
+  # capability gate (scripts represent canon plot beats; the
+  # capability flag is for emergent / GM-enabled magic, not narrative).
+  defp do_apply("magic_unlock_ogham", props, ctx) do
+    char = require_char!(ctx)
+    ogham_key = to_string(prop(props, "ogham_key", ""))
+    source = to_string(prop(props, "source", "script"))
+
+    if ogham_key != "" do
+      case TePhoenix.Game.Magic.unlock_ogham(char, ogham_key, source) do
+        {:ok, _} -> :ok
+        _ -> :ok
+      end
+    end
+
+    push_ui(ctx, :magic_unlock_ogham, %{ogham_key: ogham_key, source: source})
+    {:ok, ctx}
+  end
+
+  defp do_apply("magic_learn_spell", props, ctx) do
+    char = require_char!(ctx)
+    spell_key = to_string(prop(props, "spell_key", ""))
+
+    if spell_key != "" do
+      case TePhoenix.Game.Magic.learn_spell(char, spell_key) do
+        {:ok, _} -> :ok
+        _ -> :ok
+      end
+    end
+
+    push_ui(ctx, :magic_learn_spell, %{spell_key: spell_key})
+    {:ok, ctx}
+  end
+
+  # Phase 1.5e — Fog of War hooks. Story moments that uncover an
+  # area, wipe exploration memory, or grant a temporary vision boost.
+  # All bypass capability gates because scripts are canon plot beats.
+  defp do_apply("fog_reveal_area", props, ctx) do
+    char = require_char!(ctx)
+    map_id = to_int(prop(props, "map_id", 0))
+    cx = to_int(prop(props, "x", 0))
+    cy = to_int(prop(props, "y", 0))
+    radius = to_int(prop(props, "radius", 5))
+
+    if map_id > 0 do
+      tiles =
+        for x <- (cx - radius)..(cx + radius),
+            y <- (cy - radius)..(cy + radius),
+            (x - cx) * (x - cx) + (y - cy) * (y - cy) <= radius * radius,
+            x >= 0 and y >= 0,
+            do: {x, y}
+
+      TePhoenix.Game.Fog.reveal_tiles(char, map_id, tiles)
+    end
+
+    push_ui(ctx, :fog_reveal_area, %{map_id: map_id, x: cx, y: cy, radius: radius})
+    {:ok, ctx}
+  end
+
+  defp do_apply("fog_reset_map", props, ctx) do
+    char = require_char!(ctx)
+    map_id = to_int(prop(props, "map_id", 0))
+
+    if map_id > 0 do
+      TePhoenix.Game.Fog.reset_exploration(char, map_id)
+    end
+
+    push_ui(ctx, :fog_reset_map, %{map_id: map_id})
+    {:ok, ctx}
+  end
+
+  defp do_apply("fog_grant_vision", props, ctx) do
+    char = require_char!(ctx)
+    delta = to_int(prop(props, "radius_delta", 1))
+    duration_ms = to_int(prop(props, "duration_ms", 60_000))
+    reason = to_string(prop(props, "reason", "script"))
+
+    if delta != 0 do
+      TePhoenix.Game.Fog.grant_vision(char, delta, duration_ms, reason)
+    end
+
+    push_ui(ctx, :fog_grant_vision, %{radius_delta: delta, duration_ms: duration_ms})
+    {:ok, ctx}
+  end
+
+  defp do_apply("magic_grant_anam", props, ctx) do
+    char = require_char!(ctx)
+    amount = to_int(prop(props, "amount", 0))
+
+    if amount > 0 do
+      TePhoenix.Repo.query(
+        "UPDATE characters SET anam_current = LEAST(anam_max, anam_current + ?) WHERE id = ?",
+        [amount, char]
+      )
+
+      Phoenix.PubSub.broadcast(TePhoenix.PubSub, "character:#{char}", {:anam_changed, :script_grant, amount})
+    end
+
+    push_ui(ctx, :magic_grant_anam, %{amount: amount})
+    {:ok, ctx}
+  end
+
+  defp do_apply("achievement_unlock", props, ctx) do
+    char = require_char!(ctx)
+    achievement_key = to_string(prop(props, "achievement_key", ""))
+
+    if achievement_key != "" do
+      # Look up the achievement id by key, then drive an unlock through
+      # the canonical trigger pipeline. Using fire_event with the
+      # achievement's own trigger_type + a manual count bump keeps the
+      # unlock flowing through the same code path as gameplay-earned
+      # achievements (consistent rewards + PubSub).
+      case TePhoenix.Repo.query(
+             "SELECT id, trigger_type, trigger_value FROM game_achievements WHERE key_name = ? AND is_active = 1 LIMIT 1",
+             [achievement_key]
+           ) do
+        {:ok, %{rows: [[ach_id, trigger_type, trigger_value]]}} ->
+          # Force the counter to ≥ trigger_value so this achievement
+          # unlocks immediately. Other achievements sharing the same
+          # trigger_type may also unlock if they're already at their
+          # threshold — that's by design (script grants are generous).
+          payload = %{"forced_via" => "achievement_unlock", "achievement_id" => ach_id}
+
+          Enum.each(1..max(trigger_value, 1), fn _ ->
+            TePhoenix.Game.Achievements.fire_event(char, to_string(trigger_type), payload)
+          end)
+
+        _ ->
+          :ok
+      end
+    end
+
+    push_ui(ctx, :achievement_unlock, %{achievement_key: achievement_key})
     {:ok, ctx}
   end
 

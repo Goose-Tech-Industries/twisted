@@ -37,13 +37,13 @@ defmodule TePhoenix.Strategy.EconomyTicker do
     {:noreply, state}
   end
 
+  def handle_info(_, state), do: {:noreply, state}
+
   @impl true
   def handle_cast(:tick, state) do
     do_tick()
     {:noreply, state}
   end
-
-  def handle_info(_, state), do: {:noreply, state}
 
   defp schedule_tick(interval), do: Process.send_after(self(), :tick, interval)
 

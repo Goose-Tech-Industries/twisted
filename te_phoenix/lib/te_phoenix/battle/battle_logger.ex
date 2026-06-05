@@ -138,18 +138,21 @@ defmodule TePhoenix.Battle.BattleLogger do
       # Build a human-readable post
       post_body = format_forum_post(summary)
 
-      # Check if ForgeNexus is available (it's a separate application)
+      # Check if ForgeNexus is available (it's a separate application).
+      # Use apply/3 so the compiler doesn't warn when ForgeNexus isn't a dep.
       try do
-        # ForgeNexus forum POST — if the module exists, call it
-        if Code.ensure_loaded?(ForgeNexus.Forum.Posts) do
-          ForgeNexus.Forum.Posts.create_post(%{
-            thread_id: thread_id,
-            user_id: 0,
-            body: post_body,
-            posted_as: "Battle Logger"
-          })
+        mod = ForgeNexus.Forum.Posts
+
+        if Code.ensure_loaded?(mod) and function_exported?(mod, :create_post, 1) do
+          apply(mod, :create_post, [
+            %{
+              thread_id: thread_id,
+              user_id: 0,
+              body: post_body,
+              posted_as: "Battle Logger"
+            }
+          ])
         else
-          # ForgeNexus not available — store post body in the log for later sync
           Logger.debug("ForgeNexus not available, battle log stored locally only")
           :ok
         end

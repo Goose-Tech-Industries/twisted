@@ -36,9 +36,20 @@ defmodule TePhoenixWeb.Admin.SurfacesLive do
             <%= length(@surfaces) %> surface types defined. Fire, ice, oil, poison — all data-driven.
           </p>
         </div>
-        <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
-          + New Surface
-        </button>
+        <div class="flex items-center gap-2">
+          <.live_component
+            module={TePhoenixWeb.Components.AiAssist}
+            id="ai-surface-effect"
+            feature_key="surface_effect"
+            user_id={@session_user_id}
+            role={@session_role}
+            trigger_label="✨ Suggest surface"
+            context={%{before_value: ""}}
+            on_accept={Phoenix.LiveView.JS.push("ai:apply_surface_suggestion")} />
+          <button phx-click="new" class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-black rounded text-sm font-bold">
+            + New Surface
+          </button>
+        </div>
       </header>
 
       <div :if={@flash_msg} class="mb-4 p-3 bg-emerald-900/40 border border-emerald-700 text-emerald-200 text-sm rounded">
@@ -156,6 +167,22 @@ defmodule TePhoenixWeb.Admin.SurfacesLive do
   # ── Events ──
 
   @impl true
+  def handle_event("ai:apply_surface_suggestion", %{"suggestion" => json}, socket) do
+    target = socket.assigns.editing || blank()
+
+    new_editing =
+      TePhoenixWeb.Admin.AiApplyHelpers.merge(json, target,
+        ~w(key name icon description duration_turns spread_to blocks_movement
+           damage_type damage_per_turn heal_per_turn applies_status_id reacts_with_json))
+
+    {:noreply,
+     socket
+     |> assign(:editing, new_editing)
+     |> assign(:flash_msg, "AI suggestion applied — review and Save to commit.")}
+  end
+
+  def handle_event("ai:apply_surface_suggestion", _, socket), do: {:noreply, socket}
+
   def handle_event("new", _, socket) do
     {:noreply, assign(socket, :editing, blank())}
   end
