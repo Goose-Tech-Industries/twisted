@@ -4,8 +4,26 @@
   interface Props {
     onchoice: (choiceId: string) => void
     onclose: () => void
+    ontalk?: (message: string) => void
   }
-  let { onchoice, onclose }: Props = $props()
+  let { onchoice, onclose, ontalk }: Props = $props()
+
+  let talkInput = $state('')
+  let showTalk = $state(false)
+
+  $effect(() => {
+    if (dialogue.line) {
+      showTalk = dialogue.line.body.includes('awaits your words')
+      talkInput = ''
+    }
+  })
+
+  function submitTalk() {
+    const msg = talkInput.trim()
+    if (!msg) return
+    ontalk?.(msg)
+    dialogue.close()
+  }
 </script>
 
 {#if dialogue.line}
@@ -19,7 +37,19 @@
       </header>
       <p class="body">{line.body}</p>
 
-      {#if line.choices?.length}
+      {#if showTalk}
+        <div class="talk-row">
+          <input
+            type="text"
+            class="talk-input"
+            bind:value={talkInput}
+            placeholder="Type your message..."
+            onkeydown={(e) => { if (e.key === 'Enter') submitTalk() }}
+            autofocus
+          />
+          <button class="continue" onclick={submitTalk}>Send</button>
+        </div>
+      {:else if line.choices?.length}
         <ul class="choices">
           {#each line.choices as c (c.id)}
             <li>
@@ -71,5 +101,17 @@
   }
   .choices button:hover:not(:disabled) { border-color: var(--accent); }
   .choices .lock { color: var(--fg-muted); font-size: 0.75rem; margin-left: 0.25rem; }
-  .continue { display: block; margin-left: auto; background: var(--accent); color: #1a1208; border: none; font-weight: 600; padding: 0.375rem 1rem; }
+  .continue { display: block; margin-left: auto; background: var(--accent); color: #1a1208; border: none; font-weight: 600; padding: 0.375rem 1rem; cursor: pointer; }
+  .talk-row { display: flex; gap: 0.5rem; align-items: center; }
+  .talk-input {
+    flex: 1;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    font-family: inherit;
+  }
+  .talk-input:focus { outline: none; border-color: var(--accent); }
 </style>

@@ -68,6 +68,11 @@
 
   let joinedGame = $state(false)
   $effect(() => {
+    // Bind shop push as soon as the game channel is ready (before onMount,
+    // since open_shop events can arrive during init_self processing).
+    shop.bindPush((event, payload) => game.push(event, payload))
+  })
+  $effect(() => {
     if (joinedGame) return
     if (!game.channel) return
     joinedGame = true
@@ -347,10 +352,6 @@
     }
     await inventory.load(initialCharId)
     if (character.active?.gold !== undefined) inventory.setGold(character.active.gold ?? 0)
-
-    // Bind the game channel push function to the shop store so it can
-    // send shop_get_items / shop_buy_item / shop_sell_item events.
-    shop.bindPush((event, payload) => game.push(event, payload))
   })
 
   // ── debug taps (visible in DevTools console) ───────────────────
@@ -383,12 +384,16 @@
       const targetTile = m.tiles?.[ty]?.[tx]
       if (targetTile !== undefined) {
         const entry = tilePalette.entries.find(e => e.id === targetTile)
-        // DB sends `is_passable` (TINYINT: 1=walkable, 0=blocked).
-        // The TilePaletteEntry type has `passable` (boolean) but the
-        // raw channel payload uses the DB column name.
-        const blocked = (entry as Record<string, unknown> | null)?.is_passable === 0
-          || entry?.passable === false
-        if (entry && blocked) return
+        // is_passable from DB (1=walkable, 0=blocked). The TilePaletteEntry
+        // type uses `passable` (boolean), raw channel payload uses DB column.
+        const dbPassable = (entry as Record<string, unknown> | null)?.is_passable
+        // If palette hasn't loaded yet (no entries), only allow tile 0 (grass).
+        // Unknown tiles are blocked until the palette data arrives.
+        if (tilePalette.entries.length === 0) {
+          if (targetTile !== 0) return
+        } else if (entry && dbPassable === 0) {
+          return
+        }
       }
     } else {
       // No map data yet — don't move blindly
@@ -501,6 +506,7 @@
 <DialogueOverlay
   onchoice={(choiceId) => void game.push('npc_menu_choice', { choiceId })}
   onclose={() => { dialogue.close(); void game.push('dialogue_close', {}) }}
+  ontalk={(message) => void game.push('npc_talk', { message, npcName: dialogue.line?.speaker })}
 />
 
 <!-- Wiring debug overlay: render only when ?debug=1 (component handles
