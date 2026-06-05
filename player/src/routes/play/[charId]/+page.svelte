@@ -13,6 +13,7 @@
   import { inventory } from '$stores/inventory.svelte'
   import { notifications } from '$stores/notifications.svelte'
   import { dialogue } from '$stores/dialogue.svelte'
+  import { fog } from '$stores/fog.svelte'
   import { tournament } from '$stores/tournament.svelte'
   import { worldEvents } from '$stores/world_events.svelte'
   import { statusEffects } from '$stores/status_effects.svelte'
@@ -89,6 +90,7 @@
     statuses?: unknown[]
     companion?: unknown
     world?: { time_of_day?: string; weather?: string; online_count?: number; events?: unknown[] }
+    fog?: { visible?: [number, number][]; explored?: [number, number][]; hidden_count?: number }
   }
   game.on<InitSelfPayload>('init_self', (p) => {
     character.setActive({
@@ -109,6 +111,13 @@
       statusEffects.set(p.statuses as never)
     }
     if (p.world?.weather) world.setWeather(p.world.weather)
+    if (p.fog?.visible && p.fog?.hidden_count != null) {
+      fog.setInitial({
+        visible: p.fog.visible || [],
+        explored: p.fog.explored || [],
+        hidden_count: p.fog.hidden_count ?? 0
+      })
+    }
   })
 
   game.on<Record<string, unknown>>('map_data', (p) => {
@@ -149,6 +158,12 @@
   game.on<{ type?: string; message: string }>('notification', (p) => {
     notifications.push((p.type as never) ?? 'info', p.message)
   })
+
+  // Fog-of-war delta — visibility changes as the player moves
+  game.on<{ newly_visible: [number, number][]; newly_explored: [number, number][]; newly_hidden: [number, number][] }>(
+    'fog_delta', (d) => fog.applyDelta(d)
+  )
+  game.on<unknown>('fog_reset', () => fog.reset())
   game.on<{ battle_id: number }>('battle_start', () => notifications.push('warning', 'Battle started!'))
   game.on<{ speaker: string; body: string; portrait?: string; choices?: Array<{ id: string; label: string }>; end?: boolean }>(
     'dialogue', (p) => dialogue.show(p)
@@ -343,12 +358,6 @@
   game.on<unknown>('error_msg', (p) => console.warn('[phx] error_msg', p))
 
   // ── input + outgoing pushes ─────────────────────────────────────
-  // Moves are sent blind; the server broadcasts `player_moved` to
-  // `map:<id>` on acceptance (handled above) and `force_move` on the
-  // game channel on rejection. Optimistic patch gives responsive
-  // movement; player_moved snaps to truth. A 220ms client gate keeps
-  // key-repeat from flooding the server's 200ms move throttle (flood
-  // + throttle drops + optimistic drift = the old snap-back bug).
   const MOVE_COOLDOWN_MS = 220
   let lastMoveAt = 0
   function moveDirection(dir: 'up' | 'down' | 'left' | 'right') {
@@ -356,12 +365,30 @@
     if (!c) return
     const now = performance.now()
     if (now - lastMoveAt < MOVE_COOLDOWN_MS) return
-    lastMoveAt = now
     const dx = dir === 'left' ? -1 : dir === 'right' ? 1 : 0
     const dy = dir === 'up' ? -1 : dir === 'down' ? 1 : 0
-    void game.push('move', { x: c.x + dx, y: c.y + dy, running: false })
-    console.warn('[move] SENT →', c.x + dx, c.y + dy, 'from', c.x, c.y)
-    character.patch({ x: c.x + dx, y: c.y + dy })
+    const tx = c.x + dx, ty = c.y + dy
+
+    // Client-side passability gate. Check the tile palette for the
+    // target tile's walkability BEFORE sending the move — no more
+    // optimistic lunge into a wall followed by force_move snap-back.
+    const m = world.map
+    if (m) {
+      // Map edge check
+      if (tx < 0 || tx >= m.width || ty < 0 || ty >= m.height) return
+      const targetTile = m.tiles?.[ty]?.[tx]
+      if (targetTile !== undefined) {
+        const entry = tilePalette.entries.find(e => e.id === targetTile)
+        if (entry && entry.passable === false) return
+      }
+    } else {
+      // No map data yet — don't move blindly
+      return
+    }
+
+    void game.push('move', { x: tx, y: ty, running: false })
+    console.warn('[move] SENT →', tx, ty, 'from', c.x, c.y)
+    character.patch({ x: tx, y: ty })
   }
 
   function togglePanel(p: PanelKey) {

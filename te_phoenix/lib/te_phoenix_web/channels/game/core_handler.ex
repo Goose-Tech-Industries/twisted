@@ -350,6 +350,19 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     # Subscribe to map topic for location broadcasts
     TePhoenixWeb.Endpoint.subscribe("map:#{map_id}")
 
+    # Fog of war: compute initial view + subscribe to deltas
+    fog_payload = try do
+      view = TePhoenix.Game.Fog.compute_view(char_id, map_id)
+      Phoenix.PubSub.subscribe(TePhoenix.PubSub, "fog:#{char_id}:#{map_id}")
+      %{
+        visible: view.visible |> MapSet.to_list() |> Enum.map(fn {x, y} -> [x, y] end),
+        explored: view.explored |> MapSet.to_list() |> Enum.map(fn {x, y} -> [x, y] end),
+        hidden_count: view.hidden_count
+      }
+    rescue
+      _ -> nil
+    end
+
     # Load map data
     map_data = MapData.get(map_id)
     if map_data, do: push(socket, "map_data", map_data)
@@ -430,7 +443,8 @@ defmodule TePhoenixWeb.Game.CoreHandler do
         weather: weather_key,
         online_count: online_count,
         events: []
-      }
+      },
+      fog: fog_payload
     })
 
     # Send players on this map
@@ -516,6 +530,13 @@ defmodule TePhoenixWeb.Game.CoreHandler do
           Logger.info("[move] ACCEPT char=#{char_id} #{player.x},#{player.y}→#{target_x},#{target_y}")
           PlayerRegistry.update(char_id, %{x: target_x, y: target_y, last_move_time: now})
 
+          # Fog of war: recompute visibility at new position
+          try do
+            TePhoenix.Game.Fog.mark_movement(char_id, player.map_id, {target_x, target_y})
+          rescue
+            _ -> :ok
+          end
+
           # Broadcast to map (all players on this map see the move)
           TePhoenixWeb.Endpoint.broadcast!("map:#{player.map_id}", "player_moved", %{
             id: char_id, x: target_x, y: target_y
@@ -575,6 +596,13 @@ defmodule TePhoenixWeb.Game.CoreHandler do
         true ->
           # Valid move — update position
           PlayerRegistry.update(char_id, %{x: target_x, y: target_y, last_move_time: now})
+
+          # Fog of war: recompute visibility at new position
+          try do
+            TePhoenix.Game.Fog.mark_movement(char_id, player.map_id, {target_x, target_y})
+          rescue
+            _ -> :ok
+          end
 
           # Broadcast to map (all players on this map see the move)
           TePhoenixWeb.Endpoint.broadcast!("map:#{player.map_id}", "player_moved", %{
@@ -783,28 +811,15 @@ defmodule TePhoenixWeb.Game.CoreHandler do
 
   defp tile_passable?(map_data, x, y) do
     idx = y * map_data.width + x
-    passability = map_data.passability || []
     tiles = map_data.tiles || []
     tile_id = Enum.at(tiles, idx)
 
-    # Passability layer: 1 = explicitly blocked (admin override, e.g. a wall
-    # section painted as a puzzle barrier). If unset or 0, fall through to
-    # the tile palette — the game_tile_types.is_passable column is the
-    # canonical "can you walk on this tile type?" source of truth.
-    explicit_block = passability != [] and Enum.at(passability, idx) == 1
-    if explicit_block do
-      false
-    else
-      tile_passable_by_type?(tile_id)
-    end
+    TePhoenix.Game.TileCache.passable?(tile_id)
   end
 
   defp tile_passable_by_type?(nil), do: false
   defp tile_passable_by_type?(tile_id) do
-    case :persistent_term.get({:tile_is_passable, tile_id}, :not_cached) do
-      :not_cached -> tile_id > 0
-      val -> val
-    end
+    TePhoenix.Game.TileCache.passable?(tile_id)
   end
 
   defp check_hazards(socket, char_id, map_id, x, y) do

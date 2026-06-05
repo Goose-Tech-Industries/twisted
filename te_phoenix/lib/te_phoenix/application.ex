@@ -66,6 +66,9 @@ defmodule TePhoenix.Application do
     case result do
       {:ok, _} ->
         TePhoenix.Capabilities.boot()
+        # Warm the tile passability cache so movement validation doesn't
+        # fall back to "all non-zero tiles are walkable" on cold boots.
+        TePhoenix.Game.TileCache.warm()
         result
 
       _ ->

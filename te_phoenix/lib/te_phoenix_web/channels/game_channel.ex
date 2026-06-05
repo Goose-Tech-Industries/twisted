@@ -178,6 +178,29 @@ defmodule TePhoenixWeb.GameChannel do
   end
 
   # ══════════════════════════════════════════════════════════════════
+  # FOG OF WAR PubSub → client push
+  # ══════════════════════════════════════════════════════════════════
+
+  @impl true
+  def handle_info(%{event: :fog_delta} = msg, socket) do
+    push(socket, "fog_delta", %{
+      newly_visible: msg[:newly_visible] || [],
+      newly_explored: msg[:newly_explored] || [],
+      newly_hidden: msg[:newly_hidden] || [],
+    })
+    {:noreply, socket}
+  end
+
+  def handle_info(%{event: :fog_reset} = msg, socket) do
+    push(socket, "fog_reset", %{})
+    {:noreply, socket}
+  end
+
+  # Catch-all for unexpected PubSub messages (e.g. map:* broadcasts
+  # that Phoenix delivers to all socket channels)
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # ══════════════════════════════════════════════════════════════════
   # TERMINATE (disconnect cleanup)
   # ══════════════════════════════════════════════════════════════════
 
