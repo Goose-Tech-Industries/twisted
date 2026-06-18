@@ -1,0 +1,63 @@
+###############################################
+# Twisted Engine — Dev Mode (hot reload)
+# Usage: docker compose -f docker-compose.dev.yml up
+###############################################
+
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: dev_pass
+      MARIADB_DATABASE: twisted_rpg
+    ports:
+      - "3306:3306"
+    volumes:
+      - dev_db_data:/var/lib/mysql
+      - ./te/schema_FULL.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install --include=optional 2>/dev/null; npm run dev"
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./te:/app
+      - backend_modules:/app/node_modules
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DB_HOST: db
+      DB_USER: root
+      DB_PASS: dev_pass
+      DB_NAME: twisted_rpg
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - db
+      - redis
+
+  ui:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./ui:/app
+      - ui_modules:/app/node_modules
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+    depends_on:
+      - backend
+
+volumes:
+  dev_db_data:
+  backend_modules:
+  ui_modules:

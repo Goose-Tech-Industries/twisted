@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+*.log
+logs/
+.env
+.env.local
+.env.production
+*.sql
+te/node_modules
+ui/node_modules
+ui/.next

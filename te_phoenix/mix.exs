@@ -19,19 +19,22 @@ defmodule TePhoenix.MixProject do
   # binary that starts Phoenix and opens the default browser at localhost.
   # First build needs the zig toolchain on the build host — see
   # github.com/burrito-elixir/burrito and bin/build-binary.sh.
+  # Burrito binary release step commented out until zig+xz are installed
+  # on the build host. See bin/build-binary.sh and AGENTS.md.
   defp releases do
     [
       te_phoenix: [
         strip_beams: false,
-        steps: [:assemble, &Burrito.wrap/1],
-        burrito: [
-          targets: [
-            linux_amd64: [os: :linux, cpu: :x86_64],
-            mac_amd64:   [os: :darwin, cpu: :x86_64],
-            mac_arm64:   [os: :darwin, cpu: :aarch64],
-            win:         [os: :windows, cpu: :x86_64]
-          ]
-        ]
+        steps: [:assemble]
+        # steps: [:assemble, &Burrito.wrap/1],
+        # burrito: [
+        #   targets: [
+        #     linux_amd64: [os: :linux, cpu: :x86_64],
+        #     mac_amd64:   [os: :darwin, cpu: :x86_64],
+        #     mac_arm64:   [os: :darwin, cpu: :aarch64],
+        #     win:         [os: :windows, cpu: :x86_64]
+        #   ]
+        # ]
       ]
     ]
   end

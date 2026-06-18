@@ -172,51 +172,57 @@ defmodule TePhoenixWeb.Game.CoreHandler do
   def handle("interact", _payload, socket) do
     char_id = socket.assigns[:char_id]
     player = PlayerRegistry.get(char_id)
-    if is_nil(player), do: {:noreply, socket}
 
-    map_data = MapData.get(player.map_id)
-    if is_nil(map_data), do: {:noreply, socket}
-
-    # 1. Check signs/objects at player position
-    objects = map_data.objects || []
-    sign = Enum.find(objects, fn o ->
-      dist = abs((o["x"] || 0) - player.x) + abs((o["y"] || 0) - player.y)
-      dist <= 1 and o["preset"] == "SIGN" and o["text"]
-    end)
-
-    if sign do
-      push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: sign["label"] || "Sign", text: sign["text"]}]})
+    if is_nil(player) do
       {:noreply, socket}
     else
-      # 2. Check for live NPCs
-      npcs = MapData.get_npcs(player.map_id)
-      live_npc = Enum.find(npcs, fn n ->
-        dist = abs((n["x"] || 0) - player.x) + abs((n["y"] || 0) - player.y)
-        dist <= 1
-      end)
+      map_data = MapData.get(player.map_id)
 
-      if live_npc do
-        # Enemies trigger combat; friendly NPCs open dialogue
-        if live_npc["is_enemy"] == 1 or live_npc["is_enemy"] == true do
-          handle_enemy_interact(socket, char_id, player, live_npc)
-        else
-          handle_npc_interact(socket, char_id, player, live_npc)
-        end
-      else
-        # 3. Check INTERACT map events
-        events = map_data.events || []
-        char_state = load_char_state(char_id)
-
-        case run_map_event(events, "INTERACT", player.x, player.y, char_id, char_state) do
-          {:ok, responses} ->
-            Enum.each(responses, fn r -> push(socket, "event_action", r) end)
-          {:halted, responses, pending} ->
-            Enum.each(responses, fn r -> push(socket, "event_action", r) end)
-            _socket = assign(socket, :pending_event_choice, %{pending: pending, char_state: char_state})
-          _ -> nil
-        end
-
+      if is_nil(map_data) do
         {:noreply, socket}
+      else
+        # 1. Check signs/objects at player position
+        objects = map_data.objects || []
+        sign = Enum.find(objects, fn o ->
+          dist = abs((o["x"] || 0) - player.x) + abs((o["y"] || 0) - player.y)
+          dist <= 1 and o["preset"] == "SIGN" and o["text"]
+        end)
+
+        if sign do
+          push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: sign["label"] || "Sign", text: sign["text"]}]})
+          {:noreply, socket}
+        else
+          # 2. Check for live NPCs
+          npcs = MapData.get_npcs(player.map_id)
+          live_npc = Enum.find(npcs, fn n ->
+            dist = abs((n["x"] || 0) - player.x) + abs((n["y"] || 0) - player.y)
+            dist <= 1
+          end)
+
+          if live_npc do
+            # Enemies trigger combat; friendly NPCs open dialogue
+            if live_npc["is_enemy"] == 1 or live_npc["is_enemy"] == true do
+              handle_enemy_interact(socket, char_id, player, live_npc)
+            else
+              handle_npc_interact(socket, char_id, player, live_npc)
+            end
+          else
+            # 3. Check INTERACT map events
+            events = map_data.events || []
+            char_state = load_char_state(char_id)
+
+            case run_map_event(events, "INTERACT", player.x, player.y, char_id, char_state) do
+              {:ok, responses} ->
+                Enum.each(responses, fn r -> push(socket, "event_action", r) end)
+              {:halted, responses, pending} ->
+                Enum.each(responses, fn r -> push(socket, "event_action", r) end)
+                _socket = assign(socket, :pending_event_choice, %{pending: pending, char_state: char_state})
+              _ -> nil
+            end
+
+            {:noreply, socket}
+          end
+        end
       end
     end
   end

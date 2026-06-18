@@ -132,81 +132,84 @@ defmodule TePhoenixWeb.Game.NpcHandler do
     char_id = socket.assigns[:char_id]
     p = PlayerRegistry.get(char_id)
     npc = socket.assigns[:talking_to_npc]
-    if is_nil(p) or is_nil(npc), do: {:noreply, socket}
+    if is_nil(p) or is_nil(npc) do
+      push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: "System", text: "*No one is here to respond.*"}]})
+      {:noreply, socket}
+    else
+      npc_name = npc["name"] || "NPC"
+      {facts, reputation} = load_npc_memory(char_id, npc_name)
 
-    npc_name = npc["name"] || "NPC"
-    {facts, reputation} = load_npc_memory(char_id, npc_name)
+      cond do
+        String.starts_with?(choice_id, "quest_") ->
+          quest_id = choice_id |> String.replace("quest_", "") |> parse_int()
+          handle_quest_choice(socket, char_id, npc_name, quest_id, facts, reputation)
 
-    cond do
-      String.starts_with?(choice_id, "quest_") ->
-        quest_id = choice_id |> String.replace("quest_", "") |> parse_int()
-        handle_quest_choice(socket, char_id, npc_name, quest_id, facts, reputation)
+        String.starts_with?(choice_id, "shop_") ->
+          shop_id = choice_id |> String.replace("shop_", "") |> parse_int()
+          socket = assign(socket, :shop_discount, 0)
+          push(socket, "event_queue", %{events: [%{cmd: "open_shop", shopId: shop_id}]})
 
-      String.starts_with?(choice_id, "shop_") ->
-        shop_id = choice_id |> String.replace("shop_", "") |> parse_int()
-        socket = assign(socket, :shop_discount, 0)
-        push(socket, "event_queue", %{events: [%{cmd: "open_shop", shopId: shop_id}]})
+        String.starts_with?(choice_id, "haggle_") ->
+          shop_id = choice_id |> String.replace("haggle_", "") |> parse_int()
+          discount = cond do
+            reputation >= 60 -> 20
+            reputation >= 40 -> 15
+            reputation >= 20 -> 10
+            true -> 0
+          end
 
-      String.starts_with?(choice_id, "haggle_") ->
-        shop_id = choice_id |> String.replace("haggle_", "") |> parse_int()
-        discount = cond do
-          reputation >= 60 -> 20
-          reputation >= 40 -> 15
-          reputation >= 20 -> 10
-          true -> 0
-        end
+          if discount > 0 do
+            socket = assign(socket, :shop_discount, discount)
+            push(socket, "event_queue", %{events: [
+              %{cmd: "dialogue", speaker: npc_name,
+                text: "*#{npc_name} leans in.* \"For you? I'll knock #{discount}% off. Don't tell the others.\""},
+              %{cmd: "open_shop", shopId: shop_id, discount: discount}
+            ]})
+          else
+            push(socket, "event_queue", %{events: [
+              %{cmd: "dialogue", speaker: npc_name,
+                text: "\"Prices are prices. I don't make exceptions.\""}
+            ]})
+          end
 
-        if discount > 0 do
-          socket = assign(socket, :shop_discount, discount)
+        choice_id == "companion_recruit" ->
+          handle_companion_recruit(socket, char_id, npc, npc_name, facts, reputation)
+
+        choice_id == "companion_dismiss" ->
+          handle_companion_dismiss(socket, char_id, npc, npc_name)
+
+        choice_id == "companion_locked_rep" ->
           push(socket, "event_queue", %{events: [
             %{cmd: "dialogue", speaker: npc_name,
-              text: "*#{npc_name} leans in.* \"For you? I'll knock #{discount}% off. Don't tell the others.\""},
-            %{cmd: "open_shop", shopId: shop_id, discount: discount}
+              text: "*#{npc_name} considers your request.* \"I don't know you well enough yet. Prove yourself to me first.\""}
           ]})
-        else
+
+        choice_id == "companion_locked_quest" ->
           push(socket, "event_queue", %{events: [
             %{cmd: "dialogue", speaker: npc_name,
-              text: "\"Prices are prices. I don't make exceptions.\""}
+              text: "*#{npc_name} shakes their head.* \"There's something I need done first. Help me with that, and we'll talk.\""}
           ]})
-        end
 
-      choice_id == "companion_recruit" ->
-        handle_companion_recruit(socket, char_id, npc, npc_name, facts, reputation)
+        choice_id == "companion_full" ->
+          push(socket, "event_queue", %{events: [
+            %{cmd: "dialogue", speaker: npc_name,
+              text: "*#{npc_name} glances at your companions.* \"Looks like your hands are full already. Come back if you make room.\""}
+          ]})
 
-      choice_id == "companion_dismiss" ->
-        handle_companion_dismiss(socket, char_id, npc, npc_name)
+        choice_id == "talk" ->
+          push(socket, "event_queue", %{events: [%{cmd: "npc_talk_prompt", npcName: npc_name}]})
 
-      choice_id == "companion_locked_rep" ->
-        push(socket, "event_queue", %{events: [
-          %{cmd: "dialogue", speaker: npc_name,
-            text: "*#{npc_name} considers your request.* \"I don't know you well enough yet. Prove yourself to me first.\""}
-        ]})
+        choice_id == "farewell" ->
+          farewell = if reputation > 50,
+            do: "*#{npc_name} waves warmly.* \"Safe travels, friend.\"",
+            else: "\"Watch yourself out there.\""
+          push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: npc_name, text: farewell}]})
 
-      choice_id == "companion_locked_quest" ->
-        push(socket, "event_queue", %{events: [
-          %{cmd: "dialogue", speaker: npc_name,
-            text: "*#{npc_name} shakes their head.* \"There's something I need done first. Help me with that, and we'll talk.\""}
-        ]})
+        true -> nil
+      end
 
-      choice_id == "companion_full" ->
-        push(socket, "event_queue", %{events: [
-          %{cmd: "dialogue", speaker: npc_name,
-            text: "*#{npc_name} glances at your companions.* \"Looks like your hands are full already. Come back if you make room.\""}
-        ]})
-
-      choice_id == "talk" ->
-        push(socket, "event_queue", %{events: [%{cmd: "npc_talk_prompt", npcName: npc_name}]})
-
-      choice_id == "farewell" ->
-        farewell = if reputation > 50,
-          do: "*#{npc_name} waves warmly.* \"Safe travels, friend.\"",
-          else: "\"Watch yourself out there.\""
-        push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: npc_name, text: farewell}]})
-
-      true -> nil
+      {:noreply, socket}
     end
-
-    {:noreply, socket}
   end
 
   # ═══════════════════════════════════════════════════════════════════

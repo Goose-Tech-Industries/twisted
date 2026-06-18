@@ -70,10 +70,9 @@ function createShopStore() {
 
     /** Request shop items from the server (called on open_shop event). */
     load(shopId: number, shopName: string = 'Shop') {
+      open = { shopId, name: shopName, items: [], playerInventory: [], gold: 0, discount: 0 }
       if (!_push) return
       _push('shop_get_items', { shopId })
-      // Set a placeholder so the panel opens immediately
-      open = { shopId, name: shopName, items: [], playerInventory: [], gold: 0, discount: 0 }
     },
 
     /** Handle the shop_items push from the server. */

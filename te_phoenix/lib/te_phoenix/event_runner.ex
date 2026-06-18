@@ -331,7 +331,7 @@ defmodule TePhoenix.EventRunner do
   end
 
   defp execute_action(%{"type" => "SHOP"} = action, _char_id, state) do
-    {[%{cmd: "open_shop", shop_id: action["shop_id"]}], state}
+    {[%{cmd: "open_shop", shopId: action["shop_id"]}], state}
   end
 
   defp execute_action(%{"type" => "QUEST_BOARD"}, _char_id, state) do

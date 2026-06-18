@@ -1,0 +1,42 @@
+{
+  "name": "twisted-engine",
+  "version": "21.7.0",
+  "description": "Full RPG engine with session-based auth",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "start:prod": "NODE_ENV=production node server.js",
+    "test": "node battle/full-test.js && node battle/regression-test.js",
+    "test:full": "node battle/full-test.js",
+    "test:regression": "node battle/regression-test.js",
+    "test:stress": "node battle/stress-test.js",
+    "test:break": "node battle/break-test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "express-mysql-session": "^3.0.3",
+    "express-rate-limit": "^7.5.0",
+    "express-session": "^1.18.1",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
+    "multer": "^2.1.1",
+    "mysql2": "^3.2.0",
+    "socket.io": "^4.6.1"
+  },
+  "optionalDependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
+    "connect-redis": "^8.0.1",
+    "ioredis": "^5.4.1",
+    "nodemailer": "^8.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "ws": "^8.20.0"
+  }
+}

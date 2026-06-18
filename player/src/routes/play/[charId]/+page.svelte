@@ -184,6 +184,9 @@
   game.on<{ speaker: string; body: string; portrait?: string; choices?: Array<{ id: string; label: string }>; end?: boolean }>(
     'dialogue', (p) => dialogue.show(p)
   )
+  game.on<{ npcName: string; text: string }>('npc_reply', (p) => {
+    dialogue.show({ speaker: p.npcName || 'NPC', body: p.text || '' })
+  })
 
   // ── Event queue runner ─────────────────────────────────────────
   // Phoenix streams cinematic actions (NPC dialogue, shop opens, scripted
@@ -225,6 +228,8 @@
       case 'open_shop':
         if (evt.shopId && typeof evt.shopId === 'number') {
           shop.load(evt.shopId, (evt.shopName as string) || 'Shop')
+          dialogue.close()
+          panel = 'shop'
         }
         break
       case 'notification':

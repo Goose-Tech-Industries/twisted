@@ -10,3 +10,4 @@ te/.env
 logs/
 *.tsbuildinfo
 .DS_Store
+.env.phoenix.secret

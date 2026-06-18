@@ -22,7 +22,7 @@
     const msg = talkInput.trim()
     if (!msg) return
     ontalk?.(msg)
-    dialogue.close()
+    talkInput = ''
   }
 </script>
 

@@ -1,0 +1,85 @@
+###############################################
+# Twisted Engine — Full Stack
+# Usage:
+#   docker compose up -d              # start all services
+#   docker compose up -d --build      # rebuild + start
+#   docker compose logs -f backend    # tail backend logs
+#   docker compose down               # stop all
+###############################################
+
+services:
+  # ── MySQL/MariaDB ──────────────────────────
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_PASS:-twisted_dev_pass}
+      MARIADB_DATABASE: ${DB_NAME:-twisted_rpg}
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./te/schema_FULL.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (optional — enables multi-instance scaling) ──
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── Backend (Express + Socket.IO) ──────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DB_HOST: db
+      DB_USER: root
+      DB_PASS: ${DB_PASS:-twisted_dev_pass}
+      DB_NAME: ${DB_NAME:-twisted_rpg}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production-64chars-minimum-please-do-it-now-ok}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:3000}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── UI (Next.js) ───────────────────────────
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
+  redis_data:

@@ -1,0 +1,26 @@
+###############################################
+# Twisted Engine — Backend (Express + Socket.IO)
+###############################################
+FROM node:20-alpine AS backend
+
+WORKDIR /app
+
+# Install optional deps too (Redis support)
+COPY te/package.json te/package-lock.json* ./
+RUN npm install --include=optional 2>/dev/null || npm install
+
+# Copy source
+COPY te/ ./
+
+# Create logs directory
+RUN mkdir -p logs
+
+EXPOSE 3001
+
+ENV NODE_ENV=production
+ENV PORT=3001
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+
+CMD ["node", "server.js"]
