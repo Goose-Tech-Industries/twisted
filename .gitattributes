@@ -1,0 +1,8 @@
+# Retired stacks kept for reference (see AGENTS.md) — not the active codebase.
+# Excluded from GitHub's language stats so the repo badge reflects what's
+# actually running today (Elixir/Phoenix + SvelteKit), not the Node/Next.js
+# prototype these were rewritten away from.
+te.retired/** linguist-vendored
+ui.retired/** linguist-vendored
+monorepo.retired/** linguist-vendored
+monorepo_v27_build.retired/** linguist-vendored
