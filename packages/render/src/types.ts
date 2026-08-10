@@ -164,6 +164,12 @@ export interface RenderState {
 
   /** DB-driven tile palette — optional, falls back to hardcoded defaults. */
   tilePalette?: TilePaletteEntry[];
+
+  /** Per-app background theme overrides — all optional, fall back to the
+   * default amber/dark theme so existing callers see no change. */
+  bgOutsideColor?: number;
+  bgInsideColor?: number;
+  bgBorderColor?: number;
 }
 
 /** Callback set passed into TwistedRenderer.init(). */

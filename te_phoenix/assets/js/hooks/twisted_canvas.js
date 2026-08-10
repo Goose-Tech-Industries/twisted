@@ -441,6 +441,7 @@ export const TwistedCanvas = {
       if (this.renderer) this.renderer.update(state)
       if (this.drawMinimap) this.drawMinimap()
       if (this.evaluateSoundZones) this.evaluateSoundZones()
+      if (this._redrawObjectSelection) this._redrawObjectSelection()
       if (!this._didInitialFit && el.dataset.canvasMode === "edit") {
         this._didInitialFit = true
         requestAnimationFrame(() => this.fitToScreen())
@@ -616,6 +617,11 @@ export const TwistedCanvas = {
     this.zoneOverlay = document.createElement("div")
     this.zoneOverlay.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:8;"
     el.appendChild(this.zoneOverlay)
+
+    // ── Objects overlay ──
+    this.objectOverlay = document.createElement("div")
+    this.objectOverlay.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:8;"
+    el.appendChild(this.objectOverlay)
 
     // ── Sound zone audio engine (Web Audio API) ──
     // Each zone owns: MediaElementSource → GainNode → AudioContext.destination
@@ -986,9 +992,87 @@ export const TwistedCanvas = {
       }, 2000)
     })
 
+    this._selectedObjectId = null
+    this.handleEvent("object:select", ({ id }) => {
+      this._selectedObjectId = id || null
+      this._redrawObjectSelection()
+    })
+
+    this._redrawObjectSelection = () => {
+      this.objectOverlay.innerHTML = ""
+      if (!this.lastState || !this._selectedObjectId) return
+      
+      const obj = this.lastState.objects.find(o => o.id === this._selectedObjectId)
+      if (!obj) return
+
+      const tl = this.renderer.tileToScreen(obj.x, obj.y)
+      const br = this.renderer.tileToScreen(obj.x + 1, obj.y + 1)
+      if (!tl || !br) return
+
+      const w = Math.max(0, br.sx - tl.sx - 1)
+      const h = Math.max(0, br.sy - tl.sy - 1)
+
+      const box = document.createElement("div")
+      box.style.cssText = `
+        position:absolute;
+        left:${tl.sx}px;
+        top:${tl.sy}px;
+        width:${w}px;
+        height:${h}px;
+        border:2px solid #f59e0b;
+        background:#f59e0b33;
+        pointer-events:auto;
+        cursor:move;
+        box-sizing:border-box;
+        z-index:9;
+      `
+
+      box.addEventListener("pointerdown", (e) => {
+        this._beginObjectDrag(e, obj)
+      })
+
+      this.objectOverlay.appendChild(box)
+    }
+
+    this._beginObjectDrag = (e, obj) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const start = this._pointerToTile(e) || { tileX: 0, tileY: 0 }
+      const orig = { x: obj.x, y: obj.y }
+      let current = { ...orig }
+
+      const onMove = (ev) => {
+        const cur = this._pointerToTile(ev)
+        if (!cur) return
+        const dx = cur.tileX - start.tileX
+        const dy = cur.tileY - start.tileY
+        current = { x: orig.x + dx, y: orig.y + dy }
+        
+        // Optimistic local update
+        obj.x = current.x
+        obj.y = current.y
+        this._redrawObjectSelection()
+        if (this.renderer) this.renderer.update(this.lastState)
+      }
+
+      const onUp = (_ev) => {
+        window.removeEventListener("pointermove", onMove)
+        window.removeEventListener("pointerup", onUp)
+        this.pushEventTo(el, "object:move", {
+          id: obj.id,
+          x: current.x,
+          y: current.y
+        })
+      }
+
+      window.addEventListener("pointermove", onMove)
+      window.addEventListener("pointerup", onUp, { once: true })
+    }
+
     this.handleEvent("map:objects", () => {
       // Object overlay re-render hook — the renderer ingests objects via update()
       // when the next map:state arrives, this is just a notification.
+      if (this._redrawObjectSelection) this._redrawObjectSelection()
     })
 
     this.handleEvent("map:events", () => {})

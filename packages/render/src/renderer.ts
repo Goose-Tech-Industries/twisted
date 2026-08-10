@@ -563,16 +563,15 @@ export class TwistedRenderer {
       const bg = new PIXI.Graphics();
       // Outside-map: near-black (visibly off-pure-black at high brightness).
       bg.rect(0, 0, canvasW, canvasH);
-      bg.fill(0x080808);
-      // Inside-map: amber-tinted dark so the painted area reads as a
-      // distinct "world canvas" even when most tiles are dim wasteland
-      // colours (ash, bog, peat). Without enough contrast vs the
-      // outside-map tint, low-saturation maps look like empty canvases.
+      bg.fill(state.bgOutsideColor ?? 0x080808);
+      // Inside-map: tinted dark so the painted area reads as a distinct
+      // "world canvas" even when most tiles are dim low-saturation colours.
+      // Without enough contrast vs the outside-map tint, maps look empty.
       bg.rect(mapX, mapY, mapW, mapH);
-      bg.fill(0x2a2520);
-      // 2px amber border at the map edge — explicit "this is the world" frame.
+      bg.fill(state.bgInsideColor ?? 0x2a2520);
+      // 2px border at the map edge — explicit "this is the world" frame.
       bg.rect(mapX - 1, mapY - 1, mapW + 2, mapH + 2);
-      bg.stroke({ color: 0xb38b3a, width: 2, alpha: 0.85 });
+      bg.stroke({ color: state.bgBorderColor ?? 0xb38b3a, width: 2, alpha: 0.85 });
       layers.background.addChild(bg);
     }
 

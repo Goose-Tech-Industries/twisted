@@ -52,9 +52,15 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
         end
 
         {undo, redo} = load_draft_stacks(map.id)
+        npcs =
+          case Repo.query("SELECT id, name FROM game_npcs ORDER BY name ASC") do
+            {:ok, %{rows: rows}} -> Enum.map(rows, fn [id, name] -> {id, name} end)
+            _ -> []
+          end
 
         {:ok,
          socket
+         |> assign(:npcs, npcs)
          |> assign(:active_tab, :world)
          |> assign(:page_title, "Edit: #{map.name}")
          |> assign(:map, map)
@@ -1043,6 +1049,46 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
     {:noreply, push_event(socket, "map:state", render_state(socket.assigns.map, socket.assigns))}
   end
 
+  def handle_event("object:move", %{"id" => id, "x" => x, "y" => y}, socket) do
+    x_val = if is_binary(x), do: String.to_integer(x), else: x
+    y_val = if is_binary(y), do: String.to_integer(y), else: y
+    prev_obj = Enum.find(socket.assigns.objects, &(&1.id == id))
+
+    if prev_obj do
+      fields_new = %{"x" => x_val, "y" => y_val}
+      fields_prev = %{"x" => prev_obj.x, "y" => prev_obj.y}
+
+      objects =
+        Enum.map(socket.assigns.objects, fn obj ->
+          if obj.id == id do
+            obj
+            |> Map.put(:x, x_val)
+            |> Map.put(:y, y_val)
+          else
+            obj
+          end
+        end)
+
+      persist_map_objects(socket.assigns.map.id, objects)
+
+      socket =
+        socket
+        |> append_phase2a_op("edit_object", %{
+          "object_id" => id,
+          "fields" => fields_new,
+          "prev_fields" => fields_prev
+        })
+        |> assign(:objects, objects)
+        |> assign(:dirty?, true)
+        |> assign(:selected_object_id, id)
+        |> push_event("map:state", render_state(socket.assigns.map, %{socket.assigns | objects: objects}))
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("event:link_script", %{"event_id" => eid, "script_id" => sid}, socket) do
     sid_i = if sid in ["", nil], do: nil, else: to_int(sid)
 
@@ -1847,30 +1893,45 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
     do: handle_zone_tool_click("sound_zone", x, y, socket)
 
   defp handle_tool_click("object", x, y, socket) do
-    preset = object_preset(socket.assigns.active_object_preset)
-    object = %{
-      id: object_id(),
-      x: x,
-      y: y,
-      preset: preset.key,
-      label: preset.label,
-      icon: preset.icon,
-      group: preset.group,
-      blocking: preset.blocking
-    }
+    case Enum.find(socket.assigns.objects, fn obj -> obj.x == x and obj.y == y end) do
+      nil ->
+        preset = object_preset(socket.assigns.active_object_preset)
+        object = %{
+          id: object_id(),
+          x: x,
+          y: y,
+          preset: preset.key,
+          label: preset.label,
+          icon: preset.icon,
+          group: preset.group,
+          blocking: preset.blocking
+        }
 
-    object = if light = preset[:light], do: Map.put(object, :light, light), else: object
+        object = if light = preset[:light], do: Map.put(object, :light, light), else: object
 
-    objects = [object | socket.assigns.objects]
-    persist_map_objects(socket.assigns.map.id, objects)
+        objects = [object | socket.assigns.objects]
+        persist_map_objects(socket.assigns.map.id, objects)
 
-    socket =
-      socket
-      |> append_phase2a_op("place_object", %{"object" => object})
-      |> assign(:objects, objects)
-      |> assign(:dirty?, true)
+        socket =
+          socket
+          |> append_phase2a_op("place_object", %{"object" => object})
+          |> assign(:objects, objects)
+          |> assign(:dirty?, true)
+          |> assign(:selected_object_id, object.id)
+          |> assign(:object_panel_mode, :edit)
+          |> push_event("object:select", %{id: object.id})
 
-    {:noreply, push_event(socket, "map:state", render_state(socket.assigns.map, socket.assigns))}
+        {:noreply, push_event(socket, "map:state", render_state(socket.assigns.map, socket.assigns))}
+
+      existing ->
+        socket =
+          socket
+          |> assign(:selected_object_id, existing.id)
+          |> assign(:object_panel_mode, :edit)
+          |> push_event("object:select", %{id: existing.id})
+
+        {:noreply, socket}
+    end
   end
 
   defp handle_tool_click("event", x, y, socket) do
@@ -2649,8 +2710,12 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
                   <% "NPC" -> %>
                     <label class="block">
                       <span class="text-[9px] text-zinc-500 uppercase">NPC template id</span>
-                      <input type="text" name="npc_template_id" value={Map.get(@event_form, "npc_template_id", "")}
-                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                      <select name="npc_template_id" class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200 focus:outline-none focus:border-amber-500">
+                        <option value="">(Select NPC)</option>
+                        <option :for={{npc_id, npc_name} <- @npcs} value={npc_id} selected={to_string(npc_id) == to_string(Map.get(@event_form, "npc_template_id"))}>
+                          {npc_name} (ID {npc_id})
+                        </option>
+                      </select>
                     </label>
                     <label class="block">
                       <span class="text-[9px] text-zinc-500 uppercase">Dialogue id (optional)</span>
@@ -2661,8 +2726,12 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
                   <% "ENEMY" -> %>
                     <label class="block">
                       <span class="text-[9px] text-zinc-500 uppercase">Enemy template id</span>
-                      <input type="text" name="enemy_template_id" value={Map.get(@event_form, "enemy_template_id", "")}
-                        class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                      <select name="enemy_template_id" class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200 focus:outline-none focus:border-amber-500">
+                        <option value="">(Select Enemy/NPC)</option>
+                        <option :for={{npc_id, npc_name} <- @npcs} value={npc_id} selected={to_string(npc_id) == to_string(Map.get(@event_form, "enemy_template_id"))}>
+                          {npc_name} (ID {npc_id})
+                        </option>
+                      </select>
                     </label>
                     <label class="block">
                       <span class="text-[9px] text-zinc-500 uppercase">Level scaling</span>
@@ -2766,15 +2835,23 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
                       <% "NPC" -> %>
                         <label class="block">
                           <span class="text-[9px] text-zinc-500 uppercase">NPC template id</span>
-                          <input type="text" name="npc_template_id" value={Map.get(@event_form, "npc_template_id", "")}
-                            class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                          <select name="npc_template_id" class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200 focus:outline-none focus:border-amber-500">
+                            <option value="">(Select NPC)</option>
+                            <option :for={{npc_id, npc_name} <- @npcs} value={npc_id} selected={to_string(npc_id) == to_string(Map.get(@event_form, "npc_template_id"))}>
+                              {npc_name} (ID {npc_id})
+                            </option>
+                          </select>
                         </label>
 
                       <% "ENEMY" -> %>
                         <label class="block">
                           <span class="text-[9px] text-zinc-500 uppercase">Enemy template id</span>
-                          <input type="text" name="enemy_template_id" value={Map.get(@event_form, "enemy_template_id", "")}
-                            class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200" />
+                          <select name="enemy_template_id" class="w-full px-2 py-1 text-[11px] bg-zinc-800 border border-zinc-700 rounded text-zinc-200 focus:outline-none focus:border-amber-500">
+                            <option value="">(Select Enemy/NPC)</option>
+                            <option :for={{npc_id, npc_name} <- @npcs} value={npc_id} selected={to_string(npc_id) == to_string(Map.get(@event_form, "enemy_template_id"))}>
+                              {npc_name} (ID {npc_id})
+                            </option>
+                          </select>
                         </label>
                         <label class="block">
                           <span class="text-[9px] text-zinc-500 uppercase">Level scaling</span>
@@ -2869,10 +2946,13 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
                     <div :for={{row, idx} <- Enum.with_index(z.encounter_table || [])}
                       class="bg-zinc-800/50 rounded border border-zinc-700 p-2 space-y-1">
                       <div class="flex gap-1 items-center">
-                        <input type="text" value={Map.get(row, "npc_id", "")}
-                          phx-blur="spawn:set_encounter" phx-value-id={z.id} phx-value-row={idx} phx-value-field="npc_id"
-                          placeholder="NPC id"
-                          class="flex-1 px-1.5 py-0.5 text-[10px] bg-zinc-900 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600" />
+                        <select phx-change="spawn:set_encounter" phx-value-id={z.id} phx-value-row={idx} phx-value-field="npc_id"
+                          class="flex-1 px-1 py-0.5 text-[10px] bg-zinc-900 border border-zinc-700 rounded text-zinc-200 focus:outline-none focus:border-amber-500">
+                          <option value="">(Select NPC)</option>
+                          <option :for={{npc_id, npc_name} <- @npcs} value={npc_id} selected={to_string(npc_id) == to_string(Map.get(row, "npc_id"))}>
+                            {npc_name} (ID {npc_id})
+                          </option>
+                        </select>
                         <button phx-click="spawn:remove_encounter" phx-value-id={z.id} phx-value-row={idx}
                           class="px-1.5 py-0.5 text-[10px] text-rose-400 hover:text-rose-300">×</button>
                       </div>
@@ -5912,6 +5992,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   defp normalize_encounter_value("count", v), do: to_int(v) |> max(1)
   defp normalize_encounter_value("weight", v), do: to_int(v) |> max(1)
   defp normalize_encounter_value("level_scaling", v), do: parse_float(v, 1.0)
+  defp normalize_encounter_value("npc_id", v), do: to_int(v)
   defp normalize_encounter_value(_, v), do: v
 
   # Form-based event-form update. The form posts every named field; we use
