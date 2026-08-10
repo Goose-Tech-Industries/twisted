@@ -24,6 +24,13 @@ function loadPhoenixSecret() {
   }
 }
 
+// DB password must come from the environment — never hardcode it here.
+function dbPassword() {
+  const pw = process.env.TE_DB_PASSWORD
+  if (!pw) throw new Error('TE_DB_PASSWORD is not set in the environment')
+  return pw
+}
+
 module.exports = {
   apps: [
     // ── Express backend ────────────────────────────────────────
@@ -73,7 +80,7 @@ module.exports = {
         PHX_SERVER: 'true',
         PHX_HOST: 'tcgaming.quest',
         PORT: '4000',
-        DATABASE_URL: 'ecto://root:***REDACTED-DB-PASSWORD***@localhost/twisted_rpg',
+        DATABASE_URL: `ecto://root:${dbPassword()}@localhost/twisted_rpg`,
         SECRET_KEY_BASE: loadPhoenixSecret(),
         POOL_SIZE: '10',
       },

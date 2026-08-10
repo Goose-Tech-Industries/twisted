@@ -11,3 +11,4 @@ logs/
 *.tsbuildinfo
 .DS_Store
 .env.phoenix.secret
+opencode.json

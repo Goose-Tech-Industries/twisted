@@ -3,7 +3,7 @@ import Config
 # Configure your database
 config :te_phoenix, TePhoenix.Repo,
   username: "root",
-  password: "***REDACTED-DB-PASSWORD***",
+  password: System.get_env("TE_DB_PASSWORD") || raise("environment variable TE_DB_PASSWORD is missing"),
   hostname: "localhost",
   database: "twisted_rpg",
   stacktrace: true,
