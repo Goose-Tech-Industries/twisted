@@ -12,3 +12,7 @@ logs/
 .DS_Store
 .env.phoenix.secret
 opencode.json
+*.next/
+erl_crash.dump
+player/build/
+player/.svelte-kit/
