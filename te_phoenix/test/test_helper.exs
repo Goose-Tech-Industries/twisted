@@ -30,7 +30,9 @@ if function_exported?(TePhoenix.DataCase, :ensure_map_ops_schema!, 0) do
   for {mod, fun} <- [
         {TePhoenix.Game.Achievements, :ensure_schema},
         {TePhoenix.Game.Magic, :ensure_schema},
-        {TePhoenix.Game.Fog, :ensure_schema}
+        {TePhoenix.Game.Fog, :ensure_schema},
+        {TePhoenix.AI.JarvisOperations, :ensure_schema},
+        {TePhoenix.AI.UileOperations, :ensure_schema}
       ] do
     if Code.ensure_loaded?(mod) and function_exported?(mod, fun, 0) do
       apply(mod, fun, [])

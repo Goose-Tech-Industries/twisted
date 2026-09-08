@@ -52,6 +52,24 @@ defmodule TePhoenix.Game.MapOps do
   read-after-write hazard, no duplicate sequences.
   """
   def append(map_id, op_id, op_type, payload, opts \\ []) do
+    do_append_with_retry(map_id, op_id, op_type, payload, opts, 10)
+  end
+
+  defp do_append_with_retry(map_id, op_id, op_type, payload, opts, attempts_left) do
+    case do_append(map_id, op_id, op_type, payload, opts) do
+      {:ok, record} ->
+        {:ok, record}
+
+      {:error, %MyXQL.Error{mysql: %{code: code}}} when code in [1020, 1205, 1213] and attempts_left > 0 ->
+        :timer.sleep(:rand.uniform(25) + 5)
+        do_append_with_retry(map_id, op_id, op_type, payload, opts, attempts_left - 1)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_append(map_id, op_id, op_type, payload, opts) do
     user_id = Keyword.get(opts, :user_id)
     user_name = Keyword.get(opts, :user_name, "editor")
     parent = Keyword.get(opts, :parent_op_id)

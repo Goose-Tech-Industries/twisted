@@ -1,0 +1,1513 @@
+// In-Game Voice Chat Store for grouped players and party raid squads.
+// Supports WebRTC peer mesh signaling, voice activity detection, companion verbal & physical tactical reactions,
+// ARC Raiders spatial proximity acoustics with 3D stereo panning & distance attenuation,
+// footstep locomotion acoustics across diverse surfaces (stone, wood, water, grass, metal),
+// circadian night amplification, awakened denizens, and non-hostile dynamic reactivity.
+
+import { browser } from '$app/environment'
+import { connection } from '$phoenix/connection.svelte'
+import { character } from '$stores/character.svelte'
+import type { Channel } from 'phoenix'
+
+export type TransmissionBand = 'party' | 'proximity' | 'whisper' | 'shout'
+
+export interface VoicePeer {
+  charId: number
+  name: string
+  speaking: boolean
+  muted: boolean
+}
+
+export interface SpatialPeerSpeech {
+  charId: number
+  name: string
+  text: string
+  mode: TransmissionBand | string
+  distanceTiles: number
+  pan: number // -1.0 (left) to +1.0 (right)
+  volume: number // 0.0 to 1.0
+  ts: number
+}
+
+export interface SpatialFootstep {
+  charId: number
+  name: string
+  surface: string
+  stance: string
+  distanceTiles: number
+  pan: number
+  volume: number
+  ts: number
+}
+
+export interface AwakenedNpc {
+  npcId: number
+  name: string
+  icon: string
+  reaction: string
+  ts: number
+}
+
+export interface CompanionVoiceSpeech {
+  companionId: number
+  name: string
+  icon: string
+  text: string
+  audioUrl?: string
+  tactic?: string
+  isThought?: boolean
+  ts: number
+}
+
+export interface CompanionAction {
+  companionId: number
+  companionName: string
+  icon: string
+  actionType: string
+  actionName: string
+  description: string
+  targetName: string
+  buff?: { stat: string; value: number; duration_seconds?: number }
+  posShift?: { dx: number; dy: number; label: string }
+  animation?: string
+  isThoughtReaction?: boolean
+  ts: number
+}
+
+export interface NpcOverheardReaction {
+  npcId: number
+  name: string
+  icon: string
+  role: string
+  text: string
+  audioUrl?: string
+  distanceTiles?: number
+  isThoughtIntercept?: boolean
+  isEnemy?: boolean
+  isNocturnal?: boolean
+  isSleeping?: boolean
+  throughWindow?: boolean
+  windowInfo?: { building_name?: string; building_key?: string; window_x?: number; window_y?: number }
+  spatial?: {
+    distance: number
+    pan: number
+    volume: number
+    attenuation: number
+    occluded: boolean
+    in_earshot: boolean
+  }
+  ts: number
+}
+
+export interface DrunkConfrontation {
+  npcId: number
+  npcName: string
+  icon: string
+  text: string
+  playerName: string
+  charId: number
+  availableApproaches: string[]
+  timestamp: number
+}
+
+export interface DeescalateResult {
+  success: boolean
+  approach: string
+  dialogue: string
+  diplomacy_xp: number
+  cost_gold: number
+  roll?: number
+  modifier?: number
+  total_roll?: number
+  dc?: number
+  crit?: boolean
+  crit_fail?: boolean
+  target_role?: string
+}
+
+export interface NpcActionExecuted {
+  npcId: number
+  npcName: string
+  icon: string
+  actionType: string
+  actionName: string
+  description: string
+  targetName: string
+  distanceTiles?: number
+  buff?: { stat: string; value: number }
+  newCoords?: { x: number; y: number }
+  alarmTriggered?: boolean
+  isThoughtIntercept?: boolean
+  isAwakened?: boolean
+  spatial?: {
+    distance: number
+    pan: number
+    volume: number
+    attenuation: number
+    occluded: boolean
+    in_earshot: boolean
+  }
+  ts: number
+}
+
+export interface UileIntervention {
+  warpType: string
+  title: string
+  message: string
+  speaker: string
+  audioUrl?: string
+  invoker?: string
+  buff?: { stat: string; value: number }
+  ts: number
+}
+
+export interface TacticalLogItem {
+  id: string
+  source: 'companion' | 'npc' | 'uile' | 'peer' | 'diplomacy' | 'window'
+  title: string
+  desc: string
+  icon: string
+  ts: number
+}
+
+export interface WindowPortal {
+  buildingId: number
+  buildingKey: string
+  buildingName: string
+  buildingType: string
+  interiorMapId: number
+  windowX: number
+  windowY: number
+  state: 'open' | 'cracked' | 'closed' | 'shuttered' | 'broken'
+  latchLocked?: boolean
+  volumeMult: number
+  reverb: number
+  muffled: boolean
+  canClimb: boolean
+  canPeek: boolean
+  label: string
+  distance: number
+}
+
+export interface WindowPeekResult {
+  canSee: boolean
+  clarity?: 'clear' | 'distorted'
+  buildingName: string
+  buildingDesc?: string
+  state: string
+  occupants: Array<{
+    id: number
+    name: string
+    role: string
+    icon: string
+    isSleeping: boolean
+    activity: string
+  }>
+  message: string
+}
+
+export interface WindowRumorResult {
+  success: boolean
+  eavesdropped?: boolean
+  buildingKey?: string
+  buildingName: string
+  windowState?: string
+  speakerA?: string
+  speakerB?: string
+  dialogue: string
+  perk?: string
+  secretType?: string
+  rewardXp?: number
+}
+
+export interface WindowActionResult {
+  success: boolean
+  state?: string
+  previousState?: string
+  silent?: boolean
+  buildingName?: string
+  message: string
+}
+
+export interface DefenestrationResult {
+  success: boolean
+  str_roll?: number
+  target_dc?: number
+  target_name?: string
+  glass_damage?: number
+  fall_damage?: number
+  dest_map_id?: number
+  dest_x?: number
+  dest_y?: number
+  bleeding?: boolean
+  prone?: boolean
+  blocked_by_bars?: boolean
+  message: string
+}
+
+export interface StalkerSpotResult {
+  spotted: boolean
+  stalker_id?: number
+  id?: number
+  name?: string
+  icon?: string
+  distance?: number
+  available_actions?: string[]
+  message: string
+}
+
+export interface StalkerInteractResult {
+  success: boolean
+  action: string
+  confession?: string
+  tip?: string
+  buff?: { name: string; description: string; duration_seconds: number }
+  fled?: boolean
+  hostile?: boolean
+  message: string
+}
+
+export interface AddictInteractResult {
+  success: boolean
+  action: string
+  cost_gold?: number
+  secret?: string
+  screech_decibels?: number
+  guards_alerted?: boolean
+  stolen?: boolean
+  amount?: number
+  intel_reward?: string
+  pickpocket_gold?: number
+  message: string
+}
+
+export interface GasDeployResult {
+  success: boolean
+  gas_type?: string
+  gas_name?: string
+  building_name?: string
+  duration_turns?: number
+  affected_occupants?: number
+  affected?: Array<{ id: number; name: string; role: string; saved?: boolean; asleep?: boolean; evacuated?: boolean; blinded?: boolean }>
+  message: string
+}
+
+export interface PropertyItem {
+  id: number
+  building_id: number
+  building_key?: string
+  map_id: number
+  name: string
+  price_gold: number
+  deed_cost?: number
+  owner_char_id: number | null
+  owner_name: string | null
+  is_for_sale: boolean
+  is_owned?: boolean
+  fortifications: string[]
+  has_iron_bars?: boolean
+  has_soundproof_curtains?: boolean
+  has_alarm_glyphs?: boolean
+  curtains_drawn: boolean
+  security_rating?: number
+}
+
+export interface DraftResult {
+  draftActive: boolean
+  galeWeather?: string
+  windowState?: string
+  candlesExtinguished?: boolean
+  lightLevel?: number
+  stealthBonus?: number
+  message: string
+}
+
+function createVoiceChatStore() {
+  let inVoice = $state(false)
+  let isMuted = $state(false)
+  let isDeafened = $state(false)
+  let transmissionBand = $state<TransmissionBand>('party')
+  let timeOfDay = $state<'dawn' | 'day' | 'dusk' | 'night' | 'midnight'>('day')
+  let currentPartyId = $state<string | number | null>(null)
+  let currentProximityMapId = $state<number | null>(null)
+  let peers = $state<Map<number, VoicePeer>>(new Map())
+  let speakingPeers = $state<Set<number>>(new Set())
+  let lastBattleCry = $state<{ speaker: string; cry: string; ts: number } | null>(null)
+  let lastSpatialPeerSpeech = $state<SpatialPeerSpeech | null>(null)
+  let lastFootstep = $state<SpatialFootstep | null>(null)
+  let lastAwakenedNpc = $state<AwakenedNpc | null>(null)
+  let lastCompanionSpeech = $state<CompanionVoiceSpeech | null>(null)
+  let lastCompanionAction = $state<CompanionAction | null>(null)
+  let lastNpcReaction = $state<NpcOverheardReaction | null>(null)
+  let lastNpcAction = $state<NpcActionExecuted | null>(null)
+  let lastUileWarp = $state<UileIntervention | null>(null)
+  let lastDrunkConfrontation = $state<DrunkConfrontation | null>(null)
+  let lastDeescalateResult = $state<DeescalateResult | null>(null)
+  let nearbyWindow = $state<WindowPortal | null>(null)
+  let lastPeekResult = $state<WindowPeekResult | null>(null)
+  let lastRumorResult = $state<WindowRumorResult | null>(null)
+  let lastWindowAction = $state<WindowActionResult | null>(null)
+  let lastDefenestration = $state<DefenestrationResult | null>(null)
+  let activeStalker = $state<StalkerSpotResult | null>(null)
+  let lastStalkerAction = $state<StalkerInteractResult | null>(null)
+  let lastAddictResult = $state<AddictInteractResult | null>(null)
+  let lastGasDeploy = $state<GasDeployResult | null>(null)
+  let propertiesList = $state<PropertyItem[]>([])
+  let lastDraftResult = $state<DraftResult | null>(null)
+  let tacticalLog = $state<TacticalLogItem[]>([])
+
+  let channel: Channel | null = null
+  let proximityChannel: Channel | null = null
+  let localStream: MediaStream | null = null
+  let audioCtx: AudioContext | null = null
+  let analyser: AnalyserNode | null = null
+  let vadInterval: number | null = null
+  let wasSpeaking = false
+  let storedCharId: number = 1
+  let storedCharName: string = 'Player'
+
+  function pushLog(source: 'companion' | 'npc' | 'uile' | 'peer' | 'diplomacy' | 'window', title: string, desc: string, icon: string) {
+    const item: TacticalLogItem = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      source,
+      title,
+      desc,
+      icon,
+      ts: Date.now()
+    }
+    tacticalLog = [item, ...tacticalLog.slice(0, 9)]
+  }
+
+  function getAudioContext(): AudioContext | null {
+    if (!browser) return null
+    try {
+      if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+        if (AudioContextClass) {
+          audioCtx = new AudioContextClass()
+        }
+      }
+      if (audioCtx && audioCtx.state === 'suspended') {
+        void audioCtx.resume()
+      }
+      return audioCtx
+    } catch (_) {
+      return null
+    }
+  }
+
+  function playTone(freq: number, type: OscillatorType = 'sine', duration = 0.15) {
+    if (!browser) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = type
+      osc.frequency.value = freq
+      gain.gain.value = 0.08
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start()
+      osc.stop(ctx.currentTime + duration)
+    } catch (_) {}
+  }
+
+  function playSpatialTone(freq: number, pan: number, volume: number, type: OscillatorType = 'sine', duration = 0.15) {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = type
+      osc.frequency.value = freq
+      gain.gain.value = Math.max(0.01, Math.min(1.0, volume)) * 0.12
+
+      if (ctx.createStereoPanner) {
+        const panner = ctx.createStereoPanner()
+        panner.pan.value = Math.max(-1, Math.min(1, pan))
+        osc.connect(panner)
+        panner.connect(gain)
+      } else {
+        osc.connect(gain)
+      }
+      gain.connect(ctx.destination)
+      osc.start()
+      osc.stop(ctx.currentTime + duration)
+    } catch (_) {}
+  }
+
+  function playSpatialFootstep(surface: string, pan: number, volume: number) {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      const now = ctx.currentTime
+
+      const s = (surface || 'stone').toLowerCase()
+      if (s.includes('wood')) {
+        osc.type = 'triangle'
+        osc.frequency.setValueAtTime(320, now)
+        osc.frequency.exponentialRampToValueAtTime(140, now + 0.08)
+        gain.gain.setValueAtTime(Math.min(1.0, volume * 0.18), now)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09)
+      } else if (s.includes('water')) {
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(620, now)
+        osc.frequency.exponentialRampToValueAtTime(320, now + 0.12)
+        gain.gain.setValueAtTime(Math.min(1.0, volume * 0.22), now)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.13)
+      } else if (s.includes('metal')) {
+        osc.type = 'sawtooth'
+        osc.frequency.setValueAtTime(2200, now)
+        osc.frequency.exponentialRampToValueAtTime(800, now + 0.14)
+        gain.gain.setValueAtTime(Math.min(1.0, volume * 0.2), now)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15)
+      } else if (s.includes('grass')) {
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(220, now)
+        osc.frequency.exponentialRampToValueAtTime(120, now + 0.06)
+        gain.gain.setValueAtTime(Math.min(1.0, volume * 0.08), now)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07)
+      } else {
+        // Stone / dungeon floor crisp clack
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(1400, now)
+        osc.frequency.exponentialRampToValueAtTime(280, now + 0.07)
+        gain.gain.setValueAtTime(Math.min(1.0, volume * 0.16), now)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
+      }
+
+      if (ctx.createStereoPanner) {
+        const panner = ctx.createStereoPanner()
+        panner.pan.value = Math.max(-1, Math.min(1, pan))
+        osc.connect(panner)
+        panner.connect(gain)
+      } else {
+        osc.connect(gain)
+      }
+      gain.connect(ctx.destination)
+      osc.start(now)
+      osc.stop(now + 0.16)
+    } catch (_) {}
+  }
+
+  function playBattleHorn() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const freqs = [261.63, 329.63, 392.00, 523.25]
+      freqs.forEach((f, idx) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'sawtooth'
+        osc.frequency.setValueAtTime(f, ctx.currentTime)
+        gain.gain.setValueAtTime(0.06, ctx.currentTime)
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 1.2 + idx * 0.1)
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.start(ctx.currentTime + idx * 0.05)
+        osc.stop(ctx.currentTime + 1.5)
+      })
+    } catch (_) {}
+  }
+
+  function calculateSpatialAcoustics(targetCoords: { x?: number; y?: number }, maxRadius: number) {
+    const lx = character.active?.x ?? 10
+    const ly = character.active?.y ?? 10
+    const sx = targetCoords.x ?? lx
+    const sy = targetCoords.y ?? ly
+    const dx = sx - lx
+    const dy = sy - ly
+    const dist = Math.sqrt(dx * dx + dy * dy)
+
+    if (dist > maxRadius) {
+      return { inRange: false, dist, pan: 0, volume: 0 }
+    }
+
+    const pan = Math.max(-1, Math.min(1, dx / 12))
+    const rel = dist / maxRadius
+    const volume = Math.max(0.04, Math.pow(1 - rel, 1.4))
+    return { inRange: true, dist: Math.round(dist * 10) / 10, pan, volume }
+  }
+
+  function playSpatialSpeech(text: string, pan: number, volume: number, audioUrl?: string, isEnemy = false) {
+    if (!browser || isDeafened) return
+
+    if (audioUrl) {
+      const ctx = getAudioContext()
+      if (ctx) {
+        fetch(audioUrl)
+          .then(res => res.arrayBuffer())
+          .then(buf => ctx.decodeAudioData(buf))
+          .then(decoded => {
+            const src = ctx.createBufferSource()
+            src.buffer = decoded
+            const gain = ctx.createGain()
+            gain.gain.value = Math.max(0.05, Math.min(1.0, volume)) * 0.9
+
+            if (ctx.createStereoPanner) {
+              const panner = ctx.createStereoPanner()
+              panner.pan.value = Math.max(-1, Math.min(1, pan))
+              src.connect(panner)
+              panner.connect(gain)
+            } else {
+              src.connect(gain)
+            }
+            gain.connect(ctx.destination)
+            src.start(0)
+          })
+          .catch(() => {
+            playSpeechSynthesisFallback(text, pan, volume, isEnemy)
+          })
+        return
+      }
+    }
+
+    playSpeechSynthesisFallback(text, pan, volume, isEnemy)
+  }
+
+  function playSpeechSynthesisFallback(text: string, pan: number, volume: number, isEnemy = false) {
+    if (!browser || !window.speechSynthesis || isDeafened) return
+    playSpatialTone(isEnemy ? 280 : 540, pan, volume, 'triangle', 0.12)
+    const utter = new SpeechSynthesisUtterance(text)
+    utter.volume = Math.max(0.15, Math.min(1.0, volume))
+    utter.pitch = isEnemy ? 0.65 : 1.0
+    utter.rate = 1.0
+    window.speechSynthesis.speak(utter)
+  }
+
+  function setupProximityChannel(mapId: number, charId: number, name: string) {
+    if (proximityChannel) {
+      proximityChannel.leave()
+      proximityChannel = null
+    }
+
+    currentProximityMapId = mapId
+    const proxTopic = `voice:proximity:${mapId}`
+    const proxChan = connection.channel(proxTopic, { char_id: charId, name })
+
+    if (proxChan) {
+      // 1. Spatial Peer Speech from nearby adventurers
+      proxChan.on('spatial_peer_speech', (p: any) => {
+        if (p.char_id === charId) return
+        const maxRadius = p.mode === 'whisper' ? 4 : p.mode === 'shout' ? 32 : 16
+        const spatial = calculateSpatialAcoustics(p.coords || {}, maxRadius)
+        if (!spatial.inRange) return
+
+        lastSpatialPeerSpeech = {
+          charId: p.char_id,
+          name: p.name || 'Nearby Adventurer',
+          text: p.text,
+          mode: p.mode || 'proximity',
+          distanceTiles: Math.round(spatial.dist),
+          pan: spatial.pan,
+          volume: spatial.volume,
+          ts: Date.now()
+        }
+
+        pushLog('peer', `${p.name} [${(p.mode || 'proximity').toUpperCase()}]`, `"${p.text}" (${Math.round(spatial.dist)} tiles away)`, '🗣️')
+        playSpatialSpeech(p.text, spatial.pan, spatial.volume, undefined, false)
+      })
+
+      // 2. Spatial Footstep Locomotion from moving players & creatures
+      proxChan.on('player_footstep', (p: any) => {
+        if (p.char_id === charId) return
+        const maxRadius = p.radius || 8
+        const spatial = calculateSpatialAcoustics(p.coords || {}, maxRadius)
+        if (!spatial.inRange) return
+
+        lastFootstep = {
+          charId: p.char_id,
+          name: p.player_name || 'Adventurer',
+          surface: p.surface || 'stone',
+          stance: p.stance || 'walk',
+          distanceTiles: Math.round(spatial.dist),
+          pan: spatial.pan,
+          volume: spatial.volume,
+          ts: Date.now()
+        }
+
+        playSpatialFootstep(p.surface, spatial.pan, spatial.volume)
+      })
+
+      // 3. Circadian Day/Night Shift
+      proxChan.on('circadian_shift', (p: any) => {
+        if (p.time_of_day) {
+          timeOfDay = p.time_of_day
+          playTone(p.is_night ? 320 : 640, 'triangle', 0.2)
+        }
+      })
+
+      // 4. Awakened NPC notification
+      proxChan.on('npc_awakened', (p: any) => {
+        lastAwakenedNpc = {
+          npcId: p.npc_id,
+          name: p.npc_name,
+          icon: p.icon || '👤',
+          reaction: p.description,
+          ts: Date.now()
+        }
+        pushLog('npc', p.action_name || 'Awakened', p.description, '💤')
+        playTone(480, 'sawtooth', 0.15)
+      })
+
+      // 5. NPC Spatial Voice overheard by anyone in range
+      proxChan.on('npc_spatial_voice', (p: any) => {
+        if (lastNpcReaction && Date.now() - lastNpcReaction.ts < 2000 && lastNpcReaction.npcId === p.npc_id) {
+          return
+        }
+        const maxRadius = p.is_thought_intercept ? 10 : 16
+        const spatial = calculateSpatialAcoustics(p.coords || { x: p.spatial?.x, y: p.spatial?.y }, maxRadius)
+        const pan = p.spatial?.pan ?? spatial.pan
+        const vol = p.spatial?.volume ?? spatial.volume
+
+        lastNpcReaction = {
+          npcId: p.npc_id,
+          name: p.name,
+          icon: p.icon || '👤',
+          role: p.role,
+          text: p.text,
+          audioUrl: p.audio_url,
+          distanceTiles: p.distance_tiles ?? Math.round(spatial.dist),
+          isThoughtIntercept: p.is_thought_intercept,
+          isEnemy: p.is_enemy,
+          isNocturnal: p.is_nocturnal,
+          isSleeping: p.is_sleeping,
+          spatial: p.spatial,
+          ts: Date.now()
+        }
+
+        playSpatialSpeech(p.text, pan, vol, p.audio_url, p.is_enemy)
+      })
+
+      // 6. Drunk Confrontation / Altercation
+      proxChan.on('drunk_confrontation', (p: any) => {
+        lastDrunkConfrontation = {
+          npcId: p.npc_id,
+          npcName: p.npc_name,
+          icon: p.icon || '🍺',
+          text: p.text,
+          playerName: p.player_name,
+          charId: p.char_id,
+          availableApproaches: p.available_approaches || ['buy_drink', 'persuasion', 'intimidation', 'bribe', 'deception'],
+          timestamp: p.timestamp || Date.now()
+        }
+        pushLog('diplomacy', `🍺 Drunk Argument: ${p.npc_name}`, p.text, '🍺')
+        playSpatialTone(180, 0, 0.35, 'sawtooth', 0.25)
+      })
+
+      // 7. Window Eavesdrop Notification
+      proxChan.on('window_eavesdrop', (p: any) => {
+        pushLog('window', `🪟 Window Bleed: ${p.building_name || 'Building'}`, p.text, '🪟')
+        playSpatialTone(720, 0, 0.18, 'sine', 0.12)
+      })
+
+      // 8. De-escalation result
+      proxChan.on('deescalate_result', (p: any) => {
+        lastDeescalateResult = p
+        if (p.success) {
+          pushLog('diplomacy', `🕊️ De-escalation SUCCESS (${p.approach})`, p.dialogue, '🕊️')
+          playSpatialTone(523.25, 0, 0.3, 'triangle', 0.3)
+          lastDrunkConfrontation = null
+        } else {
+          pushLog('diplomacy', `⚔️ De-escalation FAILED (${p.approach})`, p.dialogue, '⚔️')
+          playSpatialTone(140, 0, 0.4, 'sawtooth', 0.3)
+        }
+      })
+
+      // 9. Window state changes (real-time open/close toggle)
+      proxChan.on('window_state_changed', (p: any) => {
+        if (nearbyWindow && nearbyWindow.windowX === p.window_x && nearbyWindow.windowY === p.window_y) {
+          nearbyWindow = {
+            ...nearbyWindow,
+            state: p.state,
+            volumeMult: p.volume_mult,
+            reverb: p.reverb,
+            muffled: p.muffled,
+            label: p.label,
+            canClimb: p.can_climb,
+            canPeek: p.can_peek
+          }
+        }
+        pushLog('window', `🪟 Window ${p.state.toUpperCase()}: ${p.building_name || 'Building'}`, `Window at {${p.window_x}, ${p.window_y}} is now ${p.label}`, '🪟')
+        playTone(p.state === 'open' ? 620 : 380, 'sine', 0.12)
+      })
+
+      // 10. Window noise (creak, rattle, or shattered glass)
+      proxChan.on('window_noise', (p: any) => {
+        pushLog('window', `👂 Window Sound: ${p.sound}`, p.description, '🪟')
+        if (p.sound === 'glass_shattered') {
+          playTone(220, 'sawtooth', 0.35)
+        } else {
+          playTone(340, 'triangle', 0.18)
+        }
+      })
+
+      // 11. Nearby windows response
+      proxChan.on('nearby_windows', (p: any) => {
+        if (p.windows && p.windows.length > 0) {
+          const w = p.windows[0]
+          nearbyWindow = {
+            buildingId: w.building_id,
+            buildingKey: w.building_key,
+            buildingName: w.building_name,
+            buildingType: w.building_type,
+            interiorMapId: w.interior_map_id,
+            windowX: w.window_x,
+            windowY: w.window_y,
+            state: w.state,
+            latchLocked: w.latch_locked,
+            volumeMult: w.volume_mult,
+            reverb: w.reverb,
+            muffled: w.muffled,
+            canClimb: w.can_climb,
+            canPeek: w.can_peek,
+            label: w.label,
+            distance: w.distance
+          }
+        } else {
+          nearbyWindow = null
+        }
+      })
+
+      // 12. Window action result
+      proxChan.on('window_action_result', (p: any) => {
+        lastWindowAction = p
+        if (p.message) {
+          pushLog('window', '🪟 Window Action', p.message, '🪟')
+        }
+      })
+
+      // 13. Window peek result
+      proxChan.on('window_peek_result', (p: any) => {
+        lastPeekResult = p
+        playTone(520, 'sine', 0.12)
+      })
+
+      // 14. Window rumor result
+      proxChan.on('window_rumor_result', (p: any) => {
+        lastRumorResult = p
+        if (p.eavesdropped) {
+          pushLog('diplomacy', `📜 Eavesdropped: ${p.building_name}`, `"${p.dialogue}"`, '📜')
+          playTone(660, 'triangle', 0.25)
+        }
+      })
+
+      // 15. Defenestration result
+      proxChan.on('defenestration_result', (p: any) => {
+        lastDefenestration = p
+        if (p.message) {
+          pushLog('window', p.success ? '💥 DEFENESTRATION!' : '🛡️ Grapple Resisted', p.message, '💥')
+        }
+        if (p.glass_shattered) playTone(220, 'sawtooth', 0.4)
+      })
+
+      // 16. Combatant defenestrated broadcast
+      proxChan.on('combatant_defenestrated', (p: any) => {
+        pushLog('window', '💥 Defenestration Impact!', p.description, '💥')
+        playTone(220, 'sawtooth', 0.35)
+      })
+
+      // 17. Stalker spotted result
+      proxChan.on('spot_stalker_result', (p: any) => {
+        const sId = p.stalker_id || p.id || 1
+        activeStalker = {
+          spotted: p.spotted,
+          stalker_id: sId,
+          id: sId,
+          name: p.name || 'Shadowy Stalker',
+          icon: p.icon || '🕵️',
+          distance: p.distance || 3,
+          available_actions: p.available_actions,
+          message: p.message
+        }
+        if (p.spotted) {
+          pushLog('npc', `🕵️ Stalker Spotted: ${p.name}`, p.message, '🕵️')
+          playTone(440, 'sine', 0.2)
+        }
+      })
+
+      // 18. Stalker unmasked broadcast
+      proxChan.on('stalker_unmasked', (p: any) => {
+        pushLog('npc', `🕵️ Stalker Unmasked: ${p.name}`, p.message, '🕵️')
+      })
+
+      // 19. Stalker interaction result
+      proxChan.on('interact_stalker_result', (p: any) => {
+        lastStalkerAction = p
+        if (p.message) pushLog('npc', '🕵️ Stalker Encounter', p.message, '🕵️')
+      })
+
+      // 20. Addict interaction result
+      proxChan.on('interact_addict_result', (p: any) => {
+        lastAddictResult = {
+          success: p.success,
+          action: p.action,
+          cost_gold: p.cost_gold,
+          secret: p.secret,
+          screech_decibels: p.screech_decibels,
+          guards_alerted: p.guards_alerted,
+          stolen: p.stolen,
+          amount: p.amount,
+          intel_reward: p.secret,
+          pickpocket_gold: p.amount,
+          message: p.message
+        }
+        if (p.message) pushLog('npc', '🥀 Addict Encounter', p.message, '🥀')
+        if (p.guards_alerted) playTone(800, 'sawtooth', 0.3)
+      })
+
+      // 21. Tavern brawl cascade
+      proxChan.on('tavern_brawl_cascade', (p: any) => {
+        pushLog('npc', '🍻 BAR FIGHT!', p.description, '🍻')
+        playTone(300, 'sawtooth', 0.35)
+      })
+
+      // 22. Gas deployment result
+      proxChan.on('window_gas_result', (p: any) => {
+        lastGasDeploy = {
+          success: p.success,
+          gas_type: p.gas_type,
+          gas_name: p.gas_name || (p.gas_type ? p.gas_type.replace(/_/g, ' ').toUpperCase() : 'Chemical Gas'),
+          building_name: p.building_name || 'Building',
+          duration_turns: p.duration_turns || 3,
+          affected_occupants: p.affected_occupants || (p.affected ? p.affected.length : 0),
+          affected: p.affected,
+          message: p.message
+        }
+        if (p.message) pushLog('window', `💨 Gas Deployed: ${lastGasDeploy.gas_name}`, p.message, '💨')
+        playTone(400, 'sine', 0.2)
+      })
+
+      // 23. Gas cloud active
+      proxChan.on('gas_cloud_active', (p: any) => {
+        pushLog('window', `💨 Gas Cloud: ${p.gas_name}`, p.message, '💨')
+      })
+
+      // 24. Properties list
+      proxChan.on('properties_list', (p: any) => {
+        const raw = p.properties || []
+        propertiesList = raw.map((item: any) => {
+          const forts = item.fortifications || []
+          return {
+            id: item.id,
+            building_id: item.building_id,
+            building_key: `Building #${item.building_id}`,
+            map_id: item.map_id,
+            name: item.name,
+            price_gold: item.price_gold,
+            deed_cost: item.price_gold,
+            owner_char_id: item.owner_char_id,
+            owner_name: item.owner_name,
+            is_for_sale: item.is_for_sale,
+            is_owned: item.owner_char_id === storedCharId || (item.owner_name && item.owner_name === storedCharName),
+            fortifications: forts,
+            has_iron_bars: forts.includes('iron_bars'),
+            has_soundproof_curtains: forts.includes('soundproof_curtains'),
+            has_alarm_glyphs: forts.includes('alarm_glyphs'),
+            curtains_drawn: item.curtains_drawn,
+            security_rating: 40 + forts.length * 20
+          }
+        })
+      })
+
+      // 25. Property action result
+      proxChan.on('property_action_result', (p: any) => {
+        if (p.message) pushLog('diplomacy', '🏡 Property Deed', p.message, '🏡')
+        playTone(580, 'sine', 0.15)
+      })
+
+      // 26. Indoor draft result
+      proxChan.on('indoor_draft_result', (p: any) => {
+        lastDraftResult = p
+        if (p.message) pushLog('window', '💨 Gale Wind Draft', p.message, '💨')
+      })
+
+      // 27. Room draft extinguished
+      proxChan.on('room_draft_extinguished', (p: any) => {
+        lastDraftResult = {
+          draftActive: true,
+          candlesExtinguished: true,
+          lightLevel: p.light_level,
+          stealthBonus: p.stealth_bonus,
+          message: p.message
+        }
+        pushLog('window', '🕯️ Candles Snuffed!', p.message, '🕯️')
+        playTone(280, 'sine', 0.2)
+      })
+
+      // 28. Thunderclap mask
+      proxChan.on('weather_thunderclap', (p: any) => {
+        pushLog('window', '⚡ THUNDERCLAP!', p.message, '⚡')
+        playTone(110, 'sawtooth', 0.45)
+      })
+
+      proxChan.join()
+        .receive('ok', () => {
+          proximityChannel = proxChan
+        })
+        .receive('error', (err) => {
+          console.warn('[VoiceChat] Proximity channel join failed:', err)
+        })
+    }
+  }
+
+  return {
+    get inVoice() { return inVoice },
+    get isMuted() { return isMuted },
+    get isDeafened() { return isDeafened },
+    get transmissionBand() { return transmissionBand },
+    get timeOfDay() { return timeOfDay },
+    get partyId() { return currentPartyId },
+    get proximityMapId() { return currentProximityMapId },
+    get peers() { return Array.from(peers.values()) },
+    get speakingPeers() { return speakingPeers },
+    get lastBattleCry() { return lastBattleCry },
+    get lastSpatialPeerSpeech() { return lastSpatialPeerSpeech },
+    get lastFootstep() { return lastFootstep },
+    get lastAwakenedNpc() { return lastAwakenedNpc },
+    get lastCompanionSpeech() { return lastCompanionSpeech },
+    get lastCompanionAction() { return lastCompanionAction },
+    get lastNpcReaction() { return lastNpcReaction },
+    get lastNpcAction() { return lastNpcAction },
+    get lastUileWarp() { return lastUileWarp },
+    get lastDrunkConfrontation() { return lastDrunkConfrontation },
+    get lastDeescalateResult() { return lastDeescalateResult },
+    get nearbyWindow() { return nearbyWindow },
+    get lastPeekResult() { return lastPeekResult },
+    get lastRumorResult() { return lastRumorResult },
+    get lastWindowAction() { return lastWindowAction },
+    get lastDefenestration() { return lastDefenestration },
+    get activeStalker() { return activeStalker },
+    get lastStalkerAction() { return lastStalkerAction },
+    get lastAddictResult() { return lastAddictResult },
+    get lastGasDeploy() { return lastGasDeploy },
+    get propertiesList() { return propertiesList },
+    get lastDraftResult() { return lastDraftResult },
+    get tacticalLog() { return tacticalLog },
+
+    attemptDeescalation(targetNpcId: number, approach: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('deescalate_altercation', {
+          target_npc_id: targetNpcId,
+          approach
+        })
+      }
+    },
+
+    dismissDrunkConfrontation() {
+      lastDrunkConfrontation = null
+    },
+
+    toggleWindow(windowX: number, windowY: number, targetState?: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('toggle_window', { window_x: windowX, window_y: windowY, target_state: targetState })
+      }
+    },
+
+    peekWindow(windowX: number, windowY: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('peek_window', { window_x: windowX, window_y: windowY })
+      }
+    },
+
+    climbWindow(windowX: number, windowY: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('climb_window', { window_x: windowX, window_y: windowY })
+      }
+    },
+
+    breakWindow(windowX: number, windowY: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('break_window', { window_x: windowX, window_y: windowY })
+      }
+    },
+
+    throwDistraction(windowX: number, windowY: number, item = 'pebble') {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('throw_window_distraction', { window_x: windowX, window_y: windowY, item })
+      }
+    },
+
+    eavesdropWindow(windowX: number, windowY: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('eavesdrop_window', { window_x: windowX, window_y: windowY })
+      }
+    },
+
+    checkNearbyWindows() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('get_nearby_windows', {})
+      }
+    },
+
+    dismissPeek() {
+      lastPeekResult = null
+    },
+
+    dismissRumor() {
+      lastRumorResult = null
+    },
+
+    defenestrateTarget(targetId: number, windowX: number, windowY: number, targetName?: string, isPlayer: boolean = false) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('defenestrate_target', {
+          target_id: targetId,
+          target_name: targetName,
+          target_is_player: isPlayer,
+          window_x: windowX,
+          window_y: windowY
+        })
+      }
+    },
+
+    spotStalker(stalkerId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('spot_stalker', { stalker_id: stalkerId })
+      }
+    },
+
+    interactStalker(stalkerId: number, action: 'interrogate' | 'bribe' | 'attack') {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('interact_stalker', { stalker_id: stalkerId, action })
+      }
+    },
+
+    interactAddict(addictId: number, action: 'offer_fix' | 'threaten' | 'pickpocket_check') {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('interact_addict', { addict_id: addictId, action })
+      }
+    },
+
+    cascadeBrawl(tavernBuildingId?: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('cascade_brawl', { tavern_building_id: tavernBuildingId })
+      }
+    },
+
+    deployWindowGas(windowX: number, windowY: number, gasType: 'sleeping_gas' | 'smoke_grenade' | 'skunkweed_tear_gas' = 'sleeping_gas') {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('deploy_window_gas', { window_x: windowX, window_y: windowY, gas_type: gasType })
+      }
+    },
+
+    getProperties() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('get_properties', {})
+      }
+    },
+
+    purchaseProperty(propertyId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('purchase_property', { property_id: propertyId })
+      }
+    },
+
+    addFortification(propertyId: number, fortificationType: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('add_fortification', { property_id: propertyId, fortification_type: fortificationType })
+      }
+    },
+
+    toggleCurtains(propertyId: number, drawn: boolean) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('toggle_soundproof_curtains', { property_id: propertyId, drawn })
+      }
+    },
+
+    restInProperty(propertyId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('rest_property', { property_id: propertyId })
+      }
+    },
+
+    checkIndoorDraft(buildingId: number | string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('check_indoor_draft', { building_id: buildingId })
+      }
+    },
+
+    dismissDefenestration() {
+      lastDefenestration = null
+    },
+
+    dismissStalker() {
+      activeStalker = null
+      lastStalkerAction = null
+    },
+
+    dismissAddict() {
+      lastAddictResult = null
+    },
+
+    dismissGasDeploy() {
+      lastGasDeploy = null
+    },
+
+    dismissDraft() {
+      lastDraftResult = null
+    },
+
+    setNearbyWindow(win: WindowPortal | null) {
+      nearbyWindow = win
+    },
+
+    setTransmissionBand(band: TransmissionBand) {
+      transmissionBand = band
+      if (band === 'party') {
+        playTone(880, 'sine', 0.12)
+      } else if (band === 'proximity') {
+        playTone(587, 'sine', 0.1)
+      } else if (band === 'whisper') {
+        playTone(330, 'triangle', 0.1)
+      } else if (band === 'shout') {
+        playTone(440, 'sawtooth', 0.18)
+      }
+    },
+
+    syncProximityMap(mapId: number) {
+      if (inVoice && mapId && currentProximityMapId !== mapId) {
+        setupProximityChannel(mapId, storedCharId, storedCharName)
+      }
+    },
+
+    sendPartySpeech(text: string, isThought: boolean = false, coords?: { map_id?: number; x?: number; y?: number }) {
+      if (!text || !text.trim()) return
+      const targetChannel = channel || proximityChannel
+      if (!targetChannel) return
+
+      const effectiveMode = isThought ? 'mind' : transmissionBand
+      const mapId = coords?.map_id ?? character.active?.map_id ?? currentProximityMapId ?? 1
+      const x = coords?.x ?? character.active?.x ?? 10
+      const y = coords?.y ?? character.active?.y ?? 10
+
+      targetChannel.push('party_speech', {
+        text: text.trim(),
+        is_thought: isThought,
+        mode: effectiveMode,
+        map_id: mapId,
+        x,
+        y
+      })
+    },
+
+    async join(partyId: string | number, charId: number, name: string, mapId?: number) {
+      if (!browser || inVoice) return
+      currentPartyId = partyId
+      storedCharId = charId
+      storedCharName = name
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      } catch (err) {
+        console.warn('[VoiceChat] Mic access denied or unavailable, entering listen-only mode:', err)
+        isMuted = true
+      }
+
+      // 1. Join Party Voice Channel
+      const topic = `voice:party:${partyId}`
+      channel = connection.channel(topic, { char_id: charId, name })
+
+      if (channel) {
+        channel.on('peer_joined', (p: { char_id: number; name: string }) => {
+          const next = new Map(peers)
+          next.set(p.char_id, { charId: p.char_id, name: p.name, speaking: false, muted: false })
+          peers = next
+          playTone(600, 'sine', 0.1)
+        })
+
+        channel.on('peer_left', (p: { char_id: number }) => {
+          const next = new Map(peers)
+          next.delete(p.char_id)
+          peers = next
+          const nextSpeaking = new Set(speakingPeers)
+          nextSpeaking.delete(p.char_id)
+          speakingPeers = nextSpeaking
+          playTone(400, 'sine', 0.1)
+        })
+
+        channel.on('peer_speaking', (p: { char_id: number; is_speaking: boolean }) => {
+          const nextSpeaking = new Set(speakingPeers)
+          if (p.is_speaking) {
+            nextSpeaking.add(p.char_id)
+          } else {
+            nextSpeaking.delete(p.char_id)
+          }
+          speakingPeers = nextSpeaking
+
+          const pEntry = peers.get(p.char_id)
+          if (pEntry) {
+            const next = new Map(peers)
+            next.set(p.char_id, { ...pEntry, speaking: p.is_speaking })
+            peers = next
+          }
+        })
+
+        channel.on('battle_cry', (p: { char_id: number; name: string; cry: string }) => {
+          lastBattleCry = { speaker: p.name || 'Party Member', cry: p.cry, ts: Date.now() }
+          playBattleHorn()
+        })
+
+        // Companion Spoken Reaction
+        channel.on('companion_voice_spoke', (p: any) => {
+          lastCompanionSpeech = {
+            companionId: p.companion_id,
+            name: p.name,
+            icon: p.icon || '🐺',
+            text: p.text,
+            audioUrl: p.audio_url,
+            tactic: p.tactic,
+            isThought: p.is_thought,
+            ts: Date.now()
+          }
+
+          if (p.audio_url) {
+            new Audio(p.audio_url).play().catch(() => {})
+          } else if (browser && window.speechSynthesis && !isDeafened) {
+            window.speechSynthesis.cancel()
+            const utter = new SpeechSynthesisUtterance(p.text)
+            const s = (p.name || '').toLowerCase()
+            if (s.includes('valerius') || s.includes('paladin') || s.includes('golem')) {
+              utter.pitch = 0.78
+              utter.rate = 0.95
+            } else if (s.includes('lyra') || s.includes('mage') || s.includes('sorceress')) {
+              utter.pitch = 1.18
+              utter.rate = 0.94
+            } else {
+              utter.pitch = 0.9
+              utter.rate = 1.0
+            }
+            window.speechSynthesis.speak(utter)
+          }
+        })
+
+        // Companion Physical / Tactical Action Execution
+        channel.on('companion_action_executed', (p: any) => {
+          lastCompanionAction = {
+            companionId: p.companion_id,
+            companionName: p.companion_name,
+            icon: p.icon || '🛡️',
+            actionType: p.action_type,
+            actionName: p.action_name,
+            description: p.description,
+            targetName: p.target_name,
+            buff: p.buff,
+            posShift: p.pos_shift,
+            animation: p.animation,
+            isThoughtReaction: p.is_thought_reaction,
+            ts: Date.now()
+          }
+          pushLog('companion', p.action_name, p.description, p.icon || '🛡️')
+          playTone(550, 'triangle', 0.12)
+        })
+
+        // World NPC Overhearing / Eavesdropping Spoken Reply
+        channel.on('npc_overheard_reaction', (p: any) => {
+          lastNpcReaction = {
+            npcId: p.npc_id,
+            name: p.name,
+            icon: p.icon || '👤',
+            role: p.role,
+            text: p.text,
+            audioUrl: p.audio_url,
+            distanceTiles: p.distance_tiles,
+            isThoughtIntercept: p.is_thought_intercept,
+            isEnemy: p.is_enemy,
+            isNocturnal: p.is_nocturnal,
+            isSleeping: p.is_sleeping,
+            spatial: p.spatial,
+            ts: Date.now()
+          }
+
+          const pan = p.spatial?.pan ?? 0
+          const vol = p.spatial?.volume ?? 0.85
+          playSpatialSpeech(p.text, pan, vol, p.audio_url, p.is_enemy)
+        })
+
+        // World NPC Action Execution
+        channel.on('npc_action_executed', (p: any) => {
+          lastNpcAction = {
+            npcId: p.npc_id,
+            npcName: p.npc_name,
+            icon: p.icon || '👹',
+            actionType: p.action_type,
+            actionName: p.action_name,
+            description: p.description,
+            targetName: p.target_name,
+            distanceTiles: p.distance_tiles,
+            buff: p.buff,
+            newCoords: p.new_coords,
+            alarmTriggered: p.alarm_triggered,
+            isThoughtIntercept: p.is_thought_intercept,
+            isAwakened: p.is_awakened,
+            spatial: p.spatial,
+            ts: Date.now()
+          }
+          pushLog('npc', p.action_name, p.description, p.icon || '⚠️')
+          if (p.alarm_triggered) {
+            playTone(320, 'sawtooth', 0.25)
+          }
+        })
+
+        // Uile Reality Warp Intervention
+        channel.on('uile_reality_intervention', (p: any) => {
+          lastUileWarp = {
+            warpType: p.warp_type,
+            title: p.title,
+            message: p.message,
+            speaker: p.speaker,
+            audioUrl: p.audio_url,
+            invoker: p.invoker,
+            buff: p.buff,
+            ts: Date.now()
+          }
+          pushLog('uile', p.title, p.message, '✨')
+          if (p.audio_url) {
+            new Audio(p.audio_url).play().catch(() => {})
+          } else if (browser && window.speechSynthesis && !isDeafened) {
+            const utter = new SpeechSynthesisUtterance(p.message)
+            utter.pitch = 0.55
+            utter.rate = 0.88
+            window.speechSynthesis.speak(utter)
+          }
+          playTone(880, 'sine', 0.3)
+        })
+
+        channel.join()
+          .receive('ok', () => {
+            inVoice = true
+            playTone(880, 'triangle', 0.15)
+            this.setupVoiceActivityDetection()
+          })
+          .receive('error', (err) => {
+            console.error('[VoiceChat] Failed to join voice room:', err)
+          })
+      }
+
+      // 2. Also join Spatial Proximity Channel for the current map
+      const effectiveMapId = mapId || character.active?.map_id || 1
+      setupProximityChannel(effectiveMapId, charId, name)
+    },
+
+    setupVoiceActivityDetection() {
+      if (!localStream || !browser) return
+      try {
+        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+        audioCtx = new AudioCtx()
+        analyser = audioCtx.createAnalyser()
+        analyser.fftSize = 64
+        const source = audioCtx.createMediaStreamSource(localStream)
+        source.connect(analyser)
+
+        const pcm = new Uint8Array(analyser.frequencyBinCount)
+        vadInterval = window.setInterval(() => {
+          if (!analyser || isMuted || (!channel && !proximityChannel)) return
+          analyser.getByteFrequencyData(pcm)
+          let sum = 0
+          for (let i = 0; i < pcm.length; i++) sum += pcm[i]
+          const avg = sum / pcm.length
+          const isSpeakingNow = avg > 20
+
+          if (isSpeakingNow !== wasSpeaking) {
+            wasSpeaking = isSpeakingNow
+            channel?.push('speaking', { is_speaking: isSpeakingNow })
+            proximityChannel?.push('speaking', { is_speaking: isSpeakingNow })
+          }
+        }, 120)
+      } catch (e) {
+        console.warn('[VoiceChat] VAD setup skipped:', e)
+      }
+    },
+
+    toggleMute() {
+      isMuted = !isMuted
+      if (localStream) {
+        localStream.getAudioTracks().forEach(t => { t.enabled = !isMuted })
+      }
+      channel?.push('mute_state', { muted: isMuted, deafened: isDeafened })
+      proximityChannel?.push('mute_state', { muted: isMuted, deafened: isDeafened })
+      playTone(isMuted ? 300 : 700, 'sine', 0.1)
+    },
+
+    toggleDeafen() {
+      isDeafened = !isDeafened
+      if (isDeafened) {
+        isMuted = true
+        if (localStream) localStream.getAudioTracks().forEach(t => { t.enabled = false })
+      }
+      channel?.push('mute_state', { muted: isMuted, deafened: isDeafened })
+      proximityChannel?.push('mute_state', { muted: isMuted, deafened: isDeafened })
+      playTone(isDeafened ? 250 : 650, 'sine', 0.1)
+    },
+
+    shoutBattleCry(customCry?: string, coords?: { map_id?: number; x?: number; y?: number }) {
+      const cry = customCry || "LEEROY JENKINS!!!"
+      const targetChannel = channel || proximityChannel
+      if (!targetChannel) return
+
+      const mapId = coords?.map_id ?? character.active?.map_id ?? currentProximityMapId ?? 1
+      const x = coords?.x ?? character.active?.x ?? 10
+      const y = coords?.y ?? character.active?.y ?? 10
+
+      targetChannel.push('battle_cry', {
+        cry,
+        map_id: mapId,
+        x,
+        y
+      })
+    },
+
+    leave() {
+      if (vadInterval) clearInterval(vadInterval)
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop())
+        localStream = null
+      }
+      if (audioCtx) {
+        audioCtx.close().catch(() => {})
+        audioCtx = null
+      }
+      if (proximityChannel) {
+        proximityChannel.leave()
+        proximityChannel = null
+      }
+      channel?.leave()
+      channel = null
+      inVoice = false
+      peers = new Map()
+      speakingPeers = new Set()
+      lastSpatialPeerSpeech = null
+      lastFootstep = null
+      lastAwakenedNpc = null
+      tacticalLog = []
+      playTone(400, 'sine', 0.12)
+    }
+  }
+}
+
+export const voiceChat = createVoiceChatStore()

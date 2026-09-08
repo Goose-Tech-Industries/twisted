@@ -7,6 +7,7 @@ import type { RenderState } from '@twisted/render'
 import type { Character } from '$stores/character.svelte'
 import type { MapDef, NearbyPlayer, MapNpc, GroundItem } from '$stores/world.svelte'
 import type { TilePaletteEntry } from '$stores/tile_palette.svelte'
+import type { Equipment } from '$stores/inventory.svelte'
 
 export interface BuildRenderStateArgs {
   map: MapDef
@@ -15,6 +16,7 @@ export interface BuildRenderStateArgs {
   npcs: MapNpc[]
   drops: GroundItem[]
   palette?: TilePaletteEntry[]
+  equipment?: Equipment
   viewportW: number
   viewportH: number
   tileSize: number
@@ -128,6 +130,20 @@ export function buildRenderState(args: BuildRenderStateArgs): RenderState {
     playerX: px,
     playerY: py,
     playerName: character?.name,
+    playerSpriteUrl: character?.sprite_url || undefined,
+    playerLayers: {
+      body: character?.sprite_url || undefined,
+      armor: (args.equipment?.chest as unknown as { sprite_url?: string })?.sprite_url || undefined,
+      weapon: (args.equipment?.weapon as unknown as { sprite_url?: string })?.sprite_url || undefined,
+      head: (args.equipment?.helmet as unknown as { sprite_url?: string })?.sprite_url || undefined,
+      acc: (args.equipment?.offhand as unknown as { sprite_url?: string })?.sprite_url || (args.equipment?.amulet as unknown as { sprite_url?: string })?.sprite_url || undefined,
+    },
+    playerEquipped: {
+      weaponIcon: args.equipment?.weapon?.icon,
+      weaponName: args.equipment?.weapon?.name,
+      armorIcon: args.equipment?.chest?.icon,
+      shieldIcon: args.equipment?.offhand?.icon,
+    },
 
     camX,
     camY,

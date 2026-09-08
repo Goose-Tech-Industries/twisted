@@ -26,20 +26,31 @@ defmodule TePhoenixWeb.Plugs.Auth do
   end
 
   defp get_user_id(conn) do
-    # Try Authorization header first (Bearer token)
+    # 1. Try Authorization header first (Bearer token)
     case get_req_header(conn, "authorization") do
       ["Bearer " <> token] ->
-        case Phoenix.Token.verify(TePhoenixWeb.Endpoint, "user socket", token, max_age: 86_400) do
-          {:ok, user_id} -> {:ok, user_id}
-          _ -> {:error, :invalid_token}
-        end
+        verify_token(token)
 
       _ ->
-        # Fall back to session
-        case get_session(conn, :user_id) do
-          nil -> {:error, :no_session}
-          user_id -> {:ok, user_id}
+        # 2. Try query param ?token=... (critical for EventSource SSE / media streams)
+        case conn.params["token"] do
+          token when is_binary(token) and token != "" ->
+            verify_token(token)
+
+          _ ->
+            # 3. Fall back to session
+            case get_session(conn, :user_id) do
+              nil -> {:error, :no_session}
+              user_id -> {:ok, user_id}
+            end
         end
+    end
+  end
+
+  defp verify_token(token) do
+    case Phoenix.Token.verify(TePhoenixWeb.Endpoint, "user socket", token, max_age: 86_400) do
+      {:ok, user_id} -> {:ok, user_id}
+      _ -> {:error, :invalid_token}
     end
   end
 

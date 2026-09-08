@@ -6,6 +6,7 @@
   const ITEMS: Item[] = [
     { key: 'sheet',         label: 'Character',    icon: '🛡️', group: 'core' },
     { key: 'inventory',     label: 'Inventory',    icon: '🎒', group: 'core' },
+    { key: 'camp',          label: 'Camp / Rest',  icon: '⛺', group: 'core' },
     { key: 'quests',        label: 'Quests',       icon: '📜', group: 'core' },
     { key: 'skill_tree',    label: 'Skills',       icon: '✦',  group: 'core' },
     { key: 'oghams',        label: 'Oghams',       icon: '᚛',  group: 'core' },
@@ -18,6 +19,8 @@
     { key: 'mail',          label: 'Mail',         icon: '✉',  group: 'social' },
     { key: 'lfp',           label: 'LFP',          icon: '📣', group: 'social' },
     { key: 'profile',       label: 'Profile',      icon: '🪪', group: 'social' },
+    { key: 'campaigns',     label: 'TTRPG Campaigns', icon: '🎲', group: 'social' },
+    { key: 'party_games',   label: 'Party & Minigames', icon: '🎭', group: 'social' },
 
     { key: 'tournament',    label: 'Battle',       icon: '⚔️', group: 'progression' },
     { key: 'auction',       label: 'Auction',      icon: '💰', group: 'progression' },
@@ -29,6 +32,7 @@
     { key: 'leaderboard',   label: 'Leaderboard',  icon: '📈', group: 'progression' },
     { key: 'world_events',  label: 'World',        icon: '🌑', group: 'progression' },
     { key: 'trade',         label: 'Trade',        icon: '🤝', group: 'progression' },
+    { key: 'cards',         label: 'Card Duel',    icon: '🎴', group: 'progression' },
 
     { key: 'settings',      label: 'Settings',     icon: '⚙',  group: 'system' }
   ]

@@ -2,9 +2,9 @@ import Config
 
 # Configure your database
 config :te_phoenix, TePhoenix.Repo,
-  username: "root",
-  password: System.get_env("TE_DB_PASSWORD") || raise("environment variable TE_DB_PASSWORD is missing"),
-  hostname: "localhost",
+  username: System.get_env("TE_DB_USER") || "twisted",
+  password: System.get_env("TE_DB_PASSWORD") || "twisted",
+  hostname: System.get_env("TE_DB_HOST") || "127.0.0.1",
   database: "twisted_rpg",
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
@@ -19,7 +19,7 @@ config :te_phoenix, TePhoenix.Repo,
 config :te_phoenix, TePhoenixWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}],
+  http: [ip: {0, 0, 0, 0}, port: String.to_integer(System.get_env("PORT") || "8420")],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,

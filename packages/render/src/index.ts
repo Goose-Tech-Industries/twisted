@@ -19,17 +19,15 @@ export const VERSION = "0.1.0";
 export type CanvasMode = "edit" | "play" | "battle";
 
 /**
- * Supported projection strategies for 2D map rendering.
- * Matches the 6-mode set from the legacy pixi-renderer.tsx.
+ * Supported projection strategies for MMO RPG map rendering:
+ * - "classic": 2D top-down grid (Classic RPG / Tabletop map)
+ * - "2.5d": Top-down with extruded elevation walls (Elevated Depth / ARPG)
+ * - "isometric": Tactical diamond grid (Isometric Strategy / Turn-Based)
  */
 export type RenderMode =
   | "classic"
   | "2.5d"
-  | "isometric"
-  | "hex"
-  | "side-scroll"
-  | "first-person"
-  | "3d";
+  | "isometric";
 
 /**
  * Sanity check export so consumers can verify the package is wired correctly.
@@ -42,12 +40,6 @@ export function sanityCheck(): string {
 export { makeProjection, WALL_HEIGHT_PX } from "./projections/index.js";
 export type { Projection, TileDrawContext } from "./projections/index.js";
 export { darkenColor, lightenColor, mixColor, parseColor } from "./color.js";
-export {
-  drawFirstPerson,
-  DEFAULT_WALL_TILE_IDS,
-  type FirstPersonDrawArgs,
-  type TileColorLookup,
-} from "./first-person.js";
 export { TwistedRenderer, type TwistedRendererOptions } from "./renderer.js";
 export type {
   RenderState,
@@ -88,4 +80,6 @@ export {
   type BattlePresentationMode,
   type BattleTransitionOptions,
 } from "./battle-mode.js";
+export { generateProceduralTileset } from "./procedural-tileset.js";
+export { AtmosphereRenderer, type AtmosphereOptions } from "./atmosphere.js";
 export * as shaders from "./shaders/index.js";

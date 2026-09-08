@@ -48,8 +48,18 @@ defmodule TePhoenix.Application do
       TePhoenix.ClipboardServer,
       # Periodic NPC spawning from spawn zones (capability-gated, no-ops when off)
       TePhoenix.World.SpawnZoneTicker,
+      # SOTA character state in-memory cache and atomic write-behind engine
+      TePhoenix.Game.CharacterState,
+      # Hot-state decoupled in-memory write-behind engine
+      TePhoenix.Game.HotState,
       # Movement ticker — consumes pathfinding queues into character moves
       TePhoenix.Game.MovementTicker,
+      # Autonomous living society engine ("Westworld" simulation loop)
+      TePhoenix.World.AutonomousSociety,
+      # Living legend chronicler — records player exploits and tavern ballads
+      TePhoenix.World.LegendChronicler,
+      # Circadian Day/Night cycle engine & nocturnal scheduler
+      TePhoenix.World.CircadianClock,
       # Start to serve requests, typically the last entry
       TePhoenixWeb.Endpoint
     ]

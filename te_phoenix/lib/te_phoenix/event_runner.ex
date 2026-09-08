@@ -71,12 +71,7 @@ defmodule TePhoenix.EventRunner do
       {responses, state, _remaining} ->
         # Persist updated state flags back to DB
         if state != char_state do
-          try do
-            Repo.query!("UPDATE characters SET state_json=? WHERE id=?",
-              [Jason.encode!(state), char_id])
-          rescue
-            _ -> nil
-          end
+          TePhoenix.Game.CharacterState.merge(char_id, state)
         end
 
         {:ok, responses}

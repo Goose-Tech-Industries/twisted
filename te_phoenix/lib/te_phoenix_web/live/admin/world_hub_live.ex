@@ -14,7 +14,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
 
   @weather_options ~w(CLEAR RAIN STORM FOG BLIZZARD BLOOD_MOON)
   @move_types ~w(STATIONARY WANDER PATROL)
-  @render_modes ~w(classic 2.5d isometric hex side-scroll first-person 3d DEFAULT ISOMETRIC SIDE_SCROLL TOP_DOWN)
+  @render_modes ~w(classic 2.5d isometric)
 
   # ── Mount ──────────────────────────────────────────────────────────
 
@@ -34,6 +34,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
        # CRUD state
        editing_id: nil,
        creating: false,
+       generating_sprite: false,
        form_data: %{},
        # NPC filters
        npc_map_filter: "",
@@ -92,7 +93,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
       form_data: %{
         "name" => "", "description" => "", "width" => "24", "height" => "24",
         "ambient_dark" => "0", "min_level" => "1", "region_id" => "",
-        "is_active" => "1", "render_mode" => "DEFAULT", "fog_of_war" => "0"
+        "is_active" => "1", "render_mode" => "classic", "fog_of_war" => "0"
       }
     )}
   end
@@ -169,7 +170,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
       creating: true,
       editing_id: nil,
       form_data: %{
-        "name" => "", "icon" => "", "persona" => "", "map_id" => "", "x" => "0", "y" => "0",
+        "name" => "", "icon" => "", "sprite_url" => "", "persona" => "", "map_id" => "", "x" => "0", "y" => "0",
         "is_enemy" => "0", "move_type" => "STATIONARY", "wander_radius" => "3", "shop_id" => "",
         "base_hp" => "100", "base_mp" => "50", "base_atk" => "10", "base_def" => "10",
         "base_mo" => "10", "base_md" => "10", "base_speed" => "10", "base_luck" => "5",
@@ -181,7 +182,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
   def handle_event("edit_npc", %{"id" => id}, socket) do
     int_id = to_int(id)
     case Repo.query(
-      "SELECT id, name, icon, persona, map_id, x, y, is_enemy, move_type, wander_radius, shop_id, base_hp, base_mp, base_atk, base_def, base_mo, base_md, base_speed, base_luck, element, drop_table_json FROM game_npcs WHERE id = ?",
+      "SELECT id, name, icon, sprite_url, persona, map_id, x, y, is_enemy, move_type, wander_radius, shop_id, base_hp, base_mp, base_atk, base_def, base_mo, base_md, base_speed, base_luck, element, drop_table_json FROM game_npcs WHERE id = ?",
       [int_id]
     ) do
       {:ok, %{rows: [row], columns: cols}} ->
@@ -192,13 +193,31 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
     end
   end
 
+  def handle_event("generate_npc_sprite", _p, socket) do
+    form = socket.assigns.form_data
+    name = Map.get(form, "name", "")
+    persona = Map.get(form, "persona", "")
+    prompt = if persona != "" and persona != nil, do: "#{name}, #{persona}", else: "#{name}, fantasy RPG adventurer character"
+
+    parent = self()
+    Task.start(fn ->
+      result = TePhoenix.AI.Providers.ComfyUI.generate_sprite(prompt)
+      send(parent, {:sprite_generated, result})
+    end)
+
+    {:noreply,
+     socket
+     |> assign(generating_sprite: true)
+     |> put_flash(:info, "🎨 Dispatched sprite generation to local ComfyUI GPU (GTX 1660 SUPER)...")}
+  end
+
   def handle_event("save_npc", params, socket) do
     data = Map.get(params, "form", %{})
     if socket.assigns.editing_id do
       Repo.query(
-        "UPDATE game_npcs SET name = ?, icon = ?, persona = ?, map_id = ?, x = ?, y = ?, is_enemy = ?, move_type = ?, wander_radius = ?, shop_id = ?, base_hp = ?, base_mp = ?, base_atk = ?, base_def = ?, base_mo = ?, base_md = ?, base_speed = ?, base_luck = ?, element = ?, drop_table_json = ? WHERE id = ?",
+        "UPDATE game_npcs SET name = ?, icon = ?, sprite_url = ?, persona = ?, map_id = ?, x = ?, y = ?, is_enemy = ?, move_type = ?, wander_radius = ?, shop_id = ?, base_hp = ?, base_mp = ?, base_atk = ?, base_def = ?, base_mo = ?, base_md = ?, base_speed = ?, base_luck = ?, element = ?, drop_table_json = ? WHERE id = ?",
         [
-          data["name"], data["icon"], data["persona"], null_or_int(data["map_id"]),
+          data["name"], data["icon"], data["sprite_url"], data["persona"], null_or_int(data["map_id"]),
           to_int(data["x"]), to_int(data["y"]), to_int(data["is_enemy"]),
           data["move_type"], to_int(data["wander_radius"]), null_or_int(data["shop_id"]),
           to_int(data["base_hp"]), to_int(data["base_mp"]), to_int(data["base_atk"]),
@@ -210,9 +229,9 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
       )
     else
       Repo.query(
-        "INSERT INTO game_npcs (name, icon, persona, map_id, x, y, is_enemy, move_type, wander_radius, shop_id, base_hp, base_mp, base_atk, base_def, base_mo, base_md, base_speed, base_luck, element, drop_table_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO game_npcs (name, icon, sprite_url, persona, map_id, x, y, is_enemy, move_type, wander_radius, shop_id, base_hp, base_mp, base_atk, base_def, base_mo, base_md, base_speed, base_luck, element, drop_table_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
-          data["name"], data["icon"], data["persona"], null_or_int(data["map_id"]),
+          data["name"], data["icon"], data["sprite_url"], data["persona"], null_or_int(data["map_id"]),
           to_int(data["x"]), to_int(data["y"]), to_int(data["is_enemy"]),
           data["move_type"], to_int(data["wander_radius"]), null_or_int(data["shop_id"]),
           to_int(data["base_hp"]), to_int(data["base_mp"]), to_int(data["base_atk"]),
@@ -320,6 +339,50 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
     {:noreply, assign(socket, lore_bible: lore, lore_saved: false)}
   end
 
+  # ── WorldForge: One-Shot World Builder ─────────────────────────────
+
+  def handle_event("forge_world", %{"prompt" => prompt} = params, socket) do
+    prompt = String.trim(prompt)
+
+    if prompt == "" do
+      {:noreply, put_flash(socket, :error, "Please enter a world description prompt.")}
+    else
+      render_mode = params["render_mode"] || "2.5d"
+      size = to_int(params["size"] || 30)
+
+      case TePhoenix.World.UnifiedWorldBuilder.build(prompt, width: size, height: size, render_mode: render_mode) do
+        {:ok, map} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "World '#{map.name}' forged successfully!")
+           |> push_navigate(to: ~p"/sauce/world/maps/#{map.id}/edit")}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Failed to forge world: #{inspect(reason)}")}
+      end
+    end
+  end
+
+  # ── Async Info Handlers ───────────────────────────────────────────
+
+  @impl true
+  def handle_info({:sprite_generated, {:ok, relative_url}}, socket) do
+    form_data = Map.put(socket.assigns.form_data, "sprite_url", relative_url)
+
+    {:noreply,
+     socket
+     |> assign(generating_sprite: false, form_data: form_data)
+     |> put_flash(:info, "✨ NPC sprite sheet generated on GPU! (#{relative_url})")}
+  end
+
+  @impl true
+  def handle_info({:sprite_generated, {:error, reason}}, socket) do
+    {:noreply,
+     socket
+     |> assign(generating_sprite: false)
+     |> put_flash(:error, "Sprite generation failed: #{inspect(reason)}")}
+  end
+
   # ── Data Loading ──────────────────────────────────────────────────
 
   defp load_maps_list(socket) do
@@ -412,7 +475,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
 
     rows =
       case Repo.query(
-             "SELECT id, name, icon, map_id, is_enemy, move_type, is_active, persona FROM game_npcs#{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+             "SELECT id, name, icon, sprite_url, map_id, is_enemy, move_type, is_active, persona FROM game_npcs#{where} ORDER BY id DESC LIMIT ? OFFSET ?",
              params ++ [to_int(@per_page), offset]
            ) do
         {:ok, %{rows: r, columns: c}} -> to_maps(r, c)
@@ -558,7 +621,21 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
         _ -> "Not configured"
       end
 
-    assign(socket, rows: [], total: 0, lore_bible: lore, ai_provider: provider, ai_model: model, lore_saved: false)
+    gpu_status =
+      case TePhoenix.AI.Providers.ComfyUI.status() do
+        {:ok, info} -> info
+        _ -> %{online: false, gpu: "NVIDIA GeForce GTX 1660 SUPER"}
+      end
+
+    assign(socket,
+      rows: [],
+      total: 0,
+      lore_bible: lore,
+      ai_provider: provider,
+      ai_model: model,
+      lore_saved: false,
+      gpu_status: gpu_status
+    )
   end
 
   # ── Render ────────────────────────────────────────────────────────
@@ -787,6 +864,45 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
                   <textarea name="form[persona]" rows="3"
                     class="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:border-amber-500 focus:outline-none resize-y">{@form_data["persona"]}</textarea>
                 </div>
+
+                <%!-- AI Sprite Sheet Generator (Local GPU) --%>
+                <div class="bg-zinc-950 border border-amber-900/40 rounded-lg p-3 space-y-2">
+                  <div class="flex items-center justify-between">
+                    <label class="block text-xs font-bold uppercase tracking-wider text-amber-400">
+                      Sprite Sheet (Local GPU: ComfyUI)
+                    </label>
+                    <button
+                      type="button"
+                      phx-click="generate_npc_sprite"
+                      disabled={@generating_sprite}
+                      class="px-3 py-1 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold rounded flex items-center gap-1.5 transition-all shadow"
+                    >
+                      <span :if={@generating_sprite} class="animate-spin inline-block">⚙️</span>
+                      <span>{if @generating_sprite, do: "Generating on GTX 1660 SUPER...", else: "✨ Generate Sprite Sheet"}</span>
+                    </button>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <div class="w-16 h-16 bg-zinc-900 border border-zinc-700 rounded flex items-center justify-center shrink-0 overflow-hidden">
+                      <%= if @form_data["sprite_url"] && @form_data["sprite_url"] != "" do %>
+                        <img src={@form_data["sprite_url"]} alt="Sprite Preview" class="w-full h-full object-cover pixelated" />
+                      <% else %>
+                        <span class="text-zinc-600 text-[10px] text-center px-1">No Sprite</span>
+                      <% end %>
+                    </div>
+                    <div class="flex-1">
+                      <input
+                        type="text"
+                        name="form[sprite_url]"
+                        value={@form_data["sprite_url"]}
+                        placeholder="/sprites/ai_sprite_... or image URL"
+                        class="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded text-xs text-zinc-200 font-mono focus:border-amber-500 focus:outline-none"
+                      />
+                      <p class="text-[10px] text-zinc-500 mt-1">
+                        4-directional 16-bit RPG walk cycle sheet automatically saved to <code class="text-amber-300">priv/static/sprites/</code>.
+                      </p>
+                    </div>
+                  </div>
+                </div>
                 <div class="grid grid-cols-2 md:grid-cols-6 gap-3">
                   <div>
                     <label class="block text-xs text-zinc-500 mb-1">X</label>
@@ -913,6 +1029,7 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
                 <tr :for={row <- @rows} class="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
                   <td class="px-3 py-2 text-sm text-zinc-500">{row["id"]}</td>
                   <td class="px-3 py-2 text-sm text-zinc-200 font-medium">
+                    <img :if={row["sprite_url"] && row["sprite_url"] != ""} src={row["sprite_url"]} alt="" class="w-6 h-6 rounded inline-block object-cover border border-amber-500/40 mr-1.5 align-middle" />
                     <span :if={row["icon"]} class="mr-1">{row["icon"]}</span>
                     {row["name"]}
                   </td>
@@ -1152,7 +1269,64 @@ defmodule TePhoenixWeb.Admin.WorldHubLive do
             <% end %>
 
           <% "worldforge" -> %>
-            <div class="p-6 space-y-6">
+            <div class="p-6 space-y-8">
+              <%!-- One-Shot World Generator --%>
+              <div class="bg-gradient-to-br from-amber-950/40 via-zinc-900 to-zinc-900 border border-amber-500/30 rounded-xl p-6 shadow-2xl">
+                <div class="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 class="text-xl font-bold text-amber-400 flex items-center gap-2">
+                      <span>⚡</span><span>One-Shot World Forge</span>
+                    </h3>
+                    <p class="text-xs text-zinc-400 mt-1">
+                      Type any fantasy or sci-fi prompt. The engine automatically synthesizes the tileset, carves the layout, extrudes 2.5D walls, and lights the scene.
+                    </p>
+                  </div>
+                  <%!-- GPU Acceleration Status Pill --%>
+                  <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-950 border border-zinc-800 text-xs">
+                    <span class={["w-2 h-2 rounded-full", @gpu_status[:online] && "bg-emerald-400 animate-pulse", !@gpu_status[:online] && "bg-amber-400"]}></span>
+                    <span class="text-zinc-300 font-medium">
+                      {if @gpu_status[:online], do: "GPU Active (#{@gpu_status[:gpu]})", else: "Offline Math Synthesizer Active"}
+                    </span>
+                  </div>
+                </div>
+
+                <form phx-submit="forge_world" class="space-y-4">
+                  <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1.5">World Vision &amp; Theme Prompt</label>
+                    <textarea name="prompt" rows="3" required
+                      class="w-full px-4 py-3 bg-zinc-950 border border-zinc-700 rounded-lg text-sm text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                      placeholder="e.g. A sunken dwarven forge flooded with bioluminescent water and ancient rusted iron machinery..."></textarea>
+                  </div>
+
+                  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label class="block text-xs text-zinc-400 mb-1">Projection &amp; Depth Mode</label>
+                      <select name="render_mode" class="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200">
+                        <option value="2.5d" selected>Elevated 2.5D (Extruded Depth)</option>
+                        <option value="classic">Top-Down (Classic / Tabletop)</option>
+                        <option value="isometric">Isometric (Grid / Strategy)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label class="block text-xs text-zinc-400 mb-1">Map Dimensions</label>
+                      <select name="size" class="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200">
+                        <option value="20">20 × 20 (Compact / Encounter)</option>
+                        <option value="30" selected>30 × 30 (Standard Adventure)</option>
+                        <option value="40">40 × 40 (Sprawling Dungeon)</option>
+                      </select>
+                    </div>
+
+                    <div class="flex items-end">
+                      <button type="submit"
+                        class="w-full py-2.5 px-4 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white text-sm font-bold rounded-lg shadow-lg transition-all flex items-center justify-center gap-2">
+                        <span>✨</span><span>Forge Entire World</span>
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+
               <%!-- AI Status --%>
               <div class="flex gap-6 flex-wrap">
                 <div class="bg-zinc-800 rounded-lg px-4 py-3 flex-1 min-w-[200px]">

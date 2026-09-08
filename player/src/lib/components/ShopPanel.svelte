@@ -94,5 +94,4 @@
   .price { color: var(--accent); font-weight: 600; }
   .primary { background: var(--accent); color: #1a1208; border: none; font-weight: 600; padding: 0.25rem 0.625rem; font-size: 0.8125rem; cursor: pointer; }
   .primary:disabled { opacity: 0.4; cursor: not-allowed; }
-  .msg { font-size: 0.75rem; color: var(--fg-muted); padding: 0 1rem 0.5rem; margin: 0; }
 </style>

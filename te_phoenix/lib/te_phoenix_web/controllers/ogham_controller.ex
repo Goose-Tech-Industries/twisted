@@ -13,10 +13,13 @@ defmodule TePhoenixWeb.OghamController do
   def list(conn, _params) do
     case Repo.query(
       """
-      SELECT id, name, icon, description, lore_text, rank, family_id,
-             stat_bonus_json, on_hit_status, on_hit_chance, kills_to_rank_up
-        FROM game_oghams
-       ORDER BY family_id, rank, id
+      SELECT go.id, go.name, go.icon, go.description, go.lore_text, go.rank, go.family_id,
+             go.stat_bonus_json, go.on_hit_status, go.on_hit_chance, go.kills_to_rank_up,
+             go.element_attack,
+             gof.name AS family_name, gof.icon AS family_icon, gof.set_bonus_json
+        FROM game_oghams go
+   LEFT JOIN game_ogham_families gof ON gof.id = go.family_id
+       ORDER BY go.family_id, go.rank, go.id
       """
     ) do
       {:ok, %{rows: rows, columns: cols}} ->
@@ -31,9 +34,14 @@ defmodule TePhoenixWeb.OghamController do
             lore: m["lore_text"],
             tier: m["rank"] || 1,
             effects: parse_json(m["stat_bonus_json"]),
+            element_attack: m["element_attack"],
             on_hit_status: m["on_hit_status"],
             on_hit_chance: m["on_hit_chance"],
-            kills_to_rank_up: m["kills_to_rank_up"]
+            kills_to_rank_up: m["kills_to_rank_up"] || 50,
+            family_id: m["family_id"],
+            family_name: m["family_name"] || "Unbound",
+            family_icon: m["family_icon"] || "🩸",
+            set_bonus: parse_json(m["set_bonus_json"])
           }
         end)
         json(conn, %{success: true, oghams: oghams})

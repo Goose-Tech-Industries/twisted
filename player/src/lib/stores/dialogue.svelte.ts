@@ -1,6 +1,4 @@
-// Dialogue overlay — driven entirely by Phoenix `dialogue` push and
-// the social channel's `npc_reply` / `dialogue_options`. The local
-// store just holds the current dialogue tree state.
+import { livingVoice } from "./living_voice.svelte"
 
 export interface DialogueChoice {
   id: string
@@ -18,6 +16,8 @@ export interface DialogueLine {
   choices?: DialogueChoice[]
   /** Server may push an end marker so the client closes the overlay. */
   end?: boolean
+  /** Living Voice audio URL (streaming MP3 from ElevenLabs / backend cache). */
+  audio_url?: string
 }
 
 function createDialogueStore() {
@@ -31,6 +31,8 @@ function createDialogueStore() {
     show(next: DialogueLine) {
       if (line) history = [...history, line].slice(-10)
       line = next
+      livingVoice.play(next)
+
       if (next.end) {
         // close shortly after so the user sees the closing line
         setTimeout(() => this.close(), 1200)
@@ -38,6 +40,7 @@ function createDialogueStore() {
     },
 
     close() {
+      livingVoice.stop()
       line = null
       history = []
     }

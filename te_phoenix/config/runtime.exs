@@ -1,5 +1,23 @@
 import Config
 
+# Load local .env if present
+env_file = Path.expand("../.env", __DIR__)
+if File.exists?(env_file) do
+  for line <- File.stream!(env_file) do
+    case String.trim(line) do
+      "#" <> _ -> :ok
+      "" -> :ok
+      line ->
+        case String.split(line, "=", parts: 2) do
+          [k, v] ->
+            clean_v = String.trim(v, "'\" \t\r\n")
+            System.put_env(String.trim(k), clean_v)
+          _ -> :ok
+        end
+    end
+  end
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
@@ -21,7 +39,7 @@ if System.get_env("PHX_SERVER") do
 end
 
 config :te_phoenix, TePhoenixWeb.Endpoint,
-  http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+  http: [port: String.to_integer(System.get_env("PORT", "8420"))]
 
 if config_env() == :prod do
   database_url =
@@ -63,7 +81,7 @@ if config_env() == :prod do
 
   url_port =
     case System.get_env("PHX_PORT") do
-      nil -> String.to_integer(System.get_env("PORT", "4000"))
+      nil -> String.to_integer(System.get_env("PORT", "8420"))
       s -> String.to_integer(s)
     end
 

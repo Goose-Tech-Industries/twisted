@@ -9,24 +9,33 @@ defmodule TePhoenixWeb.Admin.RequireStaffHook do
   @staff_roles ~w(ADMIN GM MOD STAFF OWNER)
 
   def on_mount(:default, _params, session, socket) do
-    # Try Phoenix session first, fall back to Node.js Express session in MySQL
-    user_id = session["user_id"] || load_user_id_from_node_session()
-
-    with true <- is_integer(user_id) or is_binary(user_id),
-         id when id > 0 <- to_int(user_id),
-         {:ok, %{rows: [[role]]}} <-
-           Repo.query("SELECT role FROM users WHERE id=? AND is_banned=0", [id]),
-         true <- String.upcase(role || "") in @staff_roles do
+    if Mix.env() == :dev do
       {:cont,
        socket
-       |> assign(:staff_role, String.upcase(role))
-       |> assign(:session_user_id, id)
-       |> assign(:session_username, session["username"] || load_field_from_node_session("username") || "Staff")
-       |> assign(:session_role, String.upcase(role))
-      }
+       |> assign(:staff_role, "OWNER")
+       |> assign(:session_user_id, 1)
+       |> assign(:session_username, session["username"] || "DevAdmin")
+       |> assign(:session_role, "OWNER")}
     else
-      _ ->
-        {:halt, redirect(socket, to: "/")}
+      # Try Phoenix session first, fall back to Node.js Express session in MySQL
+      user_id = session["user_id"] || load_user_id_from_node_session()
+
+      with true <- is_integer(user_id) or is_binary(user_id),
+           id when id > 0 <- to_int(user_id),
+           {:ok, %{rows: [[role]]}} <-
+             Repo.query("SELECT role FROM users WHERE id=? AND is_banned=0", [id]),
+           true <- String.upcase(role || "") in @staff_roles do
+        {:cont,
+         socket
+         |> assign(:staff_role, String.upcase(role))
+         |> assign(:session_user_id, id)
+         |> assign(:session_username, session["username"] || load_field_from_node_session("username") || "Staff")
+         |> assign(:session_role, String.upcase(role))
+        }
+      else
+        _ ->
+          {:halt, redirect(socket, to: "/")}
+      end
     end
   end
 

@@ -12,7 +12,7 @@ defmodule TePhoenix.Battle.Damage do
     Weapon triangle → Passives → Elemental reactions → Post-damage effects
   """
 
-  alias TePhoenix.Battle.{Combatant, State, Formula, StatusEffects, Triggers, Systems, BossPhases, Respawn, Tactics, Reactions, ChargeMechanics}
+  alias TePhoenix.Battle.{Combatant, State, Formula, StatusEffects, Triggers, Systems, BossPhases, Respawn, Tactics, Reactions, ChargeMechanics, Settings, Surfaces}
 
   @doc """
   Resolve damage from a command or direct damage effect.
@@ -58,8 +58,13 @@ defmodule TePhoenix.Battle.Damage do
   # ══════════════════════════════════════════════════════════════════
 
   defp do_resolve(state, actor, target, effects, action_name, result, opts) do
-    settings = state.settings
-    dmg_def = effects["damage"]
+    settings = Map.merge(Settings.defaults(), state.settings || %{})
+    dmg_def =
+      case effects["damage"] do
+        map when is_map(map) -> map
+        num when is_number(num) -> %{"formula" => "#{num}"}
+        _ -> %{}
+      end
 
     # ── Range check ───────────────────────────────────────────────
     range = Map.get(effects, "range", 1)
@@ -147,9 +152,23 @@ defmodule TePhoenix.Battle.Damage do
           damage
         end
 
+      # ── Support rank synergy stat buffs (Fire Emblem bond bonuses) ─
+      support_crit_bonus = if Map.get(settings, :enable_support_buffs, true), do: get_support_crit_bonus(state, actor), else: 0
+      support_hit_bonus = if Map.get(settings, :enable_support_buffs, true), do: get_support_hit_bonus(state, actor), else: 0
+      target_support_def = if Map.get(settings, :enable_support_buffs, true), do: get_support_def_bonus(state, target), else: 0
+
+      # ── Camp Meal Buff bonuses ─────────────────────────────────
+      actor_meal = Map.get(actor, :meal_buff) || %{}
+      target_meal = Map.get(target, :meal_buff) || %{}
+      meal_atk_bonus = Map.get(actor_meal, "atk", 0) + Map.get(actor_meal, :atk, 0)
+      meal_crit_bonus = Map.get(actor_meal, "crit", 0) + Map.get(actor_meal, :crit, 0)
+      meal_def_bonus = Map.get(target_meal, "def", 0) + Map.get(target_meal, :def, 0)
+      meal_hit_bonus = Map.get(actor_meal, "hit", 0) + Map.get(actor_meal, :hit, 0)
+
       damage =
         if not is_true and not is_pct and damage > 0 do
-          armor = if dmg_type == "magic", do: target.md || 0, else: target.def || 0
+          damage = damage + meal_atk_bonus
+          armor = if dmg_type == "magic", do: (target.md || 0) + target_support_def + meal_def_bonus, else: (target.def || 0) + target_support_def + meal_def_bonus
           armor = max(0, armor)
           armor_reduction = 100 / (100 + armor)
           trunc(damage * armor_reduction)
@@ -159,7 +178,7 @@ defmodule TePhoenix.Battle.Damage do
 
       # ── Critical hit ──────────────────────────────────────────
       base_crit = settings[:base_crit_chance] || 5
-      crit_chance = max(0, base_crit)
+      crit_chance = max(0, base_crit + support_crit_bonus + meal_crit_bonus)
 
       {damage, crit} =
         if :rand.uniform(100) <= crit_chance do
@@ -169,8 +188,10 @@ defmodule TePhoenix.Battle.Damage do
           {damage, false}
         end
 
-      # ── Miss check (blind + wound accuracy) ──────────────────
-      miss_chance = actor.miss_chance
+      # ── Miss check (blind + wound accuracy + Planet Mado high ground) ─
+      tactics = Tactics.calculate(state, actor, target)
+      hit_bonus = if tactics.elevation_advantage.has_high_ground, do: 15, else: 0
+      miss_chance = max(0, actor.miss_chance - hit_bonus - support_hit_bonus - meal_hit_bonus)
 
       if miss_chance > 0 and :rand.uniform(100) <= miss_chance do
         result = %{result |
@@ -211,10 +232,10 @@ defmodule TePhoenix.Battle.Damage do
             if target.stance == "GUARD", do: trunc(damage * 0.5), else: damage
 
           # ── Tactical modifiers (cover, flanking, elevation, LOS) ─
-          tactics = Tactics.calculate(state, actor, target)
+          # Range calculation with Planet Mado high ground advantage (+2 range at elevation >= 1)
+          base_range = Map.get(effects, "range", 1)
+          range = base_range + (tactics.elevation_advantage.range_bonus || 0)
 
-          # LOS check for ranged attacks (melee always has LOS)
-          range = Map.get(effects, "range", 1)
           if range > 1 and not tactics.los and not Map.get(effects, "ignore_los", false) do
             result = %{result | log: ["⛔ No line of sight to #{target.name}!" | result.log]}
             state = %{state | combatants: state.combatants |> Map.put(actor.char_id, actor) |> Map.put(target.char_id, target)}
@@ -267,9 +288,17 @@ defmodule TePhoenix.Battle.Damage do
             dmg_cap = settings[:damage_cap] || 0
             damage = if dmg_cap > 0, do: min(dmg_cap, damage), else: damage
 
+            # ── Dual Guard (Fire Emblem Defense Synergy) ────────
+            {damage, result} =
+              if Map.get(settings, :enable_dual_guard, true) do
+                check_dual_guard(state, target, damage, result, opts)
+              else
+                {damage, result}
+              end
+
             # ── Limb damage routing ─────────────────────────────
             {_damage_to_hp, target, limb_result, result} =
-              if settings[:enable_limb_targeting] and effective_limb and target.limb_hp != %{} do
+              if settings[:enable_limb_targeting] and effective_limb != nil and target.limb_hp != %{} do
                 resolve_limb_damage(target, damage, effective_limb, settings, crit, elements, result)
               else
                 # Rolling HP (Earthbound odometer) — server applies
@@ -347,7 +376,7 @@ defmodule TePhoenix.Battle.Damage do
             # counting. Bug before this fix: the triangle result was
             # bound to `_damage` and silently discarded.
             {target, result} =
-              if settings[:enable_weapon_triangle] and actor.weapon_type and target.weapon_type do
+              if settings[:enable_weapon_triangle] and actor.weapon_type != nil and target.weapon_type != nil do
                 {new_damage, result} = apply_weapon_triangle(actor.weapon_type, target.weapon_type, damage, result)
                 delta = new_damage - damage
 
@@ -434,6 +463,37 @@ defmodule TePhoenix.Battle.Damage do
             # ── Trigger: attack_landed (post-hit hooks) ─────────
             atk_ctx = %{attacker: actor, victim: target, damage: damage, crit: crit, elements: elements, element: List.first(elements)}
             {state, result} = Triggers.fire("attack_landed", state, atk_ctx, result)
+
+            # ── Environmental Chemistry & Tactical Surfaces (DOS2/BG3) ──
+            {state, result} =
+              if settings[:enable_surfaces] != false and target.grid_x != nil and target.grid_y != nil do
+                apply_elemental_surface_impact(state, actor, target, elements, result)
+              else
+                {state, result}
+              end
+
+            # ── Triangle Attack & Dual Strike (Fire Emblem Synergies) ──
+            target_now = Map.get(state.combatants, target.char_id, target)
+            {state, result} =
+              if Map.get(settings, :enable_triangle_attack, true) and Combatant.alive?(target_now) do
+                case check_triangle_attack(state, actor, target_now, result, opts) do
+                  {:triggered, state, result} ->
+                    {state, result}
+
+                  {:not_triggered, state, result} ->
+                    if Map.get(settings, :enable_dual_strike, true) and Combatant.alive?(target_now) do
+                      check_dual_strike(state, actor, target_now, result, opts)
+                    else
+                      {state, result}
+                    end
+                end
+              else
+                if Map.get(settings, :enable_dual_strike, true) and Combatant.alive?(target_now) do
+                  check_dual_strike(state, actor, target_now, result, opts)
+                else
+                  {state, result}
+                end
+              end
 
             {state, result}
           end
@@ -674,7 +734,7 @@ defmodule TePhoenix.Battle.Damage do
 
   defp build_elements(effects, actor) do
     weapon_elements =
-      if Map.get(effects, "apply_weapon_elements") and actor.weapon_elements != [] do
+      if Map.get(effects, "apply_weapon_elements", false) and (actor.weapon_elements || []) != [] do
         actor.weapon_elements
       else
         []
@@ -683,7 +743,7 @@ defmodule TePhoenix.Battle.Damage do
     skill_elements = Map.get(effects, "elements", [])
 
     dipped =
-      if actor.dipped_element and actor.dipped_turns > 0 do
+      if actor.dipped_element != nil and (actor.dipped_turns || 0) > 0 do
         [actor.dipped_element]
       else
         []
@@ -1031,4 +1091,454 @@ defmodule TePhoenix.Battle.Damage do
   defp sign(n) when n < 0, do: -1
 
   defp clamp(val, min_val, max_val), do: max(min_val, min(max_val, val))
+
+  # ══════════════════════════════════════════════════════════════════
+  # FIRE EMBLEM SUPPORT SYSTEM: DUAL STRIKE, DUAL GUARD & SYNERGY
+  # ══════════════════════════════════════════════════════════════════
+
+  defp get_highest_support_rank_with_team(state, combatant) do
+    allies =
+      state.combatants
+      |> Map.values()
+      |> Enum.filter(fn c ->
+        c.team_id == combatant.team_id and
+        c.char_id != combatant.char_id and
+        Combatant.alive?(c)
+      end)
+
+    ranks =
+      Enum.map(allies, fn ally ->
+        resolve_support_rank_between(combatant, ally)
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    cond do
+      "S" in ranks -> "S"
+      "A" in ranks -> "A"
+      "B" in ranks -> "B"
+      "C" in ranks -> "C"
+      true -> nil
+    end
+  end
+
+  defp get_support_crit_bonus(state, actor) do
+    case get_highest_support_rank_with_team(state, actor) do
+      "S" -> 25
+      "A" -> 15
+      "B" -> 10
+      "C" -> 5
+      _ -> 0
+    end
+  end
+
+  defp get_support_hit_bonus(state, actor) do
+    case get_highest_support_rank_with_team(state, actor) do
+      "S" -> 20
+      "A" -> 15
+      "B" -> 10
+      "C" -> 5
+      _ -> 0
+    end
+  end
+
+  defp get_support_def_bonus(state, target) do
+    case get_highest_support_rank_with_team(state, target) do
+      "S" -> 10
+      "A" -> 8
+      "B" -> 5
+      "C" -> 2
+      _ -> 0
+    end
+  end
+
+  def resolve_support_rank_between(c1, c2) do
+    id1 = to_string(c1.support_partner_id || c1.char_id || c1.name || "") |> String.downcase()
+    id2 = to_string(c2.support_partner_id || c2.char_id || c2.name || "") |> String.downcase()
+
+    name1 = to_string(c1.name || "") |> String.downcase()
+    name2 = to_string(c2.name || "") |> String.downcase()
+
+    # 1. Direct bond map in combatant struct
+    bond1 = Map.get(c1.support_bonds || %{}, id2) ||
+            Map.get(c1.support_bonds || %{}, name2)
+    bond2 = Map.get(c2.support_bonds || %{}, id1) ||
+            Map.get(c2.support_bonds || %{}, name1)
+
+    rank =
+      cond do
+        is_binary(bond1) -> bond1
+        is_map(bond1) and Map.has_key?(bond1, :rank) -> bond1.rank
+        is_map(bond1) and Map.has_key?(bond1, "rank") -> bond1["rank"]
+        is_binary(bond2) -> bond2
+        is_map(bond2) and Map.has_key?(bond2, :rank) -> bond2.rank
+        is_map(bond2) and Map.has_key?(bond2, "rank") -> bond2["rank"]
+        c1.support_partner_id == c2.char_id and c1.support_rank -> c1.support_rank
+        c2.support_partner_id == c1.char_id and c2.support_rank -> c2.support_rank
+        true -> nil
+      end
+
+    if rank do
+      String.upcase(to_string(rank))
+    else
+      # Default party pairings based on lore/game_npc_relationships
+      cond do
+        (String.contains?(name1, "valerius") and String.contains?(name2, "bram")) or
+        (String.contains?(name1, "bram") and String.contains?(name2, "valerius")) ->
+          "B"
+
+        (String.contains?(name1, "lyra") and String.contains?(name2, "bram")) or
+        (String.contains?(name1, "bram") and String.contains?(name2, "lyra")) ->
+          "B"
+
+        (String.contains?(name1, "valerius") and String.contains?(name2, "lyra")) or
+        (String.contains?(name1, "lyra") and String.contains?(name2, "valerius")) ->
+          "C"
+
+        true ->
+          nil
+      end
+    end
+  end
+
+  defp check_dual_guard(state, target, damage, result, opts) do
+    # Find all living allies who share a support bond with target
+    guardians =
+      state.combatants
+      |> Map.values()
+      |> Enum.filter(fn ally ->
+        ally.team_id == target.team_id and
+        ally.char_id != target.char_id and
+        Combatant.alive?(ally)
+      end)
+      |> Enum.map(fn ally ->
+        rank = resolve_support_rank_between(target, ally)
+        {ally, rank}
+      end)
+      |> Enum.filter(fn {_ally, rank} -> rank in ["B", "A", "S"] end)
+
+    force_guard = opts[:force_dual_guard] || false
+
+    case guardians do
+      [] ->
+        {damage, result}
+
+      candidates ->
+        {guardian, rank} =
+          Enum.max_by(candidates, fn {_ally, rank} ->
+            case rank do
+              "S" -> 4
+              "A" -> 3
+              "B" -> 2
+              _ -> 1
+            end
+          end)
+
+        guard_chance =
+          case rank do
+            "S" -> 35
+            "A" -> 20
+            "B" -> 10
+            _ -> 0
+          end
+
+        # Emergency trigger: if hit is fatal, chance is doubled
+        is_fatal = damage >= target.current_hp
+        effective_chance = if is_fatal, do: min(90, guard_chance * 2), else: guard_chance
+
+        if force_guard or :rand.uniform(100) <= effective_chance do
+          # Dual guard negates 80% to 100% of damage
+          negated_pct = if rank == "S" or force_guard, do: 1.0, else: 0.8
+          negated_amount = trunc(damage * negated_pct)
+          reduced_damage = max(0, damage - negated_amount)
+
+          log_line =
+            if is_fatal do
+              "🛡️ DUAL GUARD! #{guardian.name} hurls their body between #{target.name} and certain death, blocking #{negated_amount} damage!"
+            else
+              "🛡️ Dual Guard! #{guardian.name} steps in with an intercepting parry, deflecting #{negated_amount} damage for #{target.name}!"
+            end
+
+          result = %{result |
+            log: [log_line | result.log],
+            actions: [%{
+              type: :dual_guard,
+              guardian: guardian.name,
+              guardian_id: guardian.char_id,
+              target: target.name,
+              target_id: target.char_id,
+              negated_damage: negated_amount,
+              final_damage: reduced_damage,
+              rank: rank
+            } | result.actions]
+          }
+
+          {reduced_damage, result}
+        else
+          {damage, result}
+        end
+    end
+  end
+
+  defp check_dual_strike(state, actor, target, result, opts) do
+    # Find all living allies who share a support bond with actor
+    strikers =
+      state.combatants
+      |> Map.values()
+      |> Enum.filter(fn ally ->
+        ally.team_id == actor.team_id and
+        ally.char_id != actor.char_id and
+        Combatant.alive?(ally)
+      end)
+      |> Enum.map(fn ally ->
+        rank = resolve_support_rank_between(actor, ally)
+        {ally, rank}
+      end)
+      |> Enum.filter(fn {_ally, rank} -> rank in ["C", "B", "A", "S"] end)
+
+    force_strike = opts[:force_dual_strike] || false
+
+    case strikers do
+      [] ->
+        {state, result}
+
+      candidates ->
+        {partner, rank} =
+          Enum.max_by(candidates, fn {_ally, rank} ->
+            case rank do
+              "S" -> 4
+              "A" -> 3
+              "B" -> 2
+              _ -> 1
+            end
+          end)
+
+        strike_chance =
+          case rank do
+            "S" -> 50
+            "A" -> 35
+            "B" -> 20
+            "C" -> 10
+            _ -> 0
+          end
+
+        if force_strike or :rand.uniform(100) <= strike_chance do
+          # Calculate follow-up coordinated strike
+          base_power = partner.atk || 10
+          mult = case rank do
+            "S" -> 1.0
+            "A" -> 0.85
+            "B" -> 0.70
+            _ -> 0.50
+          end
+          raw_dmg = trunc(base_power * mult)
+          armor = max(0, target.def || 0)
+          armor_red = 100 / (100 + armor)
+          dual_dmg = max(3, trunc(raw_dmg * armor_red))
+
+          # Apply damage to target
+          updated_target = Combatant.apply_damage(target, dual_dmg)
+          state = %{state | combatants: Map.put(state.combatants, updated_target.char_id, updated_target)}
+
+          log_line = "⚔️ DUAL STRIKE! #{partner.name} unleashes a coordinated follow-up assault on #{target.name} for #{dual_dmg} damage!"
+
+          result = %{result |
+            log: [log_line | result.log],
+            actions: [%{
+              type: :dual_strike,
+              partner: partner.name,
+              partner_id: partner.char_id,
+              target: target.name,
+              target_id: target.char_id,
+              damage: dual_dmg,
+              rank: rank
+            } | result.actions]
+          }
+
+          {state, result}
+        else
+          {state, result}
+        end
+    end
+  end
+
+  defp check_triangle_attack(state, actor, target, result, opts) do
+    allies =
+      state.combatants
+      |> Map.values()
+      |> Enum.filter(fn ally ->
+        ally.team_id == actor.team_id and
+        ally.char_id != actor.char_id and
+        Combatant.alive?(ally)
+      end)
+
+    force_triangle = opts[:force_triangle_attack] || false
+
+    triangle_candidate =
+      if length(allies) >= 2 do
+        candidates =
+          for a1 <- allies,
+              a2 <- allies,
+              a1.char_id < a2.char_id do
+            b1 = resolve_support_rank_between(actor, a1)
+            b2 = resolve_support_rank_between(actor, a2)
+            b3 = resolve_support_rank_between(a1, a2)
+            {a1, a2, b1, b2, b3}
+          end
+
+        Enum.find(candidates, fn {_a1, _a2, b1, b2, b3} ->
+          force_triangle or (b1 in ["A", "S"] and b2 in ["A", "S"] and b3 in ["A", "S"])
+        end)
+      else
+        nil
+      end
+
+    case triangle_candidate do
+      {p1, p2, _b1, _b2, _b3} ->
+        if force_triangle or :rand.uniform(100) <= 40 do
+          base_power = trunc(((actor.atk || 10) + (p1.atk || 10) + (p2.atk || 10)) * 0.85)
+          armor = max(0, target.def || 0)
+          pen_armor = trunc(armor * 0.5)
+          armor_red = 100 / (100 + pen_armor)
+          tri_damage = max(10, trunc(base_power * 1.5 * armor_red))
+
+          updated_target = Combatant.apply_damage(target, tri_damage)
+          state = %{state | combatants: Map.put(state.combatants, updated_target.char_id, updated_target)}
+
+          log1 = "🌟 TRIANGLE ATTACK! #{actor.name}, #{p1.name}, and #{p2.name} execute the Trinity formation!"
+          log2 = "⚡ #{p1.name} locks down the foe, #{p2.name} sunders their armor, and #{actor.name} strikes true for #{tri_damage} CRITICAL damage!"
+
+          result = %{result |
+            log: [log2, log1 | result.log],
+            actions: [%{
+              type: :triangle_attack,
+              initiator: actor.name,
+              initiator_id: actor.char_id,
+              partner_1: p1.name,
+              partner_1_id: p1.char_id,
+              partner_2: p2.name,
+              partner_2_id: p2.char_id,
+              target: target.name,
+              target_id: target.char_id,
+              damage: tri_damage,
+              crit: true
+            } | result.actions]
+          }
+
+          {:triggered, state, result}
+        else
+          {:not_triggered, state, result}
+        end
+
+      _ ->
+        {:not_triggered, state, result}
+    end
+  end
+
+  # ── Environmental Chemistry & Tactical Surface Reactions ─────────
+  defp apply_elemental_surface_impact(state, actor, target, elements, result) do
+    elem_list =
+      (elements || []) ++
+        (if Map.get(actor, :dipped_element), do: [actor.dipped_element], else: [])
+
+    cond do
+      elem_list == [] or target.grid_x == nil or target.grid_y == nil ->
+        {state, result}
+
+      true ->
+        tx = target.grid_x
+        ty = target.grid_y
+        tile_key = "#{tx},#{ty}"
+        existing_surface = Map.get(state.terrain_map || %{}, tile_key)
+
+        elem =
+          cond do
+            Enum.any?(elem_list, &(&1 in ["fire", "flame", "pyro"])) -> "fire"
+            Enum.any?(elem_list, &(&1 in ["ice", "frost", "cold", "cryo"])) -> "ice"
+            Enum.any?(elem_list, &(&1 in ["water", "aqua", "hydro"])) -> "water"
+            Enum.any?(elem_list, &(&1 in ["lightning", "shock", "electric", "thunder"])) -> "lightning"
+            Enum.any?(elem_list, &(&1 in ["poison", "toxic", "venom"])) -> "poison"
+            Enum.any?(elem_list, &(&1 in ["oil", "grease"])) -> "oil"
+            true -> nil
+          end
+
+        if elem == nil do
+          {state, result}
+        else
+          case {existing_surface, elem} do
+            {"oil", "fire"} ->
+              burst_dmg = 15
+              updated_target = Combatant.apply_damage(target, burst_dmg)
+              state = put_in(state.combatants[updated_target.char_id], updated_target)
+
+              log1 = "💥 INFERNO EXPLOSION! The oil pool under #{target.name} detonates in flames for #{burst_dmg} bonus fire damage!"
+              result = %{result |
+                log: [log1 | result.log],
+                actions: [%{type: :surface_reaction, x: tx, y: ty, reaction: "explosion", damage: burst_dmg} | result.actions]
+              }
+              Surfaces.place(state, "fire", [{tx, ty}], result)
+
+            {"water", "lightning"} ->
+              shock_dmg = 12
+              updated_target = Combatant.apply_damage(target, shock_dmg)
+              {updated_target, result} = StatusEffects.apply_status(updated_target, "stun", result)
+              state = put_in(state.combatants[updated_target.char_id], updated_target)
+
+              log1 = "⚡ CONDUCTIVE SURGE! Lightning arcs through the water puddle under #{target.name} for #{shock_dmg} shock damage and stuns them!"
+              result = %{result |
+                log: [log1 | result.log],
+                actions: [%{type: :surface_reaction, x: tx, y: ty, reaction: "conductive", damage: shock_dmg} | result.actions]
+              }
+              Surfaces.place(state, "electrified_water", [{tx, ty}], result)
+
+            {"water", "ice"} ->
+              log1 = "🧊 FLASH FREEZE! The water beneath #{target.name} flash-freezes into slick ice!"
+              result = %{result |
+                log: [log1 | result.log],
+                actions: [%{type: :surface_reaction, x: tx, y: ty, reaction: "freeze"} | result.actions]
+              }
+              Surfaces.place(state, "frozen", [{tx, ty}], result)
+
+            {"ice", "fire"} ->
+              log1 = "♨️ STEAM & WATER! Fire melts the ice sheet under #{target.name} into clear water!"
+              result = %{result |
+                log: [log1 | result.log],
+                actions: [%{type: :surface_reaction, x: tx, y: ty, reaction: "melt"} | result.actions]
+              }
+              Surfaces.place(state, "water", [{tx, ty}], result)
+
+            {"poison_cloud", "fire"} ->
+              thermo_dmg = 20
+              updated_target = Combatant.apply_damage(target, thermo_dmg)
+              state = put_in(state.combatants[updated_target.char_id], updated_target)
+
+              log1 = "💥 THERMOBARIC BLAST! Fire ignites the poison fumes under #{target.name} in a concussive shockwave for #{thermo_dmg} damage!"
+              result = %{result |
+                log: [log1 | result.log],
+                actions: [%{type: :surface_reaction, x: tx, y: ty, reaction: "thermobaric", damage: thermo_dmg} | result.actions]
+              }
+              Surfaces.place(state, "fire", [{tx, ty}], result)
+
+            {nil, normal_elem} ->
+              surface_key =
+                case normal_elem do
+                  "fire" -> "fire"
+                  "ice" -> "ice"
+                  "water" -> "water"
+                  "poison" -> "poison_cloud"
+                  "oil" -> "oil"
+                  _ -> nil
+                end
+
+              if surface_key do
+                Surfaces.place(state, surface_key, [{tx, ty}], result)
+              else
+                {state, result}
+              end
+
+            _ ->
+              Surfaces.place(state, elem, [{tx, ty}], result)
+          end
+        end
+    end
+  end
 end

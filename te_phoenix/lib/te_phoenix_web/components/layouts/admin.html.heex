@@ -11,6 +11,8 @@
     <div class="flex-1 overflow-y-auto py-2">
       <div class="px-4 py-1.5"><span class="text-[10px] font-bold uppercase tracking-widest text-zinc-600/50">Overview</span></div>
       <.nav_link href={~p"/sauce"} icon="chart" label="Dashboard" active={@active_tab == :dashboard} />
+      <.nav_link href={~p"/sauce/uile"} icon="sparkles" label="Uile (Omni Architect)" active={@active_tab in [:uile, :jarvis]} />
+      <.nav_link href={~p"/sauce/gods_eye"} icon="eye" label="God's Eye (Radar)" active={@active_tab == :gods_eye} />
       <.nav_link href={~p"/sauce/players"} icon="users" label="Players" active={@active_tab == :players} />
       <.nav_link href={~p"/sauce/gm"} icon="megaphone" label="GM Tools & Notes" active={@active_tab == :gm_tools} />
 

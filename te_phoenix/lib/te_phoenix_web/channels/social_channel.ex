@@ -57,6 +57,7 @@ defmodule TePhoenixWeb.SocialChannel do
   def handle_in("arena_place_bet" = e, p, s), do: MinigameHandler.handle(e, p, s)
   def handle_in("fish_cast" = e, p, s), do: MinigameHandler.handle(e, p, s)
   def handle_in("fish_reel" = e, p, s), do: MinigameHandler.handle(e, p, s)
+  def handle_in("card_get_collection" = e, p, s), do: MinigameHandler.handle(e, p, s)
   def handle_in("card_game_challenge" = e, p, s), do: MinigameHandler.handle(e, p, s)
   def handle_in("card_game_place" = e, p, s), do: MinigameHandler.handle(e, p, s)
   def handle_in("gather" = e, p, s), do: MinigameHandler.handle(e, p, s)

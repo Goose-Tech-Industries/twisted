@@ -58,26 +58,33 @@ defmodule TePhoenix.Battle.ActiveDefense do
   def resolve(%Combatant{} = attacker, %Combatant{} = defender, opts \\ []) do
     settings = opts[:settings] || %{}
     type = opts[:type] || choose(defender, %{attacker: attacker})
+    timing_ms = opts[:timing_ms]
 
     case type do
       :none -> {:hit, defender}
-      _other -> attempt(type, attacker, defender, settings)
+      _other -> attempt(type, attacker, defender, settings, timing_ms)
     end
   end
 
-  defp attempt(:dodge, attacker, defender, settings) do
+  defp attempt(:dodge, attacker, defender, settings, timing_ms) do
     r = Limb.restrictions(defender.limb_hp)
     cost = @default_costs.dodge
 
     cond do
       r.cannot_dodge -> {:hit, defender}
       defender.current_mp < cost -> {:hit, defender}
+      is_number(timing_ms) and abs(timing_ms) <= (settings[:active_defense_perfect_window_ms] || 150) ->
+        defender = pay(defender, cost)
+        {:negated, defender, :perfect_dodge}
       true ->
         base = settings[:dodge_base_chance] || 0.15
         speed_factor = settings[:dodge_speed_factor] || 0.35
         max_c = settings[:dodge_max_chance] || 0.90
 
-        chance = clamp(base + (defender.speed - attacker.speed) * speed_factor / 100.0, 0.0, max_c)
+        # Timing penalty if timed late/early
+        timing_mult = if is_number(timing_ms) and abs(timing_ms) > 350, do: 0.50, else: 1.0
+
+        chance = clamp((base + (defender.speed - attacker.speed) * speed_factor / 100.0) * timing_mult, 0.0, max_c)
         defender = pay(defender, cost)
 
         if :rand.uniform() <= chance do
@@ -88,18 +95,22 @@ defmodule TePhoenix.Battle.ActiveDefense do
     end
   end
 
-  defp attempt(:parry, attacker, defender, settings) do
+  defp attempt(:parry, attacker, defender, settings, timing_ms) do
     r = Limb.restrictions(defender.limb_hp)
     cost = @default_costs.parry
 
     cond do
       r.cannot_parry -> {:hit, defender}
       defender.current_mp < cost -> {:hit, defender}
+      is_number(timing_ms) and abs(timing_ms) <= (settings[:active_defense_perfect_window_ms] || 150) ->
+        defender = pay(defender, cost)
+        {:negated, defender, :perfect_parry}
       true ->
-        # luck-and-def driven, attacker atk pushes back
+        timing_mult = if is_number(timing_ms) and abs(timing_ms) > 350, do: 0.50, else: 1.0
+
         chance =
           clamp(
-            0.10 + (defender.def + defender.luck - attacker.atk) / 100.0,
+            (0.10 + (defender.def + defender.luck - attacker.atk) / 100.0) * timing_mult,
             0.0,
             settings[:parry_max_chance] || 0.75
           )
@@ -114,7 +125,7 @@ defmodule TePhoenix.Battle.ActiveDefense do
     end
   end
 
-  defp attempt(:block, attacker, defender, settings) do
+  defp attempt(:block, attacker, defender, settings, timing_ms) do
     cost = @default_costs.block
     one_arm_red = settings[:block_one_arm_reduction] || 0.25
     two_arm_red = settings[:block_two_arm_reduction] || 0.50
@@ -125,9 +136,11 @@ defmodule TePhoenix.Battle.ActiveDefense do
     cond do
       arm_count == 0 -> {:hit, defender}
       defender.current_mp < cost -> {:hit, defender}
+      is_number(timing_ms) and abs(timing_ms) <= (settings[:active_defense_perfect_window_ms] || 150) ->
+        defender = pay(defender, cost)
+        {:mitigated, defender, 0.15, :perfect_block}
       true ->
         reduction = if arm_count >= 2, do: two_arm_red, else: one_arm_red
-        # def-vs-atk modulation, max +0.20 swing
         swing = clamp((defender.def - attacker.atk) / 100.0, -0.20, 0.20)
         mult = clamp(1.0 - (reduction + swing), 0.10, 1.0)
         defender = pay(defender, cost)
@@ -135,7 +148,7 @@ defmodule TePhoenix.Battle.ActiveDefense do
     end
   end
 
-  defp attempt(_, _attacker, defender, _settings), do: {:hit, defender}
+  defp attempt(_, _attacker, defender, _settings, _timing), do: {:hit, defender}
 
   defp pay(%Combatant{} = c, cost) do
     %{c | current_mp: max(0, c.current_mp - cost)}

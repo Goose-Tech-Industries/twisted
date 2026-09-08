@@ -313,7 +313,7 @@ defmodule TePhoenix.Battle.Systems do
   @doc "Resolve a combo input sequence (Legaia-style directional combos)"
   def resolve_combo_input(state, actor, target, input_sequence, result) do
     settings = state.settings
-    if not settings[:enable_combo_input] do
+    if settings[:enable_combo_input] == false do
       {state, %{result | log: ["Combo input is not enabled." | result.log]}}
     else
       inputs = if is_list(input_sequence), do: input_sequence,
@@ -431,11 +431,12 @@ defmodule TePhoenix.Battle.Systems do
 
   @doc "Ki/ranged/magic attacks give defender a base dodge bonus (Mado rule)"
   def ki_ranged_dodge_bonus(effects, settings) do
-    if not settings[:enable_diminishing_returns], do: 0,
-    else: (
+    if !settings[:enable_diminishing_returns] do
+      0
+    else
       is_ranged = Map.get(effects, "range", 0) > 1 and Map.get(effects, "range") != 99
-      is_magic = get_in(effects, ["damage", "type"]) == "magic"
+      is_magic = Map.get(effects, "type") == "magic" or (is_map(effects["damage"]) and effects["damage"]["type"] == "magic")
       if is_ranged or is_magic, do: settings[:ki_ranged_dodge_bonus] || 0.15, else: 0
-    )
+    end
   end
 end

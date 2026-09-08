@@ -69,6 +69,8 @@ interface EntityVisual {
   animation: NonNullable<MapEntity["animation"]>;
   /** Frame index within the current animation. */
   animFrame: number;
+  /** Sliced directional walk cycle frames from sprite sheet (4 directions x 4 frames). */
+  sheetFrames?: import("pixi.js").Texture[][] | null;
   /** Last frame advance time (perf.now ms). */
   lastFrameAt: number;
   /** Cached entity data from the last update (for dirty checks). */
@@ -86,6 +88,8 @@ export interface EntityRendererOptions {
   getOffset: () => { x: number; y: number };
   /** Pixi namespace (injected for framework-agnosticism). */
   pixi: typeof import("pixi.js");
+  /** Optional elevation lookup (tileX, tileY) -> elevation level (0..N). */
+  getElevation?: (x: number, y: number) => number;
 }
 
 /**
@@ -228,7 +232,30 @@ export class EntityRenderer {
 
       void loadTexture(PIXI, ent.spriteUrl).then((tex) => {
         if (!placeholder.destroyed) {
-          placeholder.texture = tex;
+          const imgW = tex.width || (tex.source as { width?: number })?.width || 0;
+          const imgH = tex.height || (tex.source as { height?: number })?.height || 0;
+          if (imgW >= this.opts.tileSize * 2 && imgH >= this.opts.tileSize * 2) {
+            // Slice 4 directions x 4 walk cycle frames
+            const cols = 4;
+            const rows = 4;
+            const fw = imgW / cols;
+            const fh = imgH / rows;
+            const frames: import("pixi.js").Texture[][] = [];
+            for (let r = 0; r < rows; r++) {
+              const rowFrames: import("pixi.js").Texture[] = [];
+              for (let c = 0; c < cols; c++) {
+                rowFrames.push(new PIXI.Texture({
+                  source: tex.source || tex,
+                  frame: new PIXI.Rectangle(c * fw, r * fh, fw, fh)
+                }));
+              }
+              frames.push(rowFrames);
+            }
+            vis.sheetFrames = frames;
+            placeholder.texture = frames[vis.facing % 4]?.[0] || tex;
+          } else {
+            placeholder.texture = tex;
+          }
           placeholder.tint = 0xffffff;
         }
       });
@@ -295,12 +322,18 @@ export class EntityRenderer {
       if (Math.abs(vis.drawY - vis.targetY) < 0.01) vis.drawY = vis.targetY;
     }
 
-    // Animation frame advance (stub — real sprite-sheet frame cycling
-    // lands when we port SpriteAnimation from /root/twisted/ui/lib/sprite-animation.ts)
+    // Animation frame advance — cycles walk cycle frames on the active sprite sheet
     const now = performance.now();
     if (now - vis.lastFrameAt > 150) {
       vis.animFrame = (vis.animFrame + 1) % 4;
       vis.lastFrameAt = now;
+
+      if (vis.sheetFrames && vis.layers.body && !vis.layers.body.destroyed) {
+        const row = vis.sheetFrames[vis.facing % 4];
+        if (row && row[vis.animFrame]) {
+          vis.layers.body.texture = row[vis.animFrame]!;
+        }
+      }
     }
   }
 
@@ -308,10 +341,13 @@ export class EntityRenderer {
   private reproject(vis: EntityVisual): void {
     const offset = this.opts.getOffset();
     const step = this.opts.tileSize + 1;
+    const elev = this.opts.getElevation
+      ? this.opts.getElevation(Math.round(vis.drawX), Math.round(vis.drawY))
+      : 0;
     const { sx, sy } = this.opts.projection.toScreen(
       vis.drawX,
       vis.drawY,
-      0, // elevation — fed later from the map's elevation layer
+      elev,
       step,
       offset.x,
       offset.y

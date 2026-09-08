@@ -29,8 +29,8 @@ export type LayerName =
   | "entities"
   | "objects";
 import { makeProjection, type Projection, WALL_HEIGHT_PX } from "./projections/index.js";
-import { drawFirstPerson, DEFAULT_WALL_TILE_IDS } from "./first-person.js";
 import { EntityRenderer } from "./entities.js";
+import { AtmosphereRenderer } from "./atmosphere.js";
 import { darkenColor, lightenColor } from "./color.js";
 
 const WALL_DARKEN = 0.45;
@@ -181,6 +181,7 @@ export class TwistedRenderer {
     player: Container;
     fringe: Container;
     fringeAnim: Container;
+    atmosphere: Container;
     fog: Container;
   } | null = null;
   private projection: Projection;
@@ -241,7 +242,11 @@ export class TwistedRenderer {
    * to the sprite path instead of the color bucket. */
   private spriteTiles: Map<number, { urls: string[]; fps: number }> = new Map();
   private paletteColors: Map<number, number> = new Map();
+  /** Sliced sub-textures from the active tileset atlas, keyed by tile index. */
+  private atlasTextures: Map<number, import("pixi.js").Texture> = new Map();
+  private lastTilesetUrl: string | null = null;
   private entityRenderer: EntityRenderer | null = null;
+  private atmosphereRenderer: AtmosphereRenderer | null = null;
   /** Cache of pre-loaded player/entity sprite textures, keyed by URL. */
   private playerTextureCache = new Map<string, Promise<unknown>>();
   /** Cache of loaded MapObject textures keyed by URL. Values resolve to
@@ -340,11 +345,18 @@ export class TwistedRenderer {
     fringe.label = "fringe";
     const fringeAnim = new PIXI.Container();
     fringeAnim.label = "fringeAnim";
+    const atmosphere = new PIXI.Container();
+    atmosphere.label = "atmosphere";
     const fog = new PIXI.Container();
     fog.label = "fog";
 
-    app.stage.addChild(background, ground, groundAnim, walls, overlayAnim, objects, entities, player, fringe, fringeAnim, fog);
-    this.layers = { background, ground, groundAnim, walls, overlayAnim, objects, entities, player, fringe, fringeAnim, fog };
+    app.stage.addChild(background, ground, groundAnim, walls, overlayAnim, objects, entities, player, fringe, fringeAnim, atmosphere, fog);
+    this.layers = { background, ground, groundAnim, walls, overlayAnim, objects, entities, player, fringe, fringeAnim, atmosphere, fog };
+
+    this.atmosphereRenderer = new AtmosphereRenderer({
+      container: atmosphere,
+      pixi: PIXI,
+    });
 
     this.entityRenderer = new EntityRenderer({
       container: entities,
@@ -355,6 +367,15 @@ export class TwistedRenderer {
         return { x: o.offsetX, y: o.offsetY };
       },
       pixi: PIXI,
+      getElevation: (x, y) => {
+        if (!this.lastState || !this.lastState.layers?.elevation) return 0;
+        const { mapWidth, mapHeight } = this.lastState;
+        if (x < 0 || y < 0 || x >= mapWidth || y >= mapHeight) return 0;
+        const idx = y * mapWidth + x;
+        const rawElev = this.lastState.layers.elevation[idx] ?? 0;
+        const pass = this.lastState.layers.passability ? this.lastState.layers.passability[idx] : 0;
+        return pass === 3 ? rawElev + 0.5 : rawElev;
+      },
     });
 
     // Animation ticker — per-cell animated redraw. Only the *Anim
@@ -371,6 +392,12 @@ export class TwistedRenderer {
       animFrameAccum = 0;
 
       if (!this.lastState || !this.layers) return;
+
+      // Update atmospheric particle simulation on every animation tick
+      if (this.atmosphereRenderer) {
+        this.atmosphereRenderer.update(delta);
+      }
+
       if (!this.hasAnyAnimCells()) return;
 
       this.frameCounter++;
@@ -482,6 +509,23 @@ export class TwistedRenderer {
     // any tile so every cached bucket is potentially stale.
     if (state.tilePalette) this.ingestPalette(state.tilePalette);
 
+    const activeTileset = state.tileset ?? {
+      url: "/tilesets/ashveil_tiles.png",
+      tileWidth: 32,
+      tileHeight: 32,
+      columns: 8,
+      rows: 8
+    };
+
+    if (activeTileset && activeTileset.url && activeTileset.url !== this.lastTilesetUrl) {
+      await this.loadTilesetAtlas(activeTileset, PIXI);
+    }
+
+    if (this.atmosphereRenderer) {
+      const offsets = this.computeOffsets(state);
+      this.atmosphereRenderer.setTheme(state.atmosphere, offsets.vpPxW, offsets.vpPxH);
+    }
+
     // Scan tile data for animated cells — populates animGroundCells /
     // animOverlayCells / animFringeCells so the ticker knows which
     // *Anim containers need redraws. When animation is disabled the
@@ -573,35 +617,23 @@ export class TwistedRenderer {
       bg.rect(mapX - 1, mapY - 1, mapW + 2, mapH + 2);
       bg.stroke({ color: state.bgBorderColor ?? 0xb38b3a, width: 2, alpha: 0.85 });
       layers.background.addChild(bg);
+
+      // Illustrated continuous backdrop art (Pillars of Eternity / HD-2D style)
+      if (state.backdropUrl) {
+        const tex = this.getObjectTexture(state.backdropUrl);
+        if (tex) {
+          const s = new PIXI.Sprite(tex as import("pixi.js").Texture);
+          s.position.set(mapX, mapY);
+          s.width = mapW;
+          s.height = mapH;
+          layers.background.addChild(s);
+        } else {
+          this.loadObjectTexture(state.backdropUrl);
+        }
+      }
     }
 
-    // First-person mode takes over rendering entirely.
-    if (this.opts.renderMode === "first-person") {
-      const vp = this.projection.viewportSize(
-        state.viewportW,
-        state.viewportH,
-        this.opts.tileSize + 1
-      );
-      // Build a 2D tile grid from the flat ground layer.
-      const tiles2D = this.buildTile2D(state);
-      drawFirstPerson({
-        pixi: PIXI,
-        layers: { ground: layers.ground, walls: layers.walls },
-        tiles: tiles2D,
-        mapWidth: state.mapWidth,
-        mapHeight: state.mapHeight,
-        playerX: state.playerX,
-        playerY: state.playerY,
-        facing: state.playerFacing ?? 0,
-        viewportPxW: vp.w,
-        viewportPxH: vp.h,
-        tileColor: (id) => this.tileColor(id),
-        wallTileIds: this.opts.wallTileIds ?? DEFAULT_WALL_TILE_IDS,
-      });
-      return;
-    }
-
-    // ─── All other modes: tile grid render ─────────────────────
+    // ─── Tile grid render ─────────────────────────────────────
     // Single source of truth for camera offsets, shared with screenToTile/
     // tileToScreen via currentOffsets(). Diverging copies of this math
     // between render and click conversion is the canonical Twisted
@@ -689,7 +721,18 @@ export class TwistedRenderer {
           const elev = elevLayer[idx] ?? 0;
           const { sx, sy } = this.projection.toScreen(x, y, elev, step, offsetX, offsetY);
 
-          // Sprite-animated tile? Divert to the per-cell sprite path so
+          // 1. Sliced tileset atlas sprite texture takes highest priority
+          const atlasTex = this.atlasTextures.get(tileId);
+          if (atlasTex) {
+            const s = new PIXI.Sprite(atlasTex);
+            s.width = tileSize;
+            s.height = tileSize;
+            s.position.set(sx, sy);
+            targetContainer.addChild(s);
+            continue;
+          }
+
+          // 2. Sprite-animated tile? Divert to the per-cell sprite path so
           // this cell draws as a Pixi.Sprite instead of being bucketed.
           const sprite = this.spriteTiles.get(tileId);
           if (sprite) {
@@ -771,9 +814,15 @@ export class TwistedRenderer {
 
     // 2.5D wall extrusion — for every ground tile with elevation>0 draw
     // front/right/top/left/shadow/gradient faces on the walls layer.
-    // Only redraws when ground (tile ids drive wall colour) OR overlay
-    // (we cleared the shared walls container) is dirty.
+    // Batched by color/primitive to avoid allocating thousands of Graphics objects.
     if (this.opts.renderMode === "2.5d" && wallsContainerDirty) {
+      const frontBuckets = new Map<number, Array<{ x: number; y: number; w: number; h: number }>>();
+      const sideBuckets = new Map<number, Array<{ x: number; y: number; w: number; h: number }>>();
+      const topBuckets = new Map<number, Array<{ x: number; y: number; w: number; h: number }>>();
+      const leftBuckets = new Map<number, Array<{ x: number; y: number; w: number; h: number }>>();
+      const shadows: Array<{ x: number; y: number; w: number; h: number }> = [];
+      const gradStripes: Array<{ x: number; y: number; w: number; h: number }> = [];
+
       for (let y = 0; y < mapHeight; y++) {
         for (let x = 0; x < mapWidth; x++) {
           if (!this.projection.inViewport(x, y, camX, camY, viewportW, viewportH)) continue;
@@ -786,44 +835,88 @@ export class TwistedRenderer {
           const { sx, sy } = this.projection.toScreen(x, y, elev, step, offsetX, offsetY);
           const wallH = elev * WALL_HEIGHT_PX;
           const wallColor = darkenColor(color, WALL_DARKEN);
+          const sideColor = darkenColor(color, 0.3);
+          const topColor = lightenColor(color, 1.5);
+          const leftColor = lightenColor(color, 1.3);
           const sideW = Math.min(6, Math.ceil(tileSize * 0.15));
 
-          const front = new PIXI.Graphics().rect(0, 0, tileSize, wallH).fill(wallColor);
-          front.position.set(sx, sy + tileSize);
-          layers.walls.addChild(front);
+          // Front
+          let fb = frontBuckets.get(wallColor);
+          if (!fb) { fb = []; frontBuckets.set(wallColor, fb); }
+          fb.push({ x: sx, y: sy + tileSize, w: tileSize, h: wallH });
 
-          const side = new PIXI.Graphics()
-            .rect(0, 0, sideW, wallH + tileSize)
-            .fill(darkenColor(color, 0.3));
-          side.position.set(sx + tileSize, sy);
-          layers.walls.addChild(side);
+          // Side
+          let sb = sideBuckets.get(sideColor);
+          if (!sb) { sb = []; sideBuckets.set(sideColor, sb); }
+          sb.push({ x: sx + tileSize, y: sy, w: sideW, h: wallH + tileSize });
 
-          const topEdge = new PIXI.Graphics()
-            .rect(0, 0, tileSize, 2)
-            .fill(lightenColor(color, 1.5));
-          topEdge.position.set(sx, sy);
-          layers.walls.addChild(topEdge);
+          // Top edge
+          let tb = topBuckets.get(topColor);
+          if (!tb) { tb = []; topBuckets.set(topColor, tb); }
+          tb.push({ x: sx, y: sy, w: tileSize, h: 2 });
 
-          const leftEdge = new PIXI.Graphics()
-            .rect(0, 0, 1, tileSize)
-            .fill(lightenColor(color, 1.3));
-          leftEdge.position.set(sx, sy);
-          layers.walls.addChild(leftEdge);
+          // Left edge
+          let lb = leftBuckets.get(leftColor);
+          if (!lb) { lb = []; leftBuckets.set(leftColor, lb); }
+          lb.push({ x: sx, y: sy, w: 1, h: tileSize });
 
+          // Shadow
           const shadowH = Math.min(wallH * 0.4, 8);
-          const shadow = new PIXI.Graphics()
-            .rect(0, 0, tileSize + sideW, shadowH)
-            .fill({ color: 0x000000, alpha: 0.25 });
-          shadow.position.set(sx, sy + tileSize + wallH);
-          layers.walls.addChild(shadow);
+          shadows.push({ x: sx, y: sy + tileSize + wallH, w: tileSize + sideW, h: shadowH });
 
-          const gradStripe = new PIXI.Graphics()
-            .rect(0, 0, tileSize, Math.ceil(wallH * 0.4))
-            .fill({ color: 0x000000, alpha: 0.15 });
-          gradStripe.position.set(sx, sy + tileSize + wallH * 0.6);
-          layers.walls.addChild(gradStripe);
+          // Gradient stripe
+          gradStripes.push({ x: sx, y: sy + tileSize + wallH * 0.6, w: tileSize, h: Math.ceil(wallH * 0.4) });
         }
       }
+
+      // Draw all front walls batched by color
+      for (const [col, rects] of frontBuckets) {
+        const gfx = new PIXI.Graphics();
+        for (const r of rects) gfx.rect(r.x, r.y, r.w, r.h);
+        gfx.fill(col);
+        layers.walls.addChild(gfx);
+      }
+
+      // Draw all side walls batched by color
+      for (const [col, rects] of sideBuckets) {
+        const gfx = new PIXI.Graphics();
+        for (const r of rects) gfx.rect(r.x, r.y, r.w, r.h);
+        gfx.fill(col);
+        layers.walls.addChild(gfx);
+      }
+
+      // Draw all top edges batched by color
+      for (const [col, rects] of topBuckets) {
+        const gfx = new PIXI.Graphics();
+        for (const r of rects) gfx.rect(r.x, r.y, r.w, r.h);
+        gfx.fill(col);
+        layers.walls.addChild(gfx);
+      }
+
+      // Draw all left edges batched by color
+      for (const [col, rects] of leftBuckets) {
+        const gfx = new PIXI.Graphics();
+        for (const r of rects) gfx.rect(r.x, r.y, r.w, r.h);
+        gfx.fill(col);
+        layers.walls.addChild(gfx);
+      }
+
+      // Draw all shadows in one compound path
+      if (shadows.length > 0) {
+        const shadowGfx = new PIXI.Graphics();
+        for (const s of shadows) shadowGfx.rect(s.x, s.y, s.w, s.h);
+        shadowGfx.fill({ color: 0x000000, alpha: 0.25 });
+        layers.walls.addChild(shadowGfx);
+      }
+
+      // Draw all gradient stripes in one compound path
+      if (gradStripes.length > 0) {
+        const gradGfx = new PIXI.Graphics();
+        for (const g of gradStripes) gradGfx.rect(g.x, g.y, g.w, g.h);
+        gradGfx.fill({ color: 0x000000, alpha: 0.15 });
+        layers.walls.addChild(gradGfx);
+      }
+
       layers.walls.sortChildren();
     }
 
@@ -1088,6 +1181,8 @@ export class TwistedRenderer {
             return 0xff0000; // blocked — red
           case 2:
             return 0xffff00; // trigger — yellow
+          case 3:
+            return 0x38bdf8; // ramp / stairs — cyan
           default:
             return 0x000000;
         }
@@ -1148,6 +1243,79 @@ export class TwistedRenderer {
     }
     this.dirty.elevation = false;
 
+    // ── Tactical Tabletop & VTT Campaign Overlays ─────────
+    // Grid overlay — 1px crisp lines for tactical combat & D&D battlemaps
+    if (state.showGrid) {
+      const gridGfx = new PIXI.Graphics();
+      for (let y = 0; y < mapHeight; y++) {
+        for (let x = 0; x < mapWidth; x++) {
+          if (!this.projection.inViewport(x, y, camX, camY, viewportW, viewportH)) continue;
+          const { sx, sy } = this.projection.toScreen(x, y, 0, step, offsetX, offsetY);
+          this.projection.drawTile(gridGfx, sx, sy, tileSize);
+        }
+      }
+      gridGfx.stroke({ color: 0xffffff, width: 1, alpha: 0.18 });
+      layers.fog.addChild(gridGfx);
+    }
+
+    // Tactical measurement ruler (Shift+drag or Ruler tool) — distance in feet and 5ft squares
+    if (state.ruler) {
+      const { startX, startY, endX, endY, color = 0x38bdf8 } = state.ruler;
+      const { sx: sX, sy: sY } = this.projection.toScreen(startX, startY, 0, step, offsetX, offsetY);
+      const { sx: eX, sy: eY } = this.projection.toScreen(endX, endY, 0, step, offsetX, offsetY);
+      const scx = sX + tileSize / 2;
+      const scy = sY + tileSize / 2;
+      const ecx = eX + tileSize / 2;
+      const ecy = eY + tileSize / 2;
+
+      const rulerGfx = new PIXI.Graphics();
+      rulerGfx.moveTo(scx, scy).lineTo(ecx, ecy).stroke({ color, width: 3, alpha: 0.85 });
+      rulerGfx.circle(scx, scy, 4).fill(color);
+      rulerGfx.circle(ecx, ecy, 5).fill(0xffffff);
+      layers.fog.addChild(rulerGfx);
+
+      const dx = Math.abs(endX - startX);
+      const dy = Math.abs(endY - startY);
+      const distTiles = Math.round(Math.sqrt(dx * dx + dy * dy) * 10) / 10;
+      const distFeet = Math.round(distTiles * 5);
+
+      const badge = new PIXI.Text({
+        text: `${distFeet} ft (${distTiles} sq)`,
+        style: {
+          fontFamily: "sans-serif",
+          fontSize: 11,
+          fontWeight: "bold",
+          fill: 0xffffff,
+          stroke: { color: 0x0f172a, width: 3 },
+        },
+      });
+      badge.x = (scx + ecx) / 2 - badge.width / 2;
+      badge.y = (scy + ecy) / 2 - 14;
+      layers.fog.addChild(badge);
+    }
+
+    // Tactical Area-of-Effect (AoE) spell templates (Circle, Box, Line)
+    if (state.aoeTemplate) {
+      const { type, originX, originY, targetX, targetY, radiusTiles, color = 0xf59e0b } = state.aoeTemplate;
+      const { sx: tx, sy: ty } = this.projection.toScreen(targetX, targetY, 0, step, offsetX, offsetY);
+      const tcx = tx + tileSize / 2;
+      const tcy = ty + tileSize / 2;
+      const rPx = radiusTiles * step;
+
+      const aoeGfx = new PIXI.Graphics();
+      if (type === "circle") {
+        aoeGfx.circle(tcx, tcy, rPx).fill({ color, alpha: 0.22 });
+        aoeGfx.circle(tcx, tcy, rPx).stroke({ color, width: 2, alpha: 0.8 });
+      } else if (type === "box") {
+        aoeGfx.rect(tcx - rPx, tcy - rPx, rPx * 2, rPx * 2).fill({ color, alpha: 0.22 });
+        aoeGfx.rect(tcx - rPx, tcy - rPx, rPx * 2, rPx * 2).stroke({ color, width: 2, alpha: 0.8 });
+      } else if (type === "line") {
+        const { sx: ox, sy: oy } = this.projection.toScreen(originX, originY, 0, step, offsetX, offsetY);
+        aoeGfx.moveTo(ox + tileSize / 2, oy + tileSize / 2).lineTo(tcx, tcy).stroke({ color, width: rPx * 0.5, alpha: 0.4 });
+      }
+      layers.fog.addChild(aoeGfx);
+    }
+
     // ── Player marker ─────────────────────────────────────
     // If a sprite URL is provided, load and display it (async, cached).
     // Otherwise draw a ring+dot in the player's team color.
@@ -1162,7 +1330,29 @@ export class TwistedRenderer {
         offsetY
       );
 
-      if (state.playerSpriteUrl) {
+      if (state.playerLayers && Object.keys(state.playerLayers).length > 0) {
+        const layerOrder = ["body", "head", "hair", "armor", "weapon", "acc"] as const;
+        const frameCounter = this.frameCounter;
+        for (const layerName of layerOrder) {
+          const url = state.playerLayers[layerName];
+          if (!url) continue;
+          let texPromise = this.playerTextureCache.get(url);
+          if (!texPromise) {
+            texPromise = PIXI.Assets.load(url);
+            this.playerTextureCache.set(url, texPromise);
+          }
+          texPromise
+            .then((tex: any) => {
+              if (this.destroyed || !this.layers) return;
+              const sprite = new PIXI.Sprite(tex);
+              sprite.width = tileSize;
+              sprite.height = tileSize;
+              sprite.position.set(sx, sy);
+              this.layers.player.addChild(sprite);
+            })
+            .catch(() => {});
+        }
+      } else if (state.playerSpriteUrl) {
         const url = state.playerSpriteUrl;
         let texPromise = this.playerTextureCache.get(url);
         if (!texPromise) {
@@ -1258,19 +1448,33 @@ export class TwistedRenderer {
           fctx.globalCompositeOperation = "source-over";
         }
 
-        // Cut out light-source holes for any map object with a light radius.
+        // Dynamic radial light sources with multi-octave organic torch flicker
         const objs = state.objects || [];
-        const lit = objs.filter((o) => o.light && o.light.radius > 0);
+        const lit = objs.filter(
+          (o) => (o.light && o.light.radius > 0) || o.type === "LIGHT" || o.preset === "TORCH"
+        );
         if (lit.length > 0) {
           fctx.globalCompositeOperation = "destination-out";
           for (const obj of lit) {
             const { sx: lx, sy: ly } = this.projection.toScreen(obj.x, obj.y, 0, step, offsetX, offsetY);
-            const lr = obj.light!.radius * step;
+            const baseR = (obj.light?.radius ?? (obj.preset === "TORCH" ? 3.5 : 2.5)) * step;
+            
+            // Dynamic multi-octave flicker calculation for living torch/fire atmosphere
+            const shouldFlicker = obj.light?.flicker !== false;
+            const seed = (obj.x * 12.9898 + obj.y * 78.233);
+            const flicker = shouldFlicker
+              ? (Math.sin(this.frameCounter * 0.15 + seed) * 0.6 +
+                 Math.sin(this.frameCounter * 0.28 + seed * 2.1) * 0.4) * (0.06 * baseR)
+              : 0;
+
+            const lr = Math.max(12, baseR + flicker);
             const lcx = lx + tileSize / 2;
             const lcy = ly + tileSize / 2;
+
             const lGrad = fctx.createRadialGradient(lcx, lcy, 0, lcx, lcy, lr);
-            lGrad.addColorStop(0, "rgba(0,0,0,0.9)");
-            lGrad.addColorStop(0.5, "rgba(0,0,0,0.5)");
+            lGrad.addColorStop(0, "rgba(0,0,0,0.95)");
+            lGrad.addColorStop(0.4, "rgba(0,0,0,0.75)");
+            lGrad.addColorStop(0.8, "rgba(0,0,0,0.25)");
             lGrad.addColorStop(1, "rgba(0,0,0,0)");
             fctx.fillStyle = lGrad;
             fctx.beginPath();
@@ -1279,15 +1483,23 @@ export class TwistedRenderer {
           }
           fctx.globalCompositeOperation = "source-over";
 
-          // Colored glow on top of each light.
+          // Atmospheric warm colored ambient glow on top of each light source
           for (const obj of lit) {
             const { sx: lx, sy: ly } = this.projection.toScreen(obj.x, obj.y, 0, step, offsetX, offsetY);
-            const lr = obj.light!.radius * step * 0.6;
+            const baseR = (obj.light?.radius ?? (obj.preset === "TORCH" ? 3.5 : 2.5)) * step * 0.75;
+            const seed = (obj.x * 12.9898 + obj.y * 78.233);
+            const flicker = obj.light?.flicker !== false
+              ? Math.sin(this.frameCounter * 0.15 + seed) * (0.04 * baseR)
+              : 0;
+
+            const lr = Math.max(8, baseR + flicker);
             const lcx = lx + tileSize / 2;
             const lcy = ly + tileSize / 2;
-            const c = obj.light!.color || "#ff8833";
+            const c = obj.light?.color || (obj.preset === "TORCH" ? "#ff9933" : "#ffaa44");
+
             const lGrad = fctx.createRadialGradient(lcx, lcy, 0, lcx, lcy, lr);
-            lGrad.addColorStop(0, c + "30");
+            lGrad.addColorStop(0, c + "55");
+            lGrad.addColorStop(0.5, c + "22");
             lGrad.addColorStop(1, c + "00");
             fctx.fillStyle = lGrad;
             fctx.beginPath();
@@ -1668,6 +1880,7 @@ export class TwistedRenderer {
     if (state.layers.passability !== last.layers.passability) this.dirty.passability = true;
     if (state.layers.elevation !== last.layers.elevation) this.dirty.elevation = true;
     if (state.entities !== last.entities) this.dirty.entities = true;
+    if (state.playerLayers !== last.playerLayers || state.playerSpriteUrl !== last.playerSpriteUrl) this.dirty.entities = true;
     if (state.objects !== last.objects) this.dirty.objects = true;
     // Player movement, camera shift, viewport size — every screen-space
     // tile position changes, so every layer needs to repaint.
@@ -1777,6 +1990,47 @@ export class TwistedRenderer {
   }
 
   /**
+   * Load a single tileset atlas image and slice it into sub-textures by tile ID.
+   * Enables hardware-accelerated sprite-based tiles from a single sprite sheet.
+   */
+  private async loadTilesetAtlas(
+    tileset: { url: string; tileWidth?: number; tileHeight?: number; columns?: number; rows?: number },
+    PIXI: typeof import("pixi.js")
+  ): Promise<void> {
+    if (this.lastTilesetUrl === tileset.url && this.atlasTextures.size > 0) return;
+    this.lastTilesetUrl = tileset.url;
+
+    try {
+      const baseTex = (await PIXI.Assets.load(tileset.url)) as import("pixi.js").Texture;
+      if (!baseTex || this.destroyed) return;
+
+      const tw = tileset.tileWidth ?? 32;
+      const th = tileset.tileHeight ?? 32;
+      const imgW = baseTex.width || (baseTex.source?.width ?? 512);
+      const imgH = baseTex.height || (baseTex.source?.height ?? 512);
+      const cols = tileset.columns ?? Math.max(1, Math.floor(imgW / tw));
+      const rows = tileset.rows ?? Math.max(1, Math.floor(imgH / th));
+
+      this.atlasTextures.clear();
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const tileId = r * cols + c;
+          const frame = new PIXI.Rectangle(c * tw, r * th, tw, th);
+          const subTex = new PIXI.Texture({
+            source: baseTex.source || baseTex,
+            frame,
+          });
+          this.atlasTextures.set(tileId, subTex);
+        }
+      }
+
+      this.markAllDirty();
+    } catch (err) {
+      console.warn("[TwistedRenderer] Failed to load tileset atlas:", tileset.url, err);
+    }
+  }
+
+  /**
    * Synchronously return a loaded texture for an object sprite URL, or
    * `null` if it hasn't finished loading yet. The texture cache stores
    * **resolved** Texture values directly (via `.then(tex => cache.set)`)
@@ -1836,18 +2090,6 @@ export class TwistedRenderer {
     return (
       this.paletteColors.get(id) ?? DEFAULT_TILE_COLORS[id] ?? 0x1f2937
     );
-  }
-
-  private buildTile2D(state: RenderState): number[][] {
-    const grid: number[][] = [];
-    for (let y = 0; y < state.mapHeight; y++) {
-      const row: number[] = [];
-      for (let x = 0; x < state.mapWidth; x++) {
-        row.push(state.layers.ground[y * state.mapWidth + x] ?? 0);
-      }
-      grid.push(row);
-    }
-    return grid;
   }
 }
 

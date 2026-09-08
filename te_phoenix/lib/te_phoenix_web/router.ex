@@ -37,11 +37,27 @@ defmodule TePhoenixWeb.Router do
     post "/kickstarter/signup", KickstarterController, :signup
   end
 
-  # Public character API (no auth required)
+  # Public character & voice API (no auth required)
   scope "/api", TePhoenixWeb do
     pipe_through :api
 
     get "/character/:id", CharacterApiController, :show
+    get "/character-options", GameController, :character_options
+    get "/characters/options", GameController, :character_options
+    get "/subclasses", GameController, :list_subclasses
+    post "/voice/speak", VoiceController, :speak
+    get "/voice/voices", VoiceController, :voices
+
+    # ── Universal Party Game & Social Deduction Engine ───────────
+    get "/party-games/modes", PartyGameController, :list_modes
+    post "/party-games/rooms/create", PartyGameController, :create_room
+    post "/party-games/rooms/join", PartyGameController, :join_room
+    get "/party-games/rooms/:code", PartyGameController, :get_room
+    post "/party-games/rooms/:code/start", PartyGameController, :start_game
+    post "/party-games/rooms/:code/advance", PartyGameController, :advance_phase
+    post "/party-games/rooms/:code/submit", PartyGameController, :submit_response
+    post "/party-games/rooms/:code/vote", PartyGameController, :vote
+    get "/social-deduction/roles", PartyGameController, :list_social_roles
   end
 
   scope "/api/auth", TePhoenixWeb do
@@ -66,10 +82,41 @@ defmodule TePhoenixWeb.Router do
     pipe_through [:api, :auth]
 
     # ── Characters ────────────────────────────────────────────────
+    get "/character-options", GameController, :character_options
+    get "/characters/options", GameController, :character_options
     get "/characters", GameController, :list_characters
     post "/characters/create", GameController, :create_character
     get "/characters/:id", GameController, :get_character
     post "/characters/:id/delete", GameController, :delete_character
+    post "/characters/:id/subclass", GameController, :specialize_subclass
+    get "/subclasses", GameController, :list_subclasses
+
+    # ── Wilderness Camp, Inns & SSE Streamed Cutscenes ────────────
+    get "/camp/status/:char_id", CutsceneController, :camp_status
+    get "/cutscenes/stream", CutsceneController, :stream_cutscene
+    post "/cutscenes/choice", CutsceneController, :handle_choice
+    post "/camp/rest", CutsceneController, :perform_rest
+    post "/camp/resolve_ambush", CutsceneController, :resolve_ambush
+    get "/camp/cooking/:char_id", CutsceneController, :cooking_status
+    post "/camp/cook", CutsceneController, :cook_meal
+    post "/camp/companion-fusion", CutsceneController, :companion_fusion
+    get "/camp/companion-fusion/status/:char_id", CutsceneController, :companion_fusion_status
+    post "/camp/companion-fusion/defuse", CutsceneController, :defuse_companion
+
+    # ── Fire Emblem Companion Supports & Bonds ───────────────────
+    get "/companions/supports/:char_id", CutsceneController, :support_status
+    get "/companions/support_stream", CutsceneController, :stream_support_conversation
+    post "/companions/support_complete", CutsceneController, :complete_support_conversation
+    get "/companions/crisis_status/:char_id", CutsceneController, :crisis_status
+    get "/companions/crisis_stream", CutsceneController, :stream_crisis_conversation
+    post "/companions/crisis_resolve", CutsceneController, :resolve_crisis
+
+    # ── Living Nemesis & Factions ─────────────────────────────────
+    get "/nemesis/dossier/:char_id", NemesisController, :get_dossier
+    post "/nemesis/encounter", NemesisController, :record_encounter
+    post "/nemesis/faction_shift", NemesisController, :faction_shift
+    get "/nemesis/check_ambush/:char_id", NemesisController, :check_ambush
+    post "/nemesis/generate", NemesisController, :generate
 
     # ── Inventory & Equipment ─────────────────────────────────────
     get "/inventory/:char_id", GameController, :get_inventory
@@ -105,6 +152,11 @@ defmodule TePhoenixWeb.Router do
     post "/friends/request", PartyController, :send_friend_request
     post "/friends/accept", PartyController, :accept_friend
     post "/friends/remove", PartyController, :remove_friend
+
+    # ── Companions (2-4 Active Companions Squad) ──────────────────
+    get "/companions/:char_id", CompanionController, :list
+    post "/companions/:id/active", CompanionController, :set_active
+    post "/companions/:id/tactic", CompanionController, :set_tactic
 
     # ── Mail ──────────────────────────────────────────────────────
     get "/mail", MailController, :inbox
@@ -212,6 +264,9 @@ defmodule TePhoenixWeb.Router do
 
     live_session :admin_sauce, on_mount: TePhoenixWeb.Admin.RequireStaffHook do
       live "/", DashboardLive, :index
+      live "/uile", UileLive, :index
+      live "/gods_eye", GodsEyeLive, :index
+      live "/jarvis", UileLive, :index
       live "/onboarding", OnboardingLive, :index
       live "/capabilities", CapabilitiesLive, :index
       live "/settings", SettingsLive, :index

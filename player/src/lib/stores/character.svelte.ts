@@ -38,6 +38,8 @@ export interface Character {
   race_name?: string | null
   class_name?: string | null
   icon?: string
+  portrait_url?: string | null
+  sprite_url?: string | null
   /** Combat stats — populated on full character fetch + init_self push. */
   atk?: number
   def?: number
@@ -47,6 +49,16 @@ export interface Character {
   luck?: number
   limitbreak?: number
   breaklevel?: number
+  subclass_id?: number | null
+  subclass_name?: string | null
+  subclass_title?: string | null
+  subclass_icon?: string | null
+  subclass_passive_name?: string | null
+  subclass_passive_desc?: string | null
+  subclass_signature_ability?: string | null
+  bg_name?: string | null
+  bg_icon?: string | null
+  bg_tag?: string | null
 }
 
 interface ListResp {

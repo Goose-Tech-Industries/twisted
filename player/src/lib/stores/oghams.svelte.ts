@@ -3,19 +3,39 @@
 
 import { api } from '$phoenix/api'
 
+export interface OghamSetBonus {
+  min_count?: number
+  label?: string
+  stat_bonus?: Record<string, number>
+  element_attack?: string
+  on_hit_status?: string
+  on_hit_chance?: number
+}
+
 export interface Ogham {
   id: number
   key: string
   name: string
   glyph: string
   description: string
+  lore?: string
   tier: number
+  element_attack?: string | null
+  on_hit_status?: string | null
+  on_hit_chance?: number
+  kills_to_rank_up?: number
+  family_id?: number | null
+  family_name?: string
+  family_icon?: string
+  set_bonus?: OghamSetBonus | null
   effects?: Record<string, number | string>
 }
 
 export interface OghamSlot {
   index: number
   ogham_id: number | null
+  current_rank?: number
+  kill_count?: number
 }
 
 interface ListResp { success: boolean; oghams?: Ogham[] }

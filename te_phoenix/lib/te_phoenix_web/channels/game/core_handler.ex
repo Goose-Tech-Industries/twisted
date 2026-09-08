@@ -62,7 +62,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
         Logger.info("[move] THROTTLED char=#{char_id} target=#{target_x},#{target_y} player_at=#{player.x},#{player.y} elapsed=#{now - last_move}ms cooldown=#{effective_cooldown}ms")
         {:noreply, socket}
       else
-        do_move(socket, player, char_id, target_x, target_y, now)
+        do_move(socket, player, char_id, target_x, target_y, now, payload)
       end
     end
   end
@@ -134,34 +134,27 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     dest_map = parse_int(map_id_str)
 
     # Check player has discovered this warp point
-    case Repo.query("SELECT state_json FROM characters WHERE id=?", [char_id]) do
-      {:ok, %{rows: [[json]]}} ->
-        char_state = parse_json(json, %{})
-        warp_points = char_state["warpPoints"] || []
+    char_state = TePhoenix.Game.CharacterState.get_all(char_id)
+    warp_points = char_state["warpPoints"] || []
 
-        known = Enum.any?(warp_points, fn wp ->
-          (wp["mapId"] || wp["map_id"]) == dest_map
-        end)
+    known = Enum.any?(warp_points, fn wp ->
+      (wp["mapId"] || wp["map_id"]) == dest_map
+    end)
 
-        if not known do
-          push(socket, "notification", %{text: "You haven't discovered that location yet.", type: "error"})
-          {:noreply, socket}
-        else
-          map_data = MapData.get(dest_map)
-          if is_nil(map_data) or not map_data.fast_travel_enabled do
-            push(socket, "notification", %{text: "Fast travel is not available to that location.", type: "error"})
-            {:noreply, socket}
-          else
-            push(socket, "notification", %{text: "Fast travel to #{map_data.name}...", type: "info"})
-            # Re-use teleport logic
-            player = PlayerRegistry.get(char_id)
-            do_teleport(socket, player, char_id, dest_map, map_data, %{})
-          end
-        end
-
-      _ ->
-        push(socket, "error_msg", %{reason: "Character not found."})
+    if not known do
+      push(socket, "notification", %{text: "You haven't discovered that location yet.", type: "error"})
+      {:noreply, socket}
+    else
+      map_data = MapData.get(dest_map)
+      if is_nil(map_data) or not map_data.fast_travel_enabled do
+        push(socket, "notification", %{text: "Fast travel is not available to that location.", type: "error"})
         {:noreply, socket}
+      else
+        push(socket, "notification", %{text: "Fast travel to #{map_data.name}...", type: "info"})
+        # Re-use teleport logic
+        player = PlayerRegistry.get(char_id)
+        do_teleport(socket, player, char_id, dest_map, map_data, %{})
+      end
     end
   end
 
@@ -181,17 +174,50 @@ defmodule TePhoenixWeb.Game.CoreHandler do
       if is_nil(map_data) do
         {:noreply, socket}
       else
-        # 1. Check signs/objects at player position
-        objects = map_data.objects || []
-        sign = Enum.find(objects, fn o ->
-          dist = abs((o["x"] || 0) - player.x) + abs((o["y"] || 0) - player.y)
-          dist <= 1 and o["preset"] == "SIGN" and o["text"]
-        end)
+        # 0. Check building door at player position or adjacent (entering or exiting nested sub-map)
+        building_door =
+          TePhoenix.World.BuildingManager.get_building_at_door(player.map_id, player.x, player.y) ||
+          Enum.find_value([{-1, 0}, {1, 0}, {0, -1}, {0, 1}], fn {dx, dy} ->
+            TePhoenix.World.BuildingManager.get_building_at_door(player.map_id, player.x + dx, player.y + dy)
+          end)
 
-        if sign do
-          push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: sign["label"] || "Sign", text: sign["text"]}]})
-          {:noreply, socket}
-        else
+        case building_door do
+          {:exterior_door, b} ->
+            if TePhoenix.World.BuildingManager.door_locked?(b) do
+              push(socket, "notification", %{type: "warning", message: "🔒 The door to #{b.name} is locked for the night."})
+              {:noreply, socket}
+            else
+              target_map_data = MapData.get(b.interior_map_id)
+              if target_map_data do
+                push(socket, "notification", %{type: "info", message: "🚪 Entering #{b.name}..."})
+                do_teleport(socket, player, char_id, b.interior_map_id, target_map_data, %{"x" => b.interior_door_x, "y" => b.interior_door_y})
+              else
+                push(socket, "notification", %{type: "warning", message: "Building interior under construction."})
+                {:noreply, socket}
+              end
+            end
+
+          {:interior_door, b} ->
+            target_map_data = MapData.get(b.map_id)
+            if target_map_data do
+              push(socket, "notification", %{type: "info", message: "🚪 Leaving #{b.name}..."})
+              do_teleport(socket, player, char_id, b.map_id, target_map_data, %{"x" => b.exterior_door_x, "y" => b.exterior_door_y})
+            else
+              {:noreply, socket}
+            end
+
+          nil ->
+            # 1. Check signs/objects at player position
+            objects = map_data.objects || []
+            sign = Enum.find(objects, fn o ->
+              dist = abs((o["x"] || 0) - player.x) + abs((o["y"] || 0) - player.y)
+              dist <= 1 and o["preset"] == "SIGN" and o["text"]
+            end)
+
+            if sign do
+              push(socket, "event_queue", %{events: [%{cmd: "dialogue", speaker: sign["label"] || "Sign", text: sign["text"]}]})
+              {:noreply, socket}
+            else
           # 2. Check for live NPCs
           npcs = MapData.get_npcs(player.map_id)
           live_npc = Enum.find(npcs, fn n ->
@@ -226,6 +252,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
       end
     end
   end
+end
 
   # ═══════════════════════════════════════════════════════════════════
   # EVENT CHOICE (from EventRunner CHOICE halts)
@@ -252,6 +279,515 @@ defmodule TePhoenixWeb.Game.CoreHandler do
         socket = assign(socket, :pending_event_choice, nil)
         {:noreply, socket}
     end
+  end
+
+  # ═══════════════════════════════════════════════════════════════════
+  # DE-ESCALATE ALTERCATION (Overworld confrontation / Drunk argument)
+  # ═══════════════════════════════════════════════════════════════════
+
+  def handle("deescalate_altercation", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    target_npc_id = payload["target_npc_id"] || payload["target_id"]
+    approach = payload["approach"] || "persuasion"
+
+    target_npc =
+      case TePhoenix.Repo.query("SELECT id, name, role, is_enemy, persona FROM game_npcs WHERE id = ?", [target_npc_id]) do
+        {:ok, %{rows: [row], columns: cols}} -> Enum.zip(cols, row) |> Map.new()
+        _ -> nil
+      end
+
+    if target_npc do
+      res = TePhoenix.Battle.Deescalation.attempt_deescalation(player, target_npc, approach)
+
+      push(socket, "deescalate_result", res)
+      TePhoenixWeb.Endpoint.broadcast("map:#{player.map_id}", "npc_action_fx", %{
+        npc_id: target_npc["id"],
+        npc_name: target_npc["name"],
+        action_type: if(res.success, do: :deescalation_success, else: :deescalation_failed),
+        action_name: "Diplomatic Resolution",
+        description: res.dialogue,
+        timestamp: System.system_time(:second)
+      })
+
+      {:noreply, socket}
+    else
+      push(socket, "notification", %{type: "error", message: "Target not found."})
+      {:noreply, socket}
+    end
+  end
+
+  # ═══════════════════════════════════════════════════════════════════
+  # DYNAMIC WINDOW SYSTEM & SIGHTLINE PEAKING / INFILTRATION
+  # ═══════════════════════════════════════════════════════════════════
+
+  def handle("toggle_window", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    wx = payload["window_x"] || payload["x"]
+    wy = payload["window_y"] || payload["y"]
+    target_state = payload["target_state"]
+
+    case TePhoenix.World.BuildingManager.toggle_window(player, player.map_id, wx, wy, target_state) do
+      {:ok, res} ->
+        push(socket, "window_action_result", res)
+        {:noreply, socket}
+
+      {:error, err} ->
+        push(socket, "notification", %{type: "warning", message: to_string(err)})
+        {:noreply, socket}
+    end
+  end
+
+  def handle("peek_window", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    wx = payload["window_x"] || payload["x"]
+    wy = payload["window_y"] || payload["y"]
+
+    res = TePhoenix.World.BuildingManager.peek_window(player, player.map_id, wx, wy)
+    push(socket, "window_peek_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("climb_window", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    wx = payload["window_x"] || payload["x"]
+    wy = payload["window_y"] || payload["y"]
+
+    case TePhoenix.World.BuildingManager.climb_window(player, player.map_id, wx, wy) do
+      {:ok, res} ->
+        push(socket, "window_action_result", res)
+        push(socket, "player_teleported", %{map_id: res.map_id, x: res.x, y: res.y})
+        {:noreply, socket}
+
+      {:error, err} ->
+        push(socket, "notification", %{type: "warning", message: to_string(err)})
+        {:noreply, socket}
+    end
+  end
+
+  def handle("break_window", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    wx = payload["window_x"] || payload["x"]
+    wy = payload["window_y"] || payload["y"]
+
+    res = TePhoenix.World.BuildingManager.break_window(player, player.map_id, wx, wy)
+    push(socket, "window_action_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("throw_window_distraction", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    wx = payload["window_x"] || payload["x"]
+    wy = payload["window_y"] || payload["y"]
+    item = payload["item"] || "pebble"
+
+    res = TePhoenix.World.BuildingManager.throw_distraction(player, player.map_id, wx, wy, item)
+    push(socket, "window_action_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("eavesdrop_window", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    wx = payload["window_x"] || payload["x"]
+    wy = payload["window_y"] || payload["y"]
+
+    res = TePhoenix.World.SovereignRumors.eavesdrop_at_window(player, player.map_id, wx, wy)
+    push(socket, "window_rumor_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("get_nearby_windows", _payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    windows = TePhoenix.World.BuildingManager.find_windows_near(player.map_id, player.x, player.y, 2)
+    push(socket, "nearby_windows", %{windows: windows})
+    {:noreply, socket}
+  end
+
+  def handle("defenestrate_target", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    target_id = payload["target_id"]
+    target =
+      cond do
+        payload["target_is_player"] ->
+          PlayerRegistry.get(target_id)
+        true ->
+          case Repo.query("SELECT id, name, hp, max_hp, role FROM game_npcs WHERE id = ? LIMIT 1", [target_id]) do
+            {:ok, %{rows: [[tid, tname, thp, tmax, trole]]}} ->
+              %{id: tid, name: tname, hp: thp, max_hp: tmax, role: trole, def: 10}
+            _ ->
+              %{id: target_id, name: payload["target_name"] || "Brawler", def: 10}
+          end
+      end
+
+    wx = payload["window_x"] || payload["x"]
+    wy = payload["window_y"] || payload["y"]
+    res = TePhoenix.World.Defenestration.defenestrate(player, target, player.map_id, wx, wy)
+    push(socket, "defenestration_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("spot_stalker", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    stalker_id = payload["stalker_id"]
+    res = TePhoenix.World.UnderworldNpcs.spot_stalker(player, player.map_id, stalker_id)
+    push(socket, "spot_stalker_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("interact_stalker", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    stalker_id = payload["stalker_id"]
+    action = String.to_atom(payload["action"] || "interrogate")
+    res = TePhoenix.World.UnderworldNpcs.interact_stalker(player, player.map_id, stalker_id, action)
+    push(socket, "interact_stalker_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("interact_addict", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    addict_id = payload["addict_id"]
+    action = String.to_atom(payload["action"] || "offer_fix")
+    res = TePhoenix.World.UnderworldNpcs.interact_addict(player, player.map_id, addict_id, action)
+    push(socket, "interact_addict_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("cascade_brawl", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    res = TePhoenix.World.UnderworldNpcs.cascade_tavern_brawl(player, player.map_id, payload["tavern_building_id"])
+    push(socket, "brawl_cascade_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("deploy_window_gas", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    wx = payload["window_x"] || payload["x"]
+    wy = payload["window_y"] || payload["y"]
+    gas_type = payload["gas_type"] || "sleeping_gas"
+    res = TePhoenix.World.GasDispersion.deploy_gas(player, player.map_id, wx, wy, gas_type)
+    push(socket, "window_gas_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("get_properties", _payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    props = TePhoenix.World.PropertyManager.list_properties(player.map_id)
+    push(socket, "properties_list", %{properties: props})
+    {:noreply, socket}
+  end
+
+  def handle("purchase_property", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    prop_id = payload["property_id"]
+    res = TePhoenix.World.PropertyManager.purchase_property(player, prop_id)
+    push(socket, "property_action_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("add_fortification", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    prop_id = payload["property_id"]
+    fort_type = payload["fortification_type"]
+    res = TePhoenix.World.PropertyManager.add_fortification(player, prop_id, fort_type)
+    push(socket, "property_action_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("toggle_soundproof_curtains", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    prop_id = payload["property_id"]
+    drawn = payload["drawn"] == true or payload["drawn"] == "true"
+    res = TePhoenix.World.PropertyManager.toggle_soundproof_curtains(player, prop_id, drawn)
+    push(socket, "property_action_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("rest_property", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    prop_id = payload["property_id"]
+    res = TePhoenix.World.PropertyManager.rest_in_sanctuary(player, prop_id)
+    push(socket, "property_action_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("check_indoor_draft", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    building_id = payload["building_id"]
+    res = TePhoenix.World.StormAcoustics.evaluate_indoor_draft(player.map_id, building_id)
+    push(socket, "indoor_draft_result", res)
+    {:noreply, socket}
+  end
+
+  # ── NPC Stalker Drama ──────────────────────────────────────────
+  def handle("get_npc_drama", _payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    TePhoenix.World.NpcStalkerDrama.seed_default_dramas!(player.map_id)
+    drama = TePhoenix.World.NpcStalkerDrama.get_active_drama(player.map_id)
+    push(socket, "npc_drama_data", %{drama: drama})
+    {:noreply, socket}
+  end
+
+  def handle("intervene_npc_drama", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    drama_id = payload["drama_id"]
+    action_atom = case payload["action"] do
+      "ambush" -> :ambush_stalker
+      "ambush_stalker" -> :ambush_stalker
+      "shout" -> :shout_warning
+      "shout_warning" -> :shout_warning
+      "shadow" -> :shadow_stalker
+      "shadow_stalker" -> :shadow_stalker
+      _ -> :ambush_stalker
+    end
+
+    res = TePhoenix.World.NpcStalkerDrama.intervene(player, drama_id, action_atom)
+    case res do
+      {:ok, data} -> push(socket, "npc_drama_intervene_result", data)
+      {:error, reason} -> push(socket, "npc_drama_intervene_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
+  end
+
+  def handle("tick_npc_drama", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    drama_id = payload["drama_id"]
+    res = TePhoenix.World.NpcStalkerDrama.tick_drama(drama_id)
+    case res do
+      {:ok, data} -> push(socket, "npc_drama_tick_result", data)
+      {:error, reason} -> push(socket, "npc_drama_tick_result", %{error: reason})
+    end
+    {:noreply, socket}
+  end
+
+  def handle("investigate_crime_scene", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    drama_id = payload["drama_id"]
+    res = TePhoenix.World.NpcStalkerDrama.investigate_crime_scene(player, drama_id)
+    case res do
+      {:ok, data} -> push(socket, "investigate_crime_result", data)
+      {:error, reason} -> push(socket, "investigate_crime_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
+  end
+
+  # ── Physical Retail Shopping ──────────────────────────────────
+  def handle("get_physical_shelves", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    shop_id = payload["shop_id"] || 1
+    TePhoenix.World.PhysicalShop.seed_default_shelves!(shop_id, player.map_id)
+    shelves = TePhoenix.World.PhysicalShop.list_shelves(shop_id, player.map_id)
+    basket = TePhoenix.World.PhysicalShop.get_basket(char_id, shop_id)
+    push(socket, "physical_shop_data", %{shop_id: shop_id, shelves: shelves, basket: basket})
+    {:noreply, socket}
+  end
+
+  def handle("pick_shelf_item", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    shop_id = payload["shop_id"] || 1
+    shelf_id = payload["shelf_id"]
+    item_id = payload["item_id"]
+
+    res = TePhoenix.World.PhysicalShop.pick_up_item(player, shop_id, shelf_id, item_id)
+    case res do
+      {:ok, data} -> push(socket, "physical_shop_action_result", data)
+      {:error, reason} -> push(socket, "physical_shop_action_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
+  end
+
+  def handle("put_shelf_item", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    shop_id = payload["shop_id"] || 1
+    shelf_id = payload["shelf_id"]
+    item_id = payload["item_id"]
+
+    res = TePhoenix.World.PhysicalShop.put_back_item(player, shop_id, shelf_id, item_id)
+    case res do
+      {:ok, data} -> push(socket, "physical_shop_action_result", data)
+      {:error, reason} -> push(socket, "physical_shop_action_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
+  end
+
+  def handle("checkout_physical_basket", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    shop_id = payload["shop_id"] || 1
+    haggle = case payload["haggle_approach"] do
+      "persuasion" -> :persuasion
+      "intimidation" -> :intimidation
+      "flattery" -> :flattery
+      _ -> nil
+    end
+
+    res = TePhoenix.World.PhysicalShop.checkout_basket(player, shop_id, haggle)
+    case res do
+      {:ok, data} -> push(socket, "physical_checkout_result", data)
+      {:error, reason} -> push(socket, "physical_checkout_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
+  end
+
+  def handle("shoplift_physical_basket", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    shop_id = payload["shop_id"] || 1
+    res = TePhoenix.World.PhysicalShop.attempt_shoplift(player, shop_id)
+    case res do
+      {:ok, data} -> push(socket, "physical_shoplift_result", data)
+      {:error, reason} -> push(socket, "physical_shoplift_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
+  end
+
+  # ── Casino, Scratch-Offs & Lottery ─────────────────────────────
+  def handle("buy_scratch_card", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    tier = payload["tier"] || "silver"
+    res = TePhoenix.World.GamblingDen.buy_scratch_card(player, tier)
+    case res do
+      {:ok, data} -> push(socket, "scratch_card_result", data)
+      {:error, reason} -> push(socket, "scratch_card_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
+  end
+
+  def handle("play_tavern_dice", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    bet = payload["bet_amount"] || 10
+    res = TePhoenix.World.GamblingDen.play_tavern_dice(player, bet)
+    case res do
+      {:ok, data} -> push(socket, "tavern_dice_result", data)
+      {:error, reason} -> push(socket, "tavern_dice_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
+  end
+
+  def handle("buy_lottery_ticket", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    numbers = payload["numbers"] || [3, 7, 14]
+    res = TePhoenix.World.GamblingDen.buy_lottery_ticket(player, numbers, player.map_id)
+    case res do
+      {:ok, data} -> push(socket, "lottery_buy_result", data)
+      {:error, reason} -> push(socket, "lottery_buy_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
+  end
+
+  def handle("get_lottery_jackpot", _payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    jackpot = TePhoenix.World.GamblingDen.get_current_jackpot(player.map_id)
+    push(socket, "lottery_jackpot_info", %{jackpot: jackpot})
+    {:noreply, socket}
+  end
+
+  def handle("draw_lottery", _payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    res = TePhoenix.World.GamblingDen.draw_daily_lottery(player.map_id)
+    case res do
+      {:ok, data} -> push(socket, "lottery_draw_result", data)
+      {:error, reason} -> push(socket, "lottery_draw_result", %{success: false, message: reason})
+    end
+    {:noreply, socket}
   end
 
   # ═══════════════════════════════════════════════════════════════════
@@ -449,8 +985,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
       # Companion panel renders its empty state without inventing fake data.
       companion: nil,
       world: %{
-        # TODO: in-game day/night clock not yet implemented; default "day".
-        time_of_day: "day",
+        time_of_day: TePhoenix.World.CircadianClock.current_time_of_day(map_id),
         weather: weather_key,
         online_count: online_count,
         events: []
@@ -510,7 +1045,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
     {:noreply, socket}
   end
 
-  defp do_move(socket, player, char_id, target_x, target_y, now) do
+  defp do_move(socket, player, char_id, target_x, target_y, now, payload \\ %{}) do
     map_data = MapData.get(player.map_id)
     if is_nil(map_data) do
       Logger.warning("[move] char=#{char_id} map_data nil for map #{player.map_id}")
@@ -552,6 +1087,46 @@ defmodule TePhoenixWeb.Game.CoreHandler do
           TePhoenixWeb.Endpoint.broadcast!("map:#{player.map_id}", "player_moved", %{
             id: char_id, x: target_x, y: target_y
           })
+
+          # Acoustic Locomotion: Emit 3D spatial footstep & alert sentries / sleeping denizens
+          surface =
+            try do
+              tile_id = (map_data.layers["ground"] || []) |> Enum.at(target_y * map_data.width + target_x)
+              TePhoenix.World.AcousticPhysics.resolve_surface(tile_id)
+            rescue
+              _ -> :stone
+            end
+
+          stance =
+            cond do
+              payload["stance"] in ["stealth", "sprint", "walk"] -> String.to_atom(payload["stance"])
+              payload["running"] -> :sprint
+              true -> :walk
+            end
+
+          caller = self()
+          Task.start(fn ->
+            try do
+              Ecto.Adapters.SQL.Sandbox.allow(TePhoenix.Repo, caller, self())
+            rescue
+              _ -> :ok
+            end
+
+            try do
+              TePhoenix.World.NpcAcousticReactor.process_footstep_event(
+                char_id,
+                player.name || "Adventurer",
+                %{x: target_x, y: target_y, map_id: player.map_id},
+                surface,
+                stance,
+                player.map_id
+              )
+            rescue
+              _ -> :ok
+            catch
+              _, _ -> :ok
+            end
+          end)
 
           # Push confirmation to the mover's own socket so the client
           # doesn't need to subscribe to the map channel just to learn
@@ -1017,21 +1592,13 @@ defmodule TePhoenixWeb.Game.CoreHandler do
   end
 
   defp discover_warp_point(socket, char_id, map_id, map_name) do
-    case Repo.query("SELECT state_json FROM characters WHERE id=?", [char_id]) do
-      {:ok, %{rows: [[json]]}} ->
-        state = parse_json(json, %{})
-        warp_points = state["warpPoints"] || []
+    state = TePhoenix.Game.CharacterState.get_all(char_id)
+    warp_points = state["warpPoints"] || []
 
-        if not Enum.any?(warp_points, fn wp -> (wp["mapId"] || wp["map_id"]) == map_id end) do
-          warp_points = warp_points ++ [%{"mapId" => map_id, "name" => map_name, "discoveredAt" => System.system_time(:millisecond)}]
-          new_state = Map.put(state, "warpPoints", warp_points)
-          try do
-            Repo.query!("UPDATE characters SET state_json=? WHERE id=?", [Jason.encode!(new_state), char_id])
-          rescue _ -> nil
-          end
-          push(socket, "warp_discovered", %{mapId: map_id, name: map_name})
-        end
-      _ -> nil
+    if not Enum.any?(warp_points, fn wp -> (wp["mapId"] || wp["map_id"]) == map_id end) do
+      warp_points = warp_points ++ [%{"mapId" => map_id, "name" => map_name, "discoveredAt" => System.system_time(:millisecond)}]
+      TePhoenix.Game.CharacterState.put(char_id, "warpPoints", warp_points)
+      push(socket, "warp_discovered", %{mapId: map_id, name: map_name})
     end
   end
 
@@ -1049,10 +1616,7 @@ defmodule TePhoenixWeb.Game.CoreHandler do
   end
 
   defp load_char_state(char_id) do
-    case Repo.query("SELECT state_json FROM characters WHERE id=?", [char_id]) do
-      {:ok, %{rows: [[json]]}} -> parse_json(json, %{})
-      _ -> %{}
-    end
+    TePhoenix.Game.CharacterState.get_all(char_id)
   end
 
   defp load_greet_data(_char_id, char_state) do

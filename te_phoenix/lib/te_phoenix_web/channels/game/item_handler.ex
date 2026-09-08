@@ -57,7 +57,8 @@ defmodule TePhoenixWeb.Game.ItemHandler do
     {:noreply, socket}
   end
 
-  def handle("unequip_item", %{"slotKey" => slot_key}, socket) do
+  def handle("unequip_item", params, socket) do
+    slot_key = params["slotKey"] || params["slot_key"]
     char_id = socket.assigns[:char_id]
 
     result = try do

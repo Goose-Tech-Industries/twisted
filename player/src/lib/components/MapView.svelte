@@ -3,9 +3,11 @@
   import type { Character } from '$stores/character.svelte'
   import type { MapDef, NearbyPlayer, MapNpc, GroundItem } from '$stores/world.svelte'
   import type { TilePaletteEntry } from '$stores/tile_palette.svelte'
+  import type { Equipment } from '$stores/inventory.svelte'
   import { buildRenderState, TILE_SIZE } from '$lib/render/build-render-state'
   import MapRendererWorker from '$lib/render/map-renderer.worker?worker'
   import { debug } from '$stores/debug.svelte'
+  import { visualFx } from '$stores/visual_fx.svelte'
 
   debug.register('Map render', 'stub')
 
@@ -16,11 +18,12 @@
     npcs: MapNpc[]
     drops?: GroundItem[]
     palette?: TilePaletteEntry[]
+    equipment?: Equipment
     fogEnabled?: boolean
     exploredTiles?: Set<string>
     ontileclick?: (x: number, y: number) => void
   }
-  let { map, character, players, npcs, drops = [], palette = [], fogEnabled = false, exploredTiles, ontileclick }: Props = $props()
+  let { map, character, players, npcs, drops = [], palette = [], equipment, fogEnabled = false, exploredTiles, ontileclick }: Props = $props()
 
   let canvas = $state<HTMLCanvasElement | null>(null)
   let worker: Worker | null = null
@@ -32,11 +35,25 @@
   // OffscreenCanvas + transferControlToOffscreen. Detect once at mount;
   // when missing, fall back to main-thread rendering inline.
   let workerSupported = $state(true)
+  let currentRenderMode = $state<'classic' | '2.5d' | 'isometric'>('classic')
   let mainThreadFallback: {
     destroy: () => void
     update: (s: unknown) => void
     resize?: (w: number, h: number) => void
+    setRenderMode?: (m: 'classic' | '2.5d' | 'isometric') => void
   } | null = null
+
+  function setProjection(mode: 'classic' | '2.5d' | 'isometric') {
+    currentRenderMode = mode
+    try {
+      localStorage.setItem('twisted_render_mode', mode)
+    } catch (_) {}
+    if (worker) {
+      worker.postMessage({ type: 'set_render_mode', renderMode: mode })
+    } else if (mainThreadFallback?.setRenderMode) {
+      mainThreadFallback.setRenderMode(mode)
+    }
+  }
 
   onMount(() => {
     if (!canvas) return
@@ -62,6 +79,15 @@
       typeof canvas.transferControlToOffscreen === 'function'
 
     workerSupported = supported
+
+    try {
+      const savedMode = localStorage.getItem('twisted_render_mode') as 'classic' | '2.5d' | 'isometric' | null
+      if (savedMode && ['classic', '2.5d', 'isometric'].includes(savedMode)) {
+        currentRenderMode = savedMode
+      } else if (map.render_mode && ['classic', '2.5d', 'isometric'].includes(map.render_mode)) {
+        currentRenderMode = map.render_mode as 'classic' | '2.5d' | 'isometric'
+      }
+    } catch (_) {}
 
     // Snap canvas backing to its CSS box so Pixi gets sane dimensions.
     const sync = () => {
@@ -94,8 +120,8 @@
         1,
         Math.round(typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1)
       )
-      console.info('[map] worker init', { w, h, dpr })
-      worker.postMessage({ type: 'init', canvas: off, w, h, dpr }, [off])
+      console.info('[map] worker init', { w, h, dpr, renderMode: currentRenderMode })
+      worker.postMessage({ type: 'init', canvas: off, w, h, dpr, renderMode: currentRenderMode }, [off])
     } else {
       // Main-thread fallback. Lazy-load the renderer so the worker path
       // stays the default cheap path.
@@ -111,7 +137,7 @@
       const r = new TwistedRenderer({
         canvas,
         canvasMode: 'play',
-        renderMode: (map.render_mode as 'classic' | '2.5d' | 'isometric' | 'first-person') || 'classic',
+        renderMode: currentRenderMode,
         tileSize: TILE_SIZE,
         backgroundAlpha: 1,
         callbacks: { onTileClick: (x, y) => ontileclick?.(x, y) }
@@ -120,10 +146,11 @@
       mainThreadFallback = {
         destroy: () => r.destroy(),
         update: (s: unknown) => void r.update(s as never),
-        resize: (w: number, h: number) => r.resize(w, h)
+        resize: (w: number, h: number) => r.resize(w, h),
+        setRenderMode: (m: 'classic' | '2.5d' | 'isometric') => r.setRenderMode(m)
       }
       ready = true
-      console.info('[map] Pixi renderer ready', { w: viewport.w || 800, h: viewport.h || 600 })
+      console.info('[map] Pixi renderer ready', { w: viewport.w || 800, h: viewport.h || 600, renderMode: currentRenderMode })
     } catch (err) {
       console.warn('[map] Pixi init failed, falling back to canvas2D:', err)
       // Last-resort fallback — direct canvas2D rendering without Pixi.
@@ -241,7 +268,14 @@
       ctx.fillStyle = 'rgba(178, 34, 34, 0.4)'
       ctx.fillRect(ox + s.playerX * TILE, oy + s.playerY * TILE, TILE, TILE)
       ctx.fillStyle = '#ece6e3'
-      ctx.fillText('🗡️', px, py)
+      const wep = (s as unknown as { playerEquipped?: { weaponIcon?: string } })?.playerEquipped?.weaponIcon || '🗡️'
+      ctx.fillText(wep, px, py)
+      const shield = (s as unknown as { playerEquipped?: { shieldIcon?: string } })?.playerEquipped?.shieldIcon
+      if (shield) {
+        ctx.font = `${Math.floor(TILE * 0.45)}px sans-serif`
+        ctx.fillText(shield, px + TILE * 0.28, py + TILE * 0.28)
+        ctx.font = `${Math.floor(TILE * 0.8)}px sans-serif`
+      }
     }
 
     return {
@@ -290,7 +324,7 @@
     }
 
     const state = buildRenderState({
-      map, character, players, npcs, drops, palette,
+      map, character, players, npcs, drops, palette, equipment,
       viewportW: viewport.w,
       viewportH: viewport.h,
       tileSize: TILE_SIZE,
@@ -330,6 +364,21 @@
       console.warn('[map] update reached but no renderer instance available')
     }
   })
+
+  interface OrbitalStrikePayload { x: number; y: number; color?: string; ts: number }
+  interface SupplyDropPayload { x: number; y: number; icon?: string; ts: number }
+
+  let activeStrike = $derived.by(() => {
+    const s = visualFx.overworld.orbital_strike as OrbitalStrikePayload | undefined
+    if (s && Date.now() - s.ts < 4000) return s
+    return null
+  })
+
+  let activeDrop = $derived.by(() => {
+    const d = visualFx.overworld.supply_drop as SupplyDropPayload | undefined
+    if (d && Date.now() - d.ts < 5000) return d
+    return null
+  })
 </script>
 
 <div class="map-frame">
@@ -337,12 +386,71 @@
 
   <div class="map-name">{map.name}</div>
 
+  <div class="projection-switcher">
+    <button class:active={currentRenderMode === 'classic'} onclick={() => setProjection('classic')} title="Classic Top-Down 2D Grid">
+      🗺️ 2D
+    </button>
+    <button class:active={currentRenderMode === '2.5d'} onclick={() => setProjection('2.5d')} title="2.5D Extruded Elevation Walls">
+      ⛰️ 2.5D
+    </button>
+    <button class:active={currentRenderMode === 'isometric'} onclick={() => setProjection('isometric')} title="Tactical Diamond Isometric Projection">
+      🔷 Iso
+    </button>
+  </div>
+
+  {#if activeStrike}
+    <div class="orbital-strike-fx" style="--strike-color: {activeStrike.color || '#38bdf8'}">
+      <div class="beam"></div>
+      <div class="ground-shockwave"></div>
+      <div class="strike-label">⚡ CELESTIAL BEAM ({activeStrike.x}, {activeStrike.y})</div>
+    </div>
+  {/if}
+
+  {#if activeDrop}
+    <div class="supply-drop-fx">
+      <div class="drop-icon">{activeDrop.icon || '🎁'}</div>
+      <div class="drop-label">SUPPLY BEACON ({activeDrop.x}, {activeDrop.y})</div>
+    </div>
+  {/if}
+
   {#if !ready}
     <div class="overlay">Loading renderer{workerSupported ? ' (worker)' : ' (fallback)'}…</div>
   {/if}
 </div>
 
 <style>
+  .projection-switcher {
+    position: absolute;
+    top: 8px; right: 12px;
+    display: flex;
+    gap: 2px;
+    background: rgba(13, 14, 18, 0.85);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px;
+    z-index: 10;
+    backdrop-filter: blur(4px);
+  }
+  .projection-switcher button {
+    background: transparent;
+    border: none;
+    color: var(--fg-muted);
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .projection-switcher button:hover {
+    color: var(--fg);
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .projection-switcher button.active {
+    color: var(--accent);
+    background: rgba(212, 163, 89, 0.2);
+    box-shadow: 0 0 6px rgba(212, 163, 89, 0.25);
+  }
   .map-frame {
     position: relative;
     width: 100%;
@@ -371,5 +479,88 @@
     color: var(--fg-muted);
     background: rgba(0,0,0,0.4);
     pointer-events: none;
+  }
+  .orbital-strike-fx {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 25;
+    animation: flash-fade 3.5s ease-out forwards;
+  }
+  .orbital-strike-fx .beam {
+    width: 24px;
+    height: 100%;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), var(--strike-color), transparent);
+    box-shadow: 0 0 35px var(--strike-color), 0 0 70px var(--strike-color);
+    animation: beam-descend 1.5s ease-out forwards;
+  }
+  .orbital-strike-fx .ground-shockwave {
+    width: 200px;
+    height: 60px;
+    border-radius: 50%;
+    border: 3px solid var(--strike-color);
+    box-shadow: 0 0 25px var(--strike-color);
+    animation: shockwave-expand 2s ease-out infinite;
+  }
+  .orbital-strike-fx .strike-label {
+    position: absolute;
+    bottom: 20%;
+    background: rgba(0, 0, 0, 0.85);
+    border: 1px solid var(--strike-color);
+    color: #ffffff;
+    font-size: 0.75rem;
+    font-weight: bold;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    letter-spacing: 0.05em;
+    text-shadow: 0 0 8px var(--strike-color);
+  }
+  .supply-drop-fx {
+    position: absolute;
+    top: 30%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+    z-index: 25;
+    animation: bounce-float 2.5s ease-in-out infinite;
+  }
+  .supply-drop-fx .drop-icon {
+    font-size: 3rem;
+    filter: drop-shadow(0 0 15px #10b981);
+  }
+  .supply-drop-fx .drop-label {
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid #10b981;
+    color: #6ee7b7;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-top: 4px;
+  }
+  @keyframes flash-fade {
+    0% { opacity: 0; }
+    15% { opacity: 1; }
+    80% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes beam-descend {
+    0% { transform: scaleY(0); transform-origin: top; }
+    100% { transform: scaleY(1); transform-origin: top; }
+  }
+  @keyframes shockwave-expand {
+    0% { transform: scale(0.2); opacity: 1; }
+    100% { transform: scale(2.2); opacity: 0; }
+  }
+  @keyframes bounce-float {
+    0%, 100% { transform: translate(-50%, -50%); }
+    50% { transform: translate(-50%, -60%); }
   }
 </style>

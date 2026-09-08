@@ -115,6 +115,85 @@ defmodule TePhoenix.Party.Engine do
   @phases ~w(waiting prompt submit reveal vote score)
   @code_chars ~c"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+  # ── Table Setup ────────────────────────────────────────────────
+  def ensure_tables do
+    Repo.query("""
+    CREATE TABLE IF NOT EXISTS game_party_rooms (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      code VARCHAR(8) NOT NULL UNIQUE,
+      host_id INT NOT NULL,
+      game_mode VARCHAR(64) NOT NULL,
+      settings_json LONGTEXT,
+      status VARCHAR(32) NOT NULL DEFAULT 'waiting',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    Repo.query("""
+    CREATE TABLE IF NOT EXISTS game_party_players (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      room_id INT NOT NULL,
+      player_id INT NOT NULL,
+      name VARCHAR(128) NOT NULL,
+      score INT DEFAULT 0,
+      is_spectator TINYINT(1) DEFAULT 0,
+      joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_room (room_id),
+      INDEX idx_player (player_id)
+    )
+    """)
+
+    Repo.query("""
+    CREATE TABLE IF NOT EXISTS game_party_modes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      `key` VARCHAR(64) NOT NULL UNIQUE,
+      name VARCHAR(128) NOT NULL,
+      description TEXT,
+      min_players INT DEFAULT 3,
+      max_players INT DEFAULT 20,
+      rounds INT DEFAULT 10,
+      has_judge TINYINT(1) DEFAULT 0,
+      submissions_per_player INT DEFAULT 1,
+      voting_type VARCHAR(32) DEFAULT 'majority',
+      hand_size INT DEFAULT 0,
+      uses_deck TINYINT(1) DEFAULT 0,
+      audience_can_vote TINYINT(1) DEFAULT 1,
+      audience_vote_weight FLOAT DEFAULT 0.5,
+      phase_timers_json LONGTEXT,
+      rules_json LONGTEXT
+    )
+    """)
+
+    Repo.query("""
+    CREATE TABLE IF NOT EXISTS game_party_state (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      room_id INT NOT NULL UNIQUE,
+      round INT DEFAULT 1,
+      phase VARCHAR(32) DEFAULT 'waiting',
+      prompt_json LONGTEXT,
+      submissions_json LONGTEXT,
+      votes_json LONGTEXT,
+      judge_id INT DEFAULT NULL,
+      timer_end_at DATETIME DEFAULT NULL,
+      revealed_indices_json LONGTEXT,
+      deck_state_json LONGTEXT,
+      hands_json LONGTEXT
+    )
+    """)
+
+    # Seed modes if empty
+    case Repo.aggregate(Mode, :count) do
+      0 -> seed_modes()
+      _ -> :ok
+    end
+
+    {:ok, :tables_ready}
+  rescue
+    e ->
+      Logger.error("Party.Engine ensure_tables: #{inspect(e)}")
+      {:error, e}
+  end
+
   # ── Room System ─────────────────────────────────────────────────
 
   @doc "Create a party room with a 4-character alphanumeric code."

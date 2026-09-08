@@ -85,7 +85,7 @@ defmodule TePhoenixWeb.Game.LookupHandler do
     char_id = socket.assigns[:char_id]
 
     cards = case Repo.query(
-      "SELECT cc.card_id, cc.quantity, c.name, c.icon, c.rarity, c.attack, c.defense FROM character_cards cc JOIN game_cards c ON c.id=cc.card_id WHERE cc.character_id=?",
+      "SELECT cc.card_id, cc.quantity, c.name, c.icon, c.rarity, c.value_top, c.value_right, c.value_bottom, c.value_left, c.element FROM character_cards cc JOIN game_cards c ON c.id=cc.card_id WHERE cc.character_id=?",
       [char_id]
     ) do
       {:ok, %{rows: rows, columns: cols}} -> Enum.map(rows, fn row -> Enum.zip(cols, row) |> Map.new() end)

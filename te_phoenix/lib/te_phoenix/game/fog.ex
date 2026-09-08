@@ -299,7 +299,7 @@ defmodule TePhoenix.Game.Fog do
         MapSet.new()
 
       true ->
-        radius = vision_radius_for(character_id) + ambient_visibility(map_id)
+        radius = trunc(vision_radius_for(character_id)) + trunc(ambient_visibility(map_id))
         blockers = build_blockers_fn(map)
         LOS.compute_visible({char.x, char.y}, radius, {map.width, map.height}, blockers)
     end

@@ -127,6 +127,9 @@ defmodule TePhoenixWeb.GameChannel do
   # ══════════════════════════════════════════════════════════════════
 
   def handle_in("dm_" <> _ = e, p, s), do: DmHandler.handle(e, p, s)
+  def handle_in("get_action_slots" = e, p, s), do: DmHandler.handle(e, p, s)
+  def handle_in("campaign_action" = e, p, s), do: DmHandler.handle(e, p, s)
+  def handle_in("check_campaign_moves" = e, p, s), do: DmHandler.handle(e, p, s)
 
   # ══════════════════════════════════════════════════════════════════
   # LOOKUPS (bank, bounty, mounts, creatures, jobs, cards)

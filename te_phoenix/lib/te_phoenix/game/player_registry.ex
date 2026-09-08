@@ -57,6 +57,14 @@ defmodule TePhoenix.Game.PlayerRegistry do
       _ -> :ok
     end
 
+    # Flush hot state position and character state on disconnect
+    try do
+      TePhoenix.Game.HotState.flush_char(char_id)
+      TePhoenix.Game.CharacterState.evict(char_id)
+    rescue
+      _ -> :ok
+    end
+
     :ok
   end
 
@@ -69,6 +77,11 @@ defmodule TePhoenix.Game.PlayerRegistry do
         :ets.insert(@table, {char_id, new_data})
         {:ok, new_data}
     end
+  end
+
+  @doc "Update a player's map coordinates."
+  def update_coords(char_id, map_id, x, y) do
+    update(char_id, %{map_id: map_id, x: x, y: y})
   end
 
   @doc "Get all players on a specific map."

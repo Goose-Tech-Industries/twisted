@@ -27,6 +27,10 @@
   import HtcPanel from './HtcPanel.svelte'
   import BestiaryPanel from './BestiaryPanel.svelte'
   import OghamsPanel from './OghamsPanel.svelte'
+  import CardsPanel from './CardsPanel.svelte'
+  import CampaignsPanel from './CampaignsPanel.svelte'
+  import CampfireCutsceneOverlay from './CampfireCutsceneOverlay.svelte'
+  import PartyGamesPanel from './PartyGamesPanel.svelte'
   import type { Character } from '$stores/character.svelte'
   import type { Item, Equipment } from '$stores/inventory.svelte'
   import type { LfpListing } from '$stores/lfp.svelte'
@@ -38,7 +42,8 @@
     | 'mail' | 'auction' | 'achievements' | 'leaderboard' | 'lfp'
     | 'tournament' | 'trade' | 'companion' | 'world_events'
     | 'sheet' | 'profile' | 'settings' | 'shop' | 'crafting'
-    | 'skill_tree' | 'htc' | 'bestiary' | 'oghams'
+    | 'skill_tree' | 'htc' | 'bestiary' | 'oghams' | 'camp' | 'cards' | 'campaigns'
+    | 'party_games'
 
   interface Props {
     panel: PanelKey
@@ -64,17 +69,23 @@
     ontradelock?: () => void
     ontradecancel?: () => void
     ontradesetgold?: (n: number) => void
+    onunequip?: (slotKey: any) => void
+    onopencamp?: () => void
+    onclosepanel?: () => void
   }
   let p: Props = $props()
 </script>
 
 {#if p.panel === 'inventory'}
   <InventoryPanel
+    character={p.character}
     items={p.inventoryItems}
     equipment={p.equipment}
     gold={p.gold}
     onuse={p.onuse}
     onequip={p.onequip}
+    onunequip={p.onunequip}
+    onopencamp={p.onopencamp}
   />
 {:else if p.panel === 'chat'}
   <ChatPanel onsend={p.onsendchat} />
@@ -132,6 +143,17 @@
   <BestiaryPanel charId={p.charId} />
 {:else if p.panel === 'oghams'}
   <OghamsPanel charId={p.charId} />
+{:else if p.panel === 'camp'}
+  <CampfireCutsceneOverlay
+    character={p.character}
+    onclose={p.onclosepanel || (() => {})}
+  />
+{:else if p.panel === 'cards'}
+  <CardsPanel charId={p.charId} />
+{:else if p.panel === 'campaigns'}
+  <CampaignsPanel charId={p.charId} />
+{:else if p.panel === 'party_games'}
+  <PartyGamesPanel character={p.character} charId={p.charId} />
 {/if}
 
 <style>

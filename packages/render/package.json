@@ -34,13 +34,10 @@
     "clean": "rm -rf dist"
   },
   "peerDependencies": {
-    "pixi.js": "^8.0.0",
-    "three": "^0.180.0"
+    "pixi.js": "^8.0.0"
   },
   "devDependencies": {
-    "@types/three": "^0.183.0",
     "pixi.js": "^8.17.1",
-    "three": "^0.183.2",
     "tsup": "^8.3.5",
     "typescript": "^5.7.3"
   }

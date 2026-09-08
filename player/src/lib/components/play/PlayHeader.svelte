@@ -53,7 +53,12 @@
   <div class="right">
     <span class="weather">{weather} {time}</span>
     {#if character.active}
-      <span class="who">{character.active.name} · Lv {character.active.level}</span>
+      <span class="who">
+        {character.active.name} · Lv {character.active.level}
+        {#if character.active.subclass_name}
+          <span class="subclass-pill" title={character.active.subclass_title || character.active.subclass_name}>⚡ {character.active.subclass_name}</span>
+        {/if}
+      </span>
     {/if}
     <button class="signout" type="button" onclick={async () => { await auth.logout(); goto('/login', { replaceState: true }) }}>
       Sign out
@@ -98,7 +103,23 @@
     text-shadow: 0 0 12px rgba(201, 161, 74, 0.18);
   }
   .weather { color: #a39e8b; font-variant-numeric: tabular-nums; }
-  .who { color: #c9a14a; font-weight: 600; white-space: nowrap; }
+  .who {
+    color: #c9a14a;
+    font-weight: 600;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+  .subclass-pill {
+    background: rgba(201, 161, 74, 0.15);
+    border: 1px solid rgba(201, 161, 74, 0.4);
+    color: #ffd700;
+    font-size: 0.65rem;
+    padding: 0.05rem 0.35rem;
+    border-radius: 3px;
+    font-weight: normal;
+  }
   .rail-toggle {
     background: transparent;
     border: 1px solid #2a2a2a;

@@ -100,8 +100,7 @@ defmodule TePhoenix.Game.MovementTicker do
 
           player ->
             PlayerRegistry.update(char_id, %{x: nx, y: ny})
-
-            Repo.query("UPDATE characters SET x = ?, y = ? WHERE id = ?", [nx, ny, char_id])
+            TePhoenix.Game.HotState.save_position(char_id, nx, ny)
 
             Phoenix.PubSub.broadcast(
               TePhoenix.PubSub,
@@ -111,6 +110,7 @@ defmodule TePhoenix.Game.MovementTicker do
         end
 
       :done ->
+        TePhoenix.Game.HotState.flush_char(char_id)
         :ok
     end
   rescue

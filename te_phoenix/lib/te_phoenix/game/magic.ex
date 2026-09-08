@@ -265,7 +265,7 @@ defmodule TePhoenix.Game.Magic do
 
   defp resolve_ogham(name) when is_binary(name) do
     case Repo.query(
-           "SELECT id, name, icon, description, rank, element_attack, family_id FROM #{@oghams_table} WHERE LOWER(name) = LOWER(?) LIMIT 1",
+           "SELECT id, name, icon, description, rank, element_attack, family_id FROM #{@oghams_table} WHERE LOWER(name) = LOWER(?) ORDER BY id DESC LIMIT 1",
            [name]
          ) do
       {:ok, %{rows: [[oid, n, i, d, r, e, f]]}} ->

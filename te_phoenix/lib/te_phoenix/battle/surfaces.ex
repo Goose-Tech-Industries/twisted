@@ -80,21 +80,31 @@ defmodule TePhoenix.Battle.Surfaces do
   # ── Surface definitions ─────────────────────────────────────────
 
   def get_def(key) do
-    case Repo.query("SELECT `key`, name, icon, damage_per_turn, damage_type, status_on_enter, duration_turns, spread_to_json, reacts_with_json, blocks_movement, visual FROM #{@defs_table} WHERE `key` = ? AND enabled = 1", [key]) do
-      {:ok, %{rows: [row]}} -> parse_def(row)
-      _ -> nil
-    end
+    db_def =
+      case Repo.query("SELECT `key`, name, icon, damage_per_turn, damage_type, status_on_enter, duration_turns, spread_to_json, reacts_with_json, blocks_movement, visual FROM #{@defs_table} WHERE `key` = ? AND enabled = 1", [key]) do
+        {:ok, %{rows: [row]}} -> parse_def(row)
+        _ -> nil
+      end
+
+    db_def || fallback_def(key)
   rescue
-    _ -> nil
+    _ -> fallback_def(key)
   end
 
   def list_defs do
-    case Repo.query("SELECT `key`, name, icon, damage_per_turn, damage_type, status_on_enter, duration_turns, spread_to_json, reacts_with_json, blocks_movement, visual FROM #{@defs_table} WHERE enabled = 1 ORDER BY `key`") do
-      {:ok, %{rows: rows}} -> Enum.map(rows, &parse_def/1)
-      _ -> []
+    db_defs =
+      case Repo.query("SELECT `key`, name, icon, damage_per_turn, damage_type, status_on_enter, duration_turns, spread_to_json, reacts_with_json, blocks_movement, visual FROM #{@defs_table} WHERE enabled = 1 ORDER BY `key`") do
+        {:ok, %{rows: rows}} -> Enum.map(rows, &parse_def/1)
+        _ -> []
+      end
+
+    if db_defs == [] do
+      Enum.map(default_surfaces(), &to_surface_struct/1)
+    else
+      db_defs
     end
   rescue
-    _ -> []
+    _ -> Enum.map(default_surfaces(), &to_surface_struct/1)
   end
 
   # ── Place a surface ─────────────────────────────────────────────
@@ -371,7 +381,30 @@ defmodule TePhoenix.Battle.Surfaces do
     _ -> :ok
   end
 
-  defp default_surfaces do
+  def fallback_def(key) do
+    case Enum.find(default_surfaces(), &(&1.key == key)) do
+      nil -> nil
+      s -> to_surface_struct(s)
+    end
+  end
+
+  def to_surface_struct(s) do
+    %{
+      key: s.key,
+      name: s.name,
+      icon: s.icon,
+      damage_per_turn: s.dmg,
+      damage_type: s.dtype,
+      status_on_enter: s.status,
+      duration_turns: s.dur,
+      spread_to: s.spread,
+      reacts_with: s.reacts,
+      blocks_movement: s.blocks,
+      visual: s.visual
+    }
+  end
+
+  def default_surfaces do
     [
       %{key: "fire", name: "Fire", icon: "🔥", dmg: 8, dtype: "fire", status: "burn", dur: 3,
         spread: ["oil"], reacts: %{"water" => "steam", "ice" => "water", "oil" => "fire"}, blocks: false, visual: "fire"},
@@ -383,6 +416,8 @@ defmodule TePhoenix.Battle.Surfaces do
         spread: [], reacts: %{"fire" => "steam", "ice" => "frozen", "lightning" => "electrified_water"}, blocks: false, visual: "water"},
       %{key: "poison_cloud", name: "Poison Cloud", icon: "☠️", dmg: 5, dtype: "poison", status: "poison", dur: 3,
         spread: [], reacts: %{"fire" => "explosion"}, blocks: false, visual: "poison"},
+      %{key: "explosion", name: "Thermobaric Explosion", icon: "💥", dmg: 15, dtype: "fire", status: "burn", dur: 1,
+        spread: [], reacts: %{}, blocks: false, visual: "fire"},
       %{key: "steam", name: "Steam", icon: "♨️", dmg: 0, dtype: nil, status: "blind", dur: 2,
         spread: [], reacts: %{}, blocks: false, visual: "steam"},
       %{key: "frozen", name: "Frozen Ground", icon: "🧊", dmg: 0, dtype: nil, status: "freeze", dur: 3,
@@ -394,7 +429,9 @@ defmodule TePhoenix.Battle.Surfaces do
       %{key: "blessed", name: "Blessed Ground", icon: "✨", dmg: -5, dtype: "holy", status: "regen", dur: 3,
         spread: [], reacts: %{"cursed" => "neutral"}, blocks: false, visual: "blessed"},
       %{key: "cursed", name: "Cursed Ground", icon: "💀", dmg: 3, dtype: "dark", status: nil, dur: 4,
-        spread: [], reacts: %{"blessed" => "neutral"}, blocks: false, visual: "cursed"}
+        spread: [], reacts: %{"blessed" => "neutral"}, blocks: false, visual: "cursed"},
+      %{key: "neutral", name: "Neutral Ground", icon: "🌱", dmg: 0, dtype: nil, status: nil, dur: 1,
+        spread: [], reacts: %{}, blocks: false, visual: "default"}
     ]
   end
 end

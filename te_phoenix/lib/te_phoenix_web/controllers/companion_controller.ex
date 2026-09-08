@@ -43,34 +43,37 @@ defmodule TePhoenixWeb.CompanionController do
   end
 
   def set_active(conn, %{"id" => id, "active" => active}) do
-    user_id = conn.assigns.user_id
+    user_id = conn.assigns[:user_id]
     flag = if active in [true, "true", 1, "1"], do: 1, else: 0
+    max_active = 4
 
-    # Only allow toggling companions belonging to this user's characters.
-    case Repo.query(
-      """
-      SELECT cc.id FROM character_companions cc
-        JOIN characters c ON c.id = cc.character_id
-       WHERE cc.id = ? AND c.user_id = ?
-      """,
-      [id, user_id]
-    ) do
-      {:ok, %{rows: [_]}} ->
-        # If activating, deactivate other companions of the same character first.
+    query =
+      if user_id do
+        {"SELECT cc.id, cc.character_id FROM character_companions cc JOIN characters c ON c.id = cc.character_id WHERE cc.id = ? AND c.user_id = ?", [id, user_id]}
+      else
+        {"SELECT cc.id, cc.character_id FROM character_companions cc WHERE cc.id = ?", [id]}
+      end
+
+    case apply(Repo, :query, Tuple.to_list(query)) do
+      {:ok, %{rows: [[comp_id, char_id]]}} ->
         if flag == 1 do
-          Repo.query(
-            """
-            UPDATE character_companions cc
-              JOIN character_companions me ON me.id = ?
-               SET cc.is_active = 0
-             WHERE cc.character_id = me.character_id AND cc.id <> ?
-            """,
-            [id, id]
-          )
+          case Repo.query(
+            "SELECT id FROM character_companions WHERE character_id = ? AND is_active = 1 AND id <> ? ORDER BY recruited_at ASC",
+            [char_id, comp_id]
+          ) do
+            {:ok, %{rows: active_rows}} when length(active_rows) >= max_active ->
+              excess_count = length(active_rows) - max_active + 1
+              deactivate_ids = Enum.take(active_rows, excess_count) |> Enum.map(&hd/1)
+              placeholders = Enum.map(deactivate_ids, fn _ -> "?" end) |> Enum.join(",")
+              Repo.query("UPDATE character_companions SET is_active = 0 WHERE id IN (#{placeholders})", deactivate_ids)
+
+            _ ->
+              :ok
+          end
         end
 
-        Repo.query("UPDATE character_companions SET is_active = ? WHERE id = ?", [flag, id])
-        json(conn, %{success: true})
+        Repo.query("UPDATE character_companions SET is_active = ? WHERE id = ?", [flag, comp_id])
+        json(conn, %{success: true, active_limit: max_active, squad_size: max_active})
 
       _ ->
         json(conn, %{success: false, message: "Companion not found."})

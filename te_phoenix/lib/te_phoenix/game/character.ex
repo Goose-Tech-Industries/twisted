@@ -37,6 +37,7 @@ defmodule TePhoenix.Game.Character do
     belongs_to :class, TePhoenix.Game.Class, foreign_key: :class_id
     belongs_to :race, TePhoenix.Game.Race, foreign_key: :race_id
     field :background_id, :integer, default: 0
+    field :subclass_id, :integer
     field :feat_id, :integer, default: 0
 
     has_many :items, TePhoenix.Game.CharacterItem, foreign_key: :character_id

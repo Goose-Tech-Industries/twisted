@@ -60,13 +60,34 @@ defmodule TePhoenixWeb.Game.NpcHandler do
     # Load persistent memory
     {facts, reputation} = load_npc_memory(char_id, npc_name)
 
-    # Load player context for richer dialogue
-    {player_level, player_title} = load_player_context(char_id, p.name)
+    # Load player context for richer dialogue (including background & subclass reactions)
+    {player_level, player_title, bg_info, sub_info} = load_player_context(char_id, p.name)
 
-    # Generate NPC reply (themed fallback — AI provider wired separately)
-    reply = generate_npc_reply(npc_name, persona, p.name, player_title, message, facts, reputation, player_level)
+    # Sovereign Soul Engine Conscious Actor Bridge
+    # Tries real stateful dual-stream mind first; falls back seamlessly to procedural
+    case TePhoenix.AI.SovereignBridge.talk(npc_name, char_id, p.name, message) do
+      {:ok, %{reply: sse_reply} = result} when is_binary(sse_reply) and sse_reply != "" ->
+        push(socket, "npc_reply", %{npcName: npc_name, text: sse_reply, audio_url: result[:audio_url]})
 
-    push(socket, "npc_reply", %{npcName: npc_name, text: reply})
+        if result[:tell] && result[:tell] != "" do
+          push(socket, "event_queue", %{events: [
+            %{cmd: "action_beat", speaker: npc_name, text: "*#{result[:tell]}*"}
+          ]})
+        end
+
+        if result[:joined_player] do
+          handle_companion_recruit(socket, char_id, npc || %{"id" => npc_id, "name" => npc_name}, npc_name, facts, reputation)
+        end
+
+        if result[:left_player] do
+          handle_companion_dismiss(socket, char_id, npc || %{"id" => npc_id, "name" => npc_name}, npc_name)
+        end
+
+      _fallback ->
+        # Standard local procedural fallback
+        reply = generate_npc_reply(npc_name, persona, p.name, player_title, message, facts, reputation, player_level, bg_info, sub_info)
+        push(socket, "npc_reply", %{npcName: npc_name, text: reply})
+    end
 
     # Extract facts from conversation and update reputation
     new_facts = extract_conversation_facts(facts, message, npc_name, p.name)
@@ -641,13 +662,24 @@ defmodule TePhoenixWeb.Game.NpcHandler do
   end
 
   defp load_player_context(char_id, _name) do
-    level = case Repo.query("SELECT level FROM characters WHERE id=?", [char_id]) do
-      {:ok, %{rows: [[l]]}} -> l || 1
-      _ -> 1
-    end
+    {level, bg_info, sub_info} =
+      case Repo.query("""
+        SELECT c.level, bg.name AS bg_name, bg.tag AS bg_tag, bg.npc_reaction,
+               sub.name AS sub_name, sub.archetype_title AS sub_title
+        FROM characters c
+        LEFT JOIN game_backgrounds bg ON c.background_id = bg.id
+        LEFT JOIN game_subclasses sub ON c.subclass_id = sub.id
+        WHERE c.id = ?
+      """, [char_id]) do
+        {:ok, %{rows: [[l, bg_name, bg_tag, bg_reaction, sub_name, sub_title]]}} ->
+          {l || 1, %{name: bg_name, tag: bg_tag, reaction: bg_reaction}, %{name: sub_name, title: sub_title}}
+
+        _ ->
+          {1, %{name: nil, tag: nil, reaction: nil}, %{name: nil, title: nil}}
+      end
 
     title = derive_title(char_id)
-    {level, title}
+    {level, title, bg_info, sub_info}
   end
 
   defp derive_title(char_id) do
@@ -684,8 +716,8 @@ defmodule TePhoenixWeb.Game.NpcHandler do
     end
   end
 
-  defp generate_npc_reply(npc_name, persona, player_name, title, message, facts, reputation, _level) do
-    # Themed fallback dialogue generator — uses persona keywords + reputation + context
+  defp generate_npc_reply(npc_name, persona, player_name, title, message, facts, reputation, _level, bg_info, sub_info) do
+    # Themed fallback dialogue generator — uses persona keywords + reputation + context + background/subclass
     address = if title, do: "#{player_name} #{title}", else: player_name
     persona_lower = String.downcase(persona || "")
     msg_lower = String.downcase(message)
@@ -726,8 +758,50 @@ defmodule TePhoenixWeb.Game.NpcHandler do
           "\"I'm no historian, but I've heard tales. Ask the elders if you want the real stories.\""
         end
 
+      (String.contains?(msg_lower, "hello") or String.contains?(msg_lower, "hi") or String.contains?(msg_lower, "greet")) and not is_nil(bg_info[:tag]) and :rand.uniform(2) == 1 ->
+        case bg_info.tag do
+          "noble" ->
+            "*#{npc_name} bows respectfully.* \"My lord #{address}. #{if reputation > 10, do: "An honor to receive noble blood under this roof.", else: "What brings an aristocrat to our humble presence?"}\""
+
+          "gladiator" ->
+            "*#{npc_name} eyes your arena scars in awe.* \"#{player_name}! By the gods, you fought in the arena pits! I could never mistake that fighting posture.\""
+
+          "acolyte" ->
+            "*#{npc_name} offers a gesture of blessing.* \"Peace be upon your path, #{address}. It is a comfort to have one touched by the temple sanctums among us.\""
+
+          "syndicate" ->
+            "*#{npc_name} lowers their voice discreetly.* \"#{player_name}... I know what underworld family you answer to. Relax, your business is safe here.\""
+
+          "outlander" ->
+            "*#{npc_name} nods at your weathered gear.* \"A wanderer of the deep uncharted frontiers. Out there past the border, instincts are everything.\""
+
+          "inquisitor_vet" ->
+            "*#{npc_name} stands stiffly at attention.* \"Inquisitor #{address}. I assure you, no heresy or forbidden occultism will be tolerated here.\""
+
+          "machinist" ->
+            "*#{npc_name} stares at your brass mechanisms.* \"Fine clockwork craftsmanship you carry there. Steam and galvanic logic are the true future.\""
+
+          "fey_touched" ->
+            "*#{npc_name} blinks at the mystical gleam in your eyes.* \"There is a whimsical light about you, traveler... touched by the dream world, aren't you?\""
+
+          "battle_medic" ->
+            "*#{npc_name} places a hand over their heart.* \"A frontline surgeon. Many good fighters owe their breath to your hands, #{address}. You are always welcome.\""
+
+          "ruin_delver" ->
+            "*#{npc_name} grins knowingly.* \"Got the dust of sunken crypts on your boots, #{address}. Found any forgotten relics in the depths lately?\""
+
+          "mystic" ->
+            "*#{npc_name} looks into your eyes.* \"You carry the stillness of the high peaks, #{address}. What do the constellations whisper?\""
+
+          _ ->
+            "*#{npc_name} smiles.* \"Well met, #{address}. A #{bg_info.name || "traveler"} is always an interesting guest.\""
+        end
+
       String.contains?(msg_lower, "hello") or String.contains?(msg_lower, "hi") or String.contains?(msg_lower, "greet") ->
         cond do
+          sub_info[:title] && :rand.uniform(2) == 1 ->
+            "*#{npc_name} gazes upon your aura.* \"Greetings, #{address}. Word of your prowess as a #{sub_info.title} has already begun to spread.\""
+
           reputation > 50 -> "*#{npc_name} smiles warmly.* \"#{address}! Always good to see a friendly face.\""
           reputation < -20 -> "*#{npc_name} narrows their eyes.* \"...#{player_name}. What do you want?\""
           true -> "*#{npc_name} nods.* \"Well met, traveler.\""

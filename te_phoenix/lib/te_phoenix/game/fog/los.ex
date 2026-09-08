@@ -49,7 +49,8 @@ defmodule TePhoenix.Game.Fog.LOS do
   `radius`. Returns a `MapSet`.
   """
   def compute_visible({ox, oy} = origin, radius, {map_w, map_h} = bounds, blockers_fn)
-      when is_integer(ox) and is_integer(oy) and is_integer(radius) and radius >= 0 do
+      when is_integer(ox) and is_integer(oy) and is_number(radius) and radius >= 0 do
+    radius = trunc(radius)
     initial =
       if in_bounds?(origin, bounds), do: MapSet.new([origin]), else: MapSet.new()
 
@@ -91,7 +92,7 @@ defmodule TePhoenix.Game.Fog.LOS do
     # the previous column was a blocker so a run of blockers narrows
     # the slope window when we recurse for the next row.
     {acc, _next_start, blocked_at_end?} =
-      Enum.reduce(row..0, {acc, start_slope, false}, fn col, {a, cur_start, was_blocked} ->
+      Enum.reduce(row..0//-1, {acc, start_slope, false}, fn col, {a, cur_start, was_blocked} ->
         l_slope = (col + 0.5) / (row - 0.5)
         r_slope = (col - 0.5) / (row + 0.5)
 

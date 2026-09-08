@@ -42,6 +42,64 @@ defmodule TePhoenixWeb.Battle.CombatOptionsHandler do
     end
   end
 
+  # ── Battle De-escalation (Silver Tongue in combat) ──────────────
+
+  def handle("battle_deescalate", %{"battle_id" => battle_id, "target_char_id" => target_char_id, "approach" => approach}, socket) do
+    char_id = socket.assigns[:char_id]
+    battle_id = to_int(battle_id)
+    target_char_id = to_int(target_char_id)
+
+    with true <- State.alive?(battle_id),
+         state <- State.get_state(battle_id),
+         true <- state.status == :active,
+         %{} = actor <- Map.get(state.combatants, char_id),
+         %{} = target <- Map.get(state.combatants, target_char_id),
+         true <- state.turn_char_id == char_id || push_error(socket, "Not your turn.") do
+
+      res = TePhoenix.Battle.Deescalation.attempt_deescalation(actor, target, approach)
+
+      if res.success do
+        actor_team_id = get_team_id(state, char_id)
+        State.switch_team(battle_id, target_char_id, actor_team_id)
+
+        State.add_log(battle_id, %{
+          actor: actor.name,
+          text: "🕊️ [De-escalation SUCCESS] #{actor.name} swayed #{target.name} via #{approach} (Roll: #{res.d20_roll} + #{res.total_roll - res.d20_roll} vs DC #{res.dc})!"
+        })
+
+        broadcast!(socket, "action_result", %{
+          result: %{
+            actor: actor.name,
+            actions: [%{type: "deescalation", target: target.name, success: true, approach: approach, dialogue: res.dialogue}],
+            log: ["🕊️ #{res.dialogue}"]
+          }
+        })
+
+        push(socket, "deescalate_result", res)
+      else
+        State.add_log(battle_id, %{
+          actor: actor.name,
+          text: "⚔️ [De-escalation FAILED] #{target.name} rejected #{actor.name}'s #{approach} (Roll: #{res.d20_roll} + #{res.total_roll - res.d20_roll} vs DC #{res.dc})!"
+        })
+
+        broadcast!(socket, "action_result", %{
+          result: %{
+            actor: actor.name,
+            actions: [%{type: "deescalation", target: target.name, success: false, approach: approach, dialogue: res.dialogue}],
+            log: ["⚔️ #{res.dialogue}"]
+          }
+        })
+
+        push(socket, "deescalate_result", res)
+      end
+
+      State.next_turn(battle_id)
+      {:noreply, socket}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
   # ── Negotiate Response (player accepts/declines alliance) ───────
 
   def handle("negotiate_respond", %{"battle_id" => battle_id, "from_char_id" => from_char_id, "accept" => accept}, socket) do
@@ -312,15 +370,17 @@ defmodule TePhoenixWeb.Battle.CombatOptionsHandler do
     if target.is_ai do
       hp_pct = if target.max_hp > 0, do: round(target.current_hp / target.max_hp * 100), else: 100
 
-      # Willingness factors: low HP, actor's luck, level difference, morale
+      # Willingness factors: low HP, actor's luck, level difference, morale, and background reaction
       hp_factor = max(0, 100 - hp_pct)
       luck_bonus = min(20, (Map.get(actor, :luck, 0) || 0))
       level_diff = max(0, (Map.get(actor, :level, 1) || 1) - (Map.get(target, :level, 1) || 1)) * 3
       morale_penalty = if (Map.get(target, :morale, 100) || 100) < 30, do: 20, else: 0
-      willingness = min(95, max(5, hp_factor + luck_bonus + level_diff + morale_penalty))
-      success = willingness >= 45
 
       {npc_name, persona} = load_npc_persona(target.char_id, target.name)
+      bg_mod = load_bg_negotiate_mod(actor.char_id, persona)
+
+      willingness = min(95, max(5, hp_factor + luck_bonus + level_diff + morale_penalty + bg_mod))
+      success = willingness >= 45
 
       dialogue = generate_negotiation_dialogue(npc_name, persona, actor.name, hp_pct, willingness, success)
 
@@ -383,4 +443,30 @@ defmodule TePhoenixWeb.Battle.CombatOptionsHandler do
     end
   end
   defp to_int(_), do: 0
+
+  defp load_bg_negotiate_mod(char_id, persona) do
+    try do
+      case Repo.query("SELECT bg.tag FROM characters c JOIN game_backgrounds bg ON c.background_id = bg.id WHERE c.id = ?", [char_id]) do
+        {:ok, %{rows: [[tag]]}} ->
+          p_lower = String.downcase(persona || "")
+          case tag do
+            "diplomat" -> 25
+            "syndicate" -> if String.contains?(p_lower, ["bandit", "thug", "rogue", "outlaw"]), do: 25, else: 5
+            "outlander" -> if String.contains?(p_lower, ["beast", "feral", "wolf", "creature", "predator"]), do: 20, else: 0
+            "gladiator" -> 15
+            "urchin" -> if String.contains?(p_lower, ["thief", "bandit", "gutter"]), do: 20, else: 0
+            "machinist" -> if String.contains?(p_lower, ["construct", "automaton", "clockwork", "golem"]), do: 30, else: 0
+            "inquisitor_vet" -> if String.contains?(p_lower, ["demon", "cultist", "heretic"]), do: -25, else: 10
+            "acolyte" -> if String.contains?(p_lower, ["demon", "undead", "fiend"]), do: -20, else: 15
+            "witch_marked" -> if String.contains?(p_lower, ["witch", "hag", "occult", "cultist"]), do: 20, else: 0
+            "sailor" -> if String.contains?(p_lower, ["pirate", "corsair", "raider"]), do: 25, else: 0
+            _ -> 0
+          end
+
+        _ -> 0
+      end
+    rescue
+      _ -> 0
+    end
+  end
 end

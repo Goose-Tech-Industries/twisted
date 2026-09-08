@@ -88,7 +88,7 @@ defmodule TePhoenixWeb.Admin.FieldDescriptions do
     "enable_los" => "Line of sight — ranged attacks need clear path. Walls and objects block shots.",
     "enable_cover" => "Objects between attacker and target reduce ranged damage (25-50% reduction).",
     "enable_flanking" => "Attacking from behind or sides deals bonus damage (+15-25%).",
-    "enable_rolling_hp" => "Earthbound-style HP — damage ticks down like an odometer instead of instant.",
+    "enable_rolling_hp" => "Cascading Vitality — damage ticks down gradually like a rolling meter instead of instant.",
 
     # ── Objectives ──────────────────────────────────────────
     "target_value" => "The goal number: kill count, HP amount, seconds to survive, items to collect, etc.",

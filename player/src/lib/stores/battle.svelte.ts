@@ -15,6 +15,14 @@ export interface Combatant {
   icon?: string
   knocked_out?: boolean
   status_effects?: string[]
+  current_ap?: number
+  max_ap?: number
+  combo_arts?: Array<{
+    name: string
+    sequence_str: string
+    ap_cost: number
+    damage_formula?: string
+  }>
 }
 
 export interface BattleSkill {
@@ -35,6 +43,17 @@ export interface BattleAction {
   sound?: string
 }
 
+export interface BattleSettings {
+  enable_combo_input?: boolean
+  enable_stagger_system?: boolean
+  enable_break_shield?: boolean
+  enable_action_commands?: boolean
+  enable_limb_targeting?: boolean
+  enable_morale?: boolean
+  enable_rolling_hp?: boolean
+  initiative_type?: string
+}
+
 export interface BattleSnapshot {
   battleId: number
   combatants: Combatant[]
@@ -45,6 +64,7 @@ export interface BattleSnapshot {
   myCharId: number | null
   phase: 'init' | 'active' | 'won' | 'lost' | 'fled'
   skills: BattleSkill[]
+  settings?: BattleSettings
 }
 
 function createBattleStore() {

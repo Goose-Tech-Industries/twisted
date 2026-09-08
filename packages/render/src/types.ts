@@ -140,6 +140,15 @@ export interface RenderState {
   playerY: number;
   /** Optional player sprite URL — rendered on the player layer. */
   playerSpriteUrl?: string;
+  /** Optional layered paperdoll sprite URLs for the player. */
+  playerLayers?: Partial<Record<"body" | "head" | "hair" | "armor" | "weapon" | "acc", string>>;
+  /** Optional equipped icons/metadata for HUD and canvas fallback. */
+  playerEquipped?: {
+    weaponIcon?: string;
+    weaponName?: string;
+    armorIcon?: string;
+    shieldIcon?: string;
+  };
   /** Optional player display name. */
   playerName?: string;
   /** 0=N, 1=E, 2=S, 3=W for first-person mode. */
@@ -161,9 +170,47 @@ export interface RenderState {
   showPassability?: boolean;
   /** Editor debug overlays — true shows elevation as a numeric label per tile. */
   showElevation?: boolean;
+  /** Tactical grid overlay toggle (crisp 1px semi-transparent grid lines). */
+  showGrid?: boolean;
+
+  /** Tactical ruler measurement line between two tiles (VTT campaign feature). */
+  ruler?: {
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+    color?: number;
+  } | null;
+
+  /** Area-of-Effect tactical spell / blast template overlay. */
+  aoeTemplate?: {
+    type: "circle" | "cone" | "box" | "line";
+    originX: number;
+    originY: number;
+    targetX: number;
+    targetY: number;
+    radiusTiles: number;
+    color?: number;
+  } | null;
 
   /** DB-driven tile palette — optional, falls back to hardcoded defaults. */
   tilePalette?: TilePaletteEntry[];
+
+  /** Tileset atlas configuration for sprite-based tiles (single-sheet texture slicing). */
+  tileset?: {
+    url: string;
+    tileWidth?: number;
+    tileHeight?: number;
+    columns?: number;
+    rows?: number;
+  } | null;
+
+  /** Illustrated pre-rendered background image backdrop (continuous scene art). */
+  backdropUrl?: string | null;
+  /** Floating atmosphere particles (e.g. "embers", "ash", "spores", "none"). */
+  atmosphere?: "embers" | "ash" | "spores" | "none" | null;
+  /** Enable dynamic brazier / light flicker animation. */
+  dynamicLighting?: boolean;
 
   /** Per-app background theme overrides — all optional, fall back to the
    * default amber/dark theme so existing callers see no change. */

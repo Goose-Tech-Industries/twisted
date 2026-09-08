@@ -73,12 +73,13 @@ if (typeof g.window === 'undefined') {
   g.window = self
 }
 
-import { TwistedRenderer } from '@twisted/render'
+import { TwistedRenderer, type RenderMode } from '@twisted/render'
 import type { RenderState } from '@twisted/render'
 
 type InMsg =
-  | { type: 'init'; canvas: OffscreenCanvas; w: number; h: number; dpr: number }
+  | { type: 'init'; canvas: OffscreenCanvas; w: number; h: number; dpr: number; renderMode?: RenderMode }
   | { type: 'resize'; w: number; h: number }
+  | { type: 'set_render_mode'; renderMode: RenderMode }
   | { type: 'state'; state: RenderState }
   | { type: 'destroy' }
 
@@ -101,7 +102,7 @@ self.addEventListener('message', async (e: MessageEvent<InMsg>) => {
         renderer = new TwistedRenderer({
           canvas: msg.canvas,
           canvasMode: 'play',
-          renderMode: 'classic',
+          renderMode: msg.renderMode || 'classic',
           tileSize: 32,
           backgroundAlpha: 1,
           resolution: msg.dpr || 1,
@@ -111,6 +112,10 @@ self.addEventListener('message', async (e: MessageEvent<InMsg>) => {
         })
         await renderer.init(msg.w, msg.h)
         post({ type: 'ready' })
+        break
+      }
+      case 'set_render_mode': {
+        renderer?.setRenderMode(msg.renderMode)
         break
       }
       case 'resize': {

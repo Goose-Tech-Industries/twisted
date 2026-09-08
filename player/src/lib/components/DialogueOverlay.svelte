@@ -1,5 +1,6 @@
 <script lang="ts">
   import { dialogue } from '$stores/dialogue.svelte'
+  import { livingVoice } from '$stores/living_voice.svelte'
 
   interface Props {
     onchoice: (choiceId: string) => void
@@ -32,8 +33,34 @@
     <div class="card">
       <header>
         <span class="portrait">{line.portrait ?? '🧙'}</span>
-        <strong class="speaker">{line.speaker}</strong>
-        <button class="close" onclick={onclose} aria-label="Close">×</button>
+        <div class="speaker-col">
+          <strong class="speaker">{line.speaker}</strong>
+          {#if livingVoice.isPlaying}
+            <div class="voice-indicator" title="Living Voice active">
+              <span class="voice-wave" style="height: {8 + livingVoice.level * 10}px;"></span>
+              <span class="voice-wave" style="height: {5 + livingVoice.level * 14}px;"></span>
+              <span class="voice-wave" style="height: {7 + livingVoice.level * 8}px;"></span>
+              <span class="voice-label">Living Voice</span>
+            </div>
+          {/if}
+        </div>
+        <div class="voice-actions">
+          <button
+            class="voice-btn"
+            title={livingVoice.isMuted ? "Unmute Voice" : "Mute Voice"}
+            onclick={() => livingVoice.toggleMute()}
+          >
+            {livingVoice.isMuted ? "🔇" : "🔊"}
+          </button>
+          <button
+            class="voice-btn"
+            title="Replay Voice"
+            onclick={() => livingVoice.play(line)}
+          >
+            ▶
+          </button>
+          <button class="close" onclick={onclose} aria-label="Close">×</button>
+        </div>
       </header>
       <p class="body">{line.body}</p>
 
@@ -86,11 +113,51 @@
   }
   header { display: flex; align-items: center; gap: 0.625rem; margin-bottom: 0.5rem; }
   .portrait { font-size: 2rem; }
-  .speaker { color: var(--accent); flex: 1; }
+  .speaker-col { display: flex; flex-direction: column; flex: 1; gap: 0.125rem; }
+  .speaker { color: var(--accent); }
+  .voice-indicator {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 14px;
+    background: rgba(245, 158, 11, 0.15);
+    padding: 1px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+  .voice-wave {
+    width: 2px;
+    background: var(--accent);
+    border-radius: 1px;
+    transition: height 0.05s ease;
+  }
+  .voice-label {
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+    margin-left: 4px;
+    line-height: 1;
+  }
+  .voice-actions { display: flex; align-items: center; gap: 0.25rem; }
+  .voice-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    color: var(--fg);
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .voice-btn:hover { border-color: var(--accent); color: var(--accent); }
   .close {
     background: transparent; border: none; padding: 0 0.5rem;
     color: var(--fg-muted); font-size: 1.25rem; line-height: 1;
+    cursor: pointer;
   }
+  .close:hover { color: var(--fg); }
   .body { font-size: 0.9375rem; line-height: 1.5; margin: 0 0 0.75rem; }
   .choices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
   .choices button {

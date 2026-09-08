@@ -3,3 +3,5 @@ packages:
   - "ui"
   - "player"
   - "te_phoenix/assets"
+allowBuilds:
+  esbuild: true

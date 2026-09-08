@@ -383,10 +383,13 @@ defmodule TePhoenix.Battle.Settings do
     cover_three_quarter_reduction: 0.50,
     enable_flanking: false,
     flanking_side_bonus: 0.15,
-    flanking_rear_bonus: 0.25,
-    enable_elevation_combat: false,
-    elevation_high_ground_bonus: 0.10,
+    # Planet Mado Tactical Rules (elevation, high ground advantage, active defense timing)
+    enable_elevation_combat: true,
+    elevation_high_ground_bonus: 0.15,
     elevation_low_ground_penalty: 0.10,
+    elevation_range_bonus: 2,
+    enable_active_defense_timing: true,
+    active_defense_perfect_window_ms: 150,
 
     # Reactions (auto-counter, auto-potion, opportunity attacks, baton pass)
     enable_reactions: false,
@@ -394,7 +397,13 @@ defmodule TePhoenix.Battle.Settings do
 
     # Turn delay (Grandia-style push-back on stagger)
     enable_turn_delay: false,
-    stagger_turn_delay: 2
+    stagger_turn_delay: 2,
+
+    # Fire Emblem Support, Dual Strike, and Dual Guard
+    enable_dual_strike: true,
+    enable_dual_guard: true,
+    enable_support_buffs: true,
+    enable_triangle_attack: true
   }
 
   @doc "Returns default settings map"

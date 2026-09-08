@@ -118,138 +118,165 @@ defmodule TePhoenixWeb.Social.MinigameHandler do
     {:noreply, socket}
   end
 
-  # ── Card Game (Triple Triad) ─────────────────────────────────────
+  # ── Card Game (Card Duel / Realm Cards) ──────────────────────────
+
+  def handle("card_get_collection", _payload, socket) do
+    char_id = get_char_id(socket)
+    if is_nil(char_id) do
+      {:noreply, socket}
+    else
+      ensure_starter_cards(char_id)
+      cards = fetch_character_cards(char_id)
+      push(socket, "card_collection", %{cards: cards})
+      {:noreply, socket}
+    end
+  end
 
   def handle("card_game_challenge", payload, socket) do
     char_id = get_char_id(socket)
 
-    try do
-      case Repo.query(
-        "SELECT cc.card_id, gc.name, gc.value_top, gc.value_right, gc.value_bottom, gc.value_left, gc.rarity FROM character_cards cc JOIN game_cards gc ON cc.card_id=gc.id WHERE cc.character_id=?",
-        [char_id]
-      ) do
-        {:ok, %{rows: rows, columns: cols}} when length(rows) >= 5 ->
-          cards = Enum.map(rows, fn row -> Enum.zip(cols, row) |> Map.new() end)
+    if is_nil(char_id) do
+      {:noreply, socket}
+    else
+      try do
+        ensure_starter_cards(char_id)
+        cards = fetch_character_cards(char_id)
+
+        if length(cards) >= 5 do
+          opponent_name = payload["npcName"] || "Card Master"
 
           {:ok, result} = Repo.query(
             "INSERT INTO game_card_matches (player1_id, npc_opponent, board_size, board_json, status) VALUES (?,?,9,?,?)",
-            [char_id, payload["npcName"], Jason.encode!(List.duplicate(nil, 9)), "active"]
+            [char_id, opponent_name, Jason.encode!(List.duplicate(nil, 9)), "active"]
           )
 
+          hand = Enum.take(cards, 5)
+
           push(socket, "card_game_start", %{
-            matchId: result.last_insert_id, playerCards: cards,
-            boardSize: 9, opponent: payload["npcName"] || "Player"
+            matchId: result.last_insert_id,
+            playerCards: hand,
+            boardSize: 9,
+            opponent: opponent_name
           })
-
-        _ -> push(socket, "card_result", %{success: false, message: "Need at least 5 cards to play."})
+        else
+          push(socket, "card_result", %{success: false, message: "Need at least 5 cards to duel."})
+        end
+      rescue
+        e -> push(socket, "card_result", %{success: false, message: Exception.message(e)})
       end
-    rescue
-      e -> push(socket, "card_result", %{success: false, message: Exception.message(e)})
-    end
 
-    {:noreply, socket}
+      {:noreply, socket}
+    end
   end
 
   def handle("card_game_place", %{"matchId" => match_id, "cardId" => card_id, "position" => position}, socket) do
     char_id = get_char_id(socket)
 
-    try do
-      case Repo.query("SELECT board_json FROM game_card_matches WHERE id=? AND player1_id=? AND status='active'", [match_id, char_id]) do
-        {:ok, %{rows: [[board_json]]}} ->
-          board = parse_json(board_json, List.duplicate(nil, 9))
+    if is_nil(char_id) do
+      {:noreply, socket}
+    else
+      try do
+        case Repo.query("SELECT board_json FROM game_card_matches WHERE id=? AND player1_id=? AND status='active'", [match_id, char_id]) do
+          {:ok, %{rows: [[board_json]]}} ->
+            board = parse_json(board_json, List.duplicate(nil, 9))
 
-          if position < 0 or position >= length(board) or Enum.at(board, position) != nil do
-            push(socket, "card_result", %{success: false, message: "Invalid position."})
-          else
-            # Get card stats
-            case Repo.query("SELECT id, value_top, value_right, value_bottom, value_left FROM game_cards WHERE id=?", [card_id]) do
-              {:ok, %{rows: [[_id, vt, vr, vb, vl]]}} ->
-                card = %{"cardId" => card_id, "owner" => "player", "value_top" => vt, "value_right" => vr, "value_bottom" => vb, "value_left" => vl}
-                board = List.replace_at(board, position, card)
+            if position < 0 or position >= length(board) or Enum.at(board, position) != nil do
+              push(socket, "card_result", %{success: false, message: "Invalid position."})
+            else
+              case Repo.query("SELECT id, name, icon, value_top, value_right, value_bottom, value_left, rarity, element FROM game_cards WHERE id=?", [card_id]) do
+                {:ok, %{rows: [[_id, name, icon, vt, vr, vb, vl, rarity, elem]]}} ->
+                  player_card = %{
+                    "cardId" => card_id,
+                    "name" => name,
+                    "icon" => icon || "🎴",
+                    "owner" => "player",
+                    "value_top" => vt,
+                    "value_right" => vr,
+                    "value_bottom" => vb,
+                    "value_left" => vl,
+                    "rarity" => rarity,
+                    "element" => elem
+                  }
+                  board = List.replace_at(board, position, player_card)
 
-                # Triple Triad flip logic
-                size = 3
-                px = rem(position, size)
-                py = div(position, size)
+                  # Flip adjacent opposing cards
+                  {board, player_flipped} = execute_flips(board, player_card, position, "player")
 
-                adjacent = [
-                  %{dx: 0, dy: -1, atk: "value_top", def: "value_bottom"},
-                  %{dx: 1, dy: 0, atk: "value_right", def: "value_left"},
-                  %{dx: 0, dy: 1, atk: "value_bottom", def: "value_top"},
-                  %{dx: -1, dy: 0, atk: "value_left", def: "value_right"}
-                ]
-
-                {board, flipped} = Enum.reduce(adjacent, {board, []}, fn adj, {b, f} ->
-                  nx = px + adj.dx
-                  ny = py + adj.dy
-                  if nx >= 0 and nx < size and ny >= 0 and ny < size do
-                    ni = ny * size + nx
-                    neighbor = Enum.at(b, ni)
-                    if neighbor && neighbor["owner"] != "player" do
-                      if (card[adj.atk] || 0) > (neighbor[adj.def] || 0) do
-                        updated = Map.put(neighbor, "owner", "player")
-                        {List.replace_at(b, ni, updated), [ni | f]}
-                      else
-                        {b, f}
-                      end
-                    else
-                      {b, f}
+                  # AI counter-placement
+                  empty_spots = board |> Enum.with_index() |> Enum.filter(fn {c, _} -> is_nil(c) end) |> Enum.map(fn {_, i} -> i end)
+                  {board, ai_flipped} = if empty_spots != [] do
+                    case Repo.query("SELECT id, name, icon, value_top, value_right, value_bottom, value_left, rarity, element FROM game_cards WHERE is_active=1 ORDER BY RAND() LIMIT 1") do
+                      {:ok, %{rows: [[nid, nname, nicon, nvt, nvr, nvb, nvl, nrarity, nelem]]}} ->
+                        ai_pos = Enum.random(empty_spots)
+                        ai_card = %{
+                          "cardId" => nid,
+                          "name" => nname,
+                          "icon" => nicon || "🎴",
+                          "owner" => "npc",
+                          "value_top" => nvt,
+                          "value_right" => nvr,
+                          "value_bottom" => nvb,
+                          "value_left" => nvl,
+                          "rarity" => nrarity,
+                          "element" => nelem
+                        }
+                        b2 = List.replace_at(board, ai_pos, ai_card)
+                        execute_flips(b2, ai_card, ai_pos, "npc")
+                      _ -> {board, []}
                     end
                   else
-                    {b, f}
+                    {board, []}
                   end
-                end)
 
-                # AI opponent places a card
-                empty_spots = board |> Enum.with_index() |> Enum.filter(fn {c, _} -> is_nil(c) end) |> Enum.map(fn {_, i} -> i end)
-                board = if empty_spots != [] do
-                  case Repo.query("SELECT id, value_top, value_right, value_bottom, value_left FROM game_cards WHERE is_active=1 ORDER BY RAND() LIMIT 1") do
-                    {:ok, %{rows: [[nid, nvt, nvr, nvb, nvl]]}} ->
-                      ai_pos = Enum.random(empty_spots)
-                      ai_card = %{"cardId" => nid, "owner" => "npc", "value_top" => nvt, "value_right" => nvr, "value_bottom" => nvb, "value_left" => nvl}
-                      List.replace_at(board, ai_pos, ai_card)
-                    _ -> board
-                  end
-                else
-                  board
-                end
-
-                # Check game over
-                is_full = Enum.all?(board, fn c -> c != nil end)
-                status = if is_full do
+                  # Check match completion
+                  is_full = Enum.all?(board, fn c -> c != nil end)
                   player_count = Enum.count(board, fn c -> c && c["owner"] == "player" end)
-                  _npc_count = Enum.count(board, fn c -> c && c["owner"] == "npc" end)
-                  if player_count > 4 do
-                    # Winner reward
-                    case Repo.query("SELECT id FROM game_cards WHERE is_active=1 ORDER BY RAND() LIMIT 1") do
-                      {:ok, %{rows: [[rid]]}} ->
-                        Repo.query("INSERT INTO character_cards (character_id, card_id, obtained_from) VALUES (?,?,'card_game_win') ON DUPLICATE KEY UPDATE quantity=quantity+1", [char_id, rid])
-                      _ -> nil
+                  npc_count = Enum.count(board, fn c -> c && c["owner"] == "npc" end)
+
+                  {status, reward_card} = if is_full do
+                    if player_count > npc_count do
+                      # Victor card drop
+                      reward = case Repo.query("SELECT id, name, icon, rarity FROM game_cards WHERE is_active=1 ORDER BY RAND() LIMIT 1") do
+                        {:ok, %{rows: [[rid, rname, ricon, rrarity]]}} ->
+                          Repo.query(
+                            "INSERT INTO character_cards (character_id, card_id, quantity, obtained_from) VALUES (?, ?, 1, 'card_game_win') ON DUPLICATE KEY UPDATE quantity=quantity+1",
+                            [char_id, rid]
+                          )
+                          %{id: rid, name: rname, icon: ricon, rarity: rrarity}
+                        _ -> nil
+                      end
+                      {"completed", reward}
+                    else
+                      {"completed", nil}
                     end
+                  else
+                    {"active", nil}
                   end
-                  "completed"
-                else
-                  "active"
-                end
 
-                Repo.query!("UPDATE game_card_matches SET board_json=?, status=? WHERE id=?", [Jason.encode!(board), status, match_id])
+                  Repo.query!("UPDATE game_card_matches SET board_json=?, status=? WHERE id=?", [Jason.encode!(board), status, match_id])
 
-                push(socket, "card_game_update", %{
-                  matchId: match_id, board: board, flipped: flipped, status: status,
-                  playerScore: Enum.count(board, fn c -> c && c["owner"] == "player" end)
-                })
+                  push(socket, "card_game_update", %{
+                    matchId: match_id,
+                    board: board,
+                    flipped: player_flipped ++ ai_flipped,
+                    status: status,
+                    playerScore: player_count,
+                    npcScore: npc_count,
+                    rewardCard: reward_card
+                  })
 
-              _ -> push(socket, "card_result", %{success: false, message: "Card not found."})
+                _ -> push(socket, "card_result", %{success: false, message: "Card not found."})
+              end
             end
-          end
 
-        _ -> nil
+          _ -> nil
+        end
+      rescue
+        e -> push(socket, "card_result", %{success: false, message: Exception.message(e)})
       end
-    rescue
-      e -> push(socket, "card_result", %{success: false, message: Exception.message(e)})
-    end
 
-    {:noreply, socket}
+      {:noreply, socket}
+    end
   end
 
   # ── Gathering ────────────────────────────────────────────────────
@@ -361,6 +388,75 @@ defmodule TePhoenixWeb.Social.MinigameHandler do
         {:ok, %{rows: [[id]]}} -> id
         _ -> nil
       end
+  end
+
+  defp fetch_character_cards(char_id) do
+    case Repo.query(
+      """
+      SELECT cc.card_id, cc.quantity, gc.name, gc.icon, gc.description, gc.rarity,
+             gc.value_top, gc.value_right, gc.value_bottom, gc.value_left, gc.element
+        FROM character_cards cc
+        JOIN game_cards gc ON cc.card_id = gc.id
+       WHERE cc.character_id = ?
+       ORDER BY gc.rarity DESC, gc.id ASC
+      """,
+      [char_id]
+    ) do
+      {:ok, %{rows: rows, columns: cols}} ->
+        Enum.map(rows, fn r -> Enum.zip(cols, r) |> Map.new() end)
+      _ -> []
+    end
+  end
+
+  defp ensure_starter_cards(char_id) do
+    case Repo.query("SELECT COUNT(*) FROM character_cards WHERE character_id = ?", [char_id]) do
+      {:ok, %{rows: [[0]]}} ->
+        case Repo.query("SELECT id FROM game_cards WHERE is_active=1 ORDER BY id ASC LIMIT 5") do
+          {:ok, %{rows: starter_ids}} ->
+            Enum.each(starter_ids, fn [cid] ->
+              Repo.query(
+                "INSERT IGNORE INTO character_cards (character_id, card_id, quantity, obtained_from) VALUES (?, ?, 1, 'starter_deck')",
+                [char_id, cid]
+              )
+            end)
+          _ -> :ok
+        end
+      _ -> :ok
+    end
+  end
+
+  defp execute_flips(board, card, position, owner) do
+    size = 3
+    px = rem(position, size)
+    py = div(position, size)
+
+    adjacent = [
+      %{dx: 0, dy: -1, atk: "value_top", def: "value_bottom"},
+      %{dx: 1, dy: 0, atk: "value_right", def: "value_left"},
+      %{dx: 0, dy: 1, atk: "value_bottom", def: "value_top"},
+      %{dx: -1, dy: 0, atk: "value_left", def: "value_right"}
+    ]
+
+    Enum.reduce(adjacent, {board, []}, fn adj, {b, f} ->
+      nx = px + adj.dx
+      ny = py + adj.dy
+      if nx >= 0 and nx < size and ny >= 0 and ny < size do
+        ni = ny * size + nx
+        neighbor = Enum.at(b, ni)
+        if neighbor && neighbor["owner"] != owner do
+          if (card[adj.atk] || 0) > (neighbor[adj.def] || 0) do
+            updated = Map.put(neighbor, "owner", owner)
+            {List.replace_at(b, ni, updated), [ni | f]}
+          else
+            {b, f}
+          end
+        else
+          {b, f}
+        end
+      else
+        {b, f}
+      end
+    end)
   end
 
   defp parse_json(nil, d), do: d

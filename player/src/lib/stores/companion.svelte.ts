@@ -18,12 +18,15 @@ interface ListResp { success: boolean; companions?: Companion[] }
 function createCompanionStore() {
   let companions = $state<Companion[]>([])
   let active = $state<Companion | null>(null)
+  let lastCharId = $state<number>(0)
 
   return {
     get companions() { return companions },
     get active() { return active },
+    get activeSquad() { return companions.filter(c => c.active) },
 
     async load(charId: number) {
+      if (charId) lastCharId = charId
       try {
         const r = await api.get<ListResp>(`/api/companions/${charId}`)
         companions = r.companions ?? []
@@ -39,11 +42,9 @@ function createCompanionStore() {
         { active: on }
       )
       if (r.success) {
-        companions = companions.map(c => ({
-          ...c,
-          active: c.id === id ? on : (on ? false : c.active)
-        }))
+        companions = companions.map(c => c.id === id ? { ...c, active: on } : c)
         active = companions.find(c => c.active) ?? null
+        if (lastCharId) await this.load(lastCharId)
       }
       return r
     },

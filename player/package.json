@@ -24,7 +24,6 @@
     "@twisted/render": "workspace:*",
     "phoenix": "^1.7.21",
     "@types/phoenix": "^1.6.6",
-    "pixi.js": "^8.6.6",
-    "three": "^0.171.0"
+    "pixi.js": "^8.6.6"
   }
 }

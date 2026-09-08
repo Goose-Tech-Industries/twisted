@@ -154,19 +154,7 @@ defmodule TePhoenixWeb.Game.CharacterHandler do
 
   def handle("tutorial_complete", _payload, socket) do
     char_id = socket.assigns[:char_id]
-
-    try do
-      case Repo.query("SELECT state_json FROM characters WHERE id=?", [char_id]) do
-        {:ok, %{rows: [[json]]}} ->
-          state = case Jason.decode(to_string(json || "{}")) do {:ok, s} -> s; _ -> %{} end
-          state = Map.put(state, "tutorial_done", true)
-          Repo.query!("UPDATE characters SET state_json=? WHERE id=?", [Jason.encode!(state), char_id])
-        _ -> nil
-      end
-    rescue
-      _ -> nil
-    end
-
+    TePhoenix.Game.CharacterState.put(char_id, "tutorial_done", true)
     {:noreply, socket}
   end
 
@@ -221,6 +209,83 @@ defmodule TePhoenixWeb.Game.CharacterHandler do
         [char_id, map_id, json, json]
       )
     rescue _ -> nil
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle("specialize_subclass", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    subclass_id = payload["subclassId"] || payload["subclass_id"]
+
+    if char_id && subclass_id do
+      case Repo.query("SELECT id, level, class_id, max_hp, max_mp FROM characters WHERE id=?", [char_id]) do
+        {:ok, %{rows: [[_id, level, char_class_id, _hp, _mp]]}} ->
+          cond do
+            (level || 1) < 3 ->
+              push(socket, "subclass_result", %{success: false, message: "Level 3 required for Ascension."})
+
+            true ->
+              case Repo.query("SELECT id, name, archetype_title, description, passive_name, passive_desc, signature_ability, stat_bonuses FROM game_subclasses WHERE id=? AND class_id=?", [subclass_id, char_class_id]) do
+                {:ok, %{rows: [[sub_id, sub_name, sub_title, sub_desc, pass_name, pass_desc, sig_ability, stat_bonuses_raw]]}} ->
+                  stat_bonuses = case Jason.decode(to_string(stat_bonuses_raw || "{}")) do
+                    {:ok, sb} when is_map(sb) -> sb
+                    _ -> %{}
+                  end
+
+                  b_hp = Map.get(stat_bonuses, "hp", 0) || 0
+                  b_mp = Map.get(stat_bonuses, "mp", 0) || 0
+                  b_atk = Map.get(stat_bonuses, "atk", 0) || 0
+                  b_def = Map.get(stat_bonuses, "def", 0) || 0
+                  b_mo = Map.get(stat_bonuses, "mo", 0) || 0
+                  b_md = Map.get(stat_bonuses, "md", 0) || 0
+                  b_spd = Map.get(stat_bonuses, "speed", 0) || 0
+                  b_lck = Map.get(stat_bonuses, "luck", 0) || 0
+
+                  Repo.query!("""
+                    UPDATE characters
+                    SET subclass_id=?, max_hp=max_hp+?, current_hp=current_hp+?,
+                        max_mp=max_mp+?, current_mp=current_mp+?, atk=atk+?,
+                        def=def+?, mo=mo+?, md=md+?, speed=speed+?, luck=luck+?
+                    WHERE id=?
+                  """, [sub_id, b_hp, b_hp, b_mp, b_mp, b_atk, b_def, b_mo, b_md, b_spd, b_lck, char_id])
+
+                  try do
+                    PlayerRegistry.update(char_id, %{
+                      subclass_id: sub_id,
+                      subclass_name: sub_name,
+                      subclass_title: sub_title
+                    })
+                  rescue _ -> nil
+                  end
+
+                  push(socket, "subclass_result", %{
+                    success: true,
+                    subclass: %{
+                      id: sub_id,
+                      name: sub_name,
+                      archetype_title: sub_title,
+                      description: sub_desc,
+                      passive_name: pass_name,
+                      passive_desc: pass_desc,
+                      signature_ability: sig_ability,
+                      stat_bonuses: stat_bonuses
+                    }
+                  })
+
+                  push(socket, "notification", %{
+                    type: "success",
+                    message: "✨ Ascension Complete! You have become a #{sub_name} (#{sub_title})!"
+                  })
+
+                _ ->
+                  push(socket, "subclass_result", %{success: false, message: "Invalid subclass for this class."})
+              end
+          end
+
+        _ ->
+          push(socket, "subclass_result", %{success: false, message: "Character not found."})
+      end
     end
 
     {:noreply, socket}

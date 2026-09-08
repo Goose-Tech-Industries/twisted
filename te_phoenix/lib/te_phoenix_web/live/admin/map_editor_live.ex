@@ -522,7 +522,12 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
             "overlay" => gen.overlay,
             "passability" => gen.passability,
             "fringe" => Map.get(map.layers, "fringe", List.duplicate(-1, map.width * map.height)),
-            "elevation" => Map.get(map.layers, "elevation", List.duplicate(0, map.width * map.height))
+            "elevation" =>
+              if map.render_mode == "2.5d" do
+                Enum.map(gen.ground, fn t -> if t == 1, do: 1, else: 0 end)
+              else
+                List.duplicate(0, map.width * map.height)
+              end
           }
         }
 
@@ -1128,12 +1133,9 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   # ── Genre presets + Tiled import (M13) ───────────────────────
 
   @genre_presets %{
-    "jrpg" => %{render_mode: "classic", label: "JRPG", icon: "⚔️"},
-    "tactics" => %{render_mode: "isometric", label: "Tactics", icon: "♟"},
-    "arpg" => %{render_mode: "2.5d", label: "ARPG", icon: "🗡"},
-    "side_scroll" => %{render_mode: "side-scroll", label: "Side-scroll", icon: "🏃"},
-    "vn" => %{render_mode: "classic", label: "Visual Novel", icon: "📖"},
-    "dungeon_crawler" => %{render_mode: "first-person", label: "Dungeon Crawler", icon: "🕯"}
+    "classic" => %{render_mode: "classic", label: "Top-Down (Classic / Tabletop)", icon: "🗺️"},
+    "elevated" => %{render_mode: "2.5d", label: "Elevated 2.5D (Extruded Depth)", icon: "🏰"},
+    "isometric" => %{render_mode: "isometric", label: "Isometric (Grid / Strategy)", icon: "📐"}
   }
 
   def handle_event("preset:apply", %{"key" => key}, socket) do
@@ -3267,7 +3269,7 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
             <label class="block">
               <span class="text-zinc-400">Render mode</span>
               <select name="render_mode" class="w-full mt-1 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-200">
-                <option :for={mode <- ~w(classic 2.5d isometric hex side-scroll first-person 3d)}
+                <option :for={mode <- ~w(classic 2.5d isometric)}
                   value={mode}
                   selected={@map.render_mode == mode}>
                   {mode}
@@ -4162,21 +4164,33 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   end
 
   defp default_autotile_groups do
-    # Default: stone (1) is its own group, members {1}, every mask → 1.
-    # Users can override with DB rows for real sprite sheets.
     [
       %{
         id: :default_stone,
-        name: "stone",
+        name: "Stone Wall",
         base_tile_id: 1,
-        members: MapSet.new([1]),
+        members: MapSet.new([1, 26, 27, 30]),
         variant_map: %{}
       },
       %{
         id: :default_water,
-        name: "water",
+        name: "Water Shoreline",
         base_tile_id: 3,
-        members: MapSet.new([3]),
+        members: MapSet.new([3, 20, 21, 22, 23]),
+        variant_map: %{}
+      },
+      %{
+        id: :default_dirt,
+        name: "Dirt Path",
+        base_tile_id: 2,
+        members: MapSet.new([2, 8, 11, 18]),
+        variant_map: %{}
+      },
+      %{
+        id: :default_cobble,
+        name: "Cobblestone Floor",
+        base_tile_id: 5,
+        members: MapSet.new([5, 29]),
         variant_map: %{}
       }
     ]
@@ -4286,7 +4300,11 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
   defp bit(false, _), do: 0
 
   defp default_layer_visibility do
-    for l <- layer_names(), into: %{}, do: {l, true}
+    # Visual layers are visible by default; debug layers (elevation numbers & passability overlay)
+    # default to hidden so the map artwork remains clean. Toggled via the Layers panel.
+    for l <- layer_names(), into: %{} do
+      {l, l in ~w(ground overlay fringe)}
+    end
   end
 
   # ── Tool dispatch ──────────────────────────────────────────
@@ -4888,10 +4906,19 @@ defmodule TePhoenixWeb.Admin.MapEditorLive do
           (Map.get(assigns, :viewport_h, map.height) - 1) / 2.0
         end,
       viewportW: Map.get(assigns, :viewport_w, @default_viewport_w),
-      viewportH: Map.get(assigns, :viewport_h, @default_viewport_h),
       showPassability: Map.get(assigns, :layer_visibility, %{}) |> Map.get("passability", true),
       showElevation: Map.get(assigns, :layer_visibility, %{}) |> Map.get("elevation", true),
-      fogEnabled: false
+      fogEnabled: false,
+      tileset: Map.get(assigns, :tileset, %{
+        url: "/tilesets/ashveil_tiles.png",
+        tileWidth: 32,
+        tileHeight: 32,
+        columns: 8,
+        rows: 8
+      }),
+      atmosphere: Map.get(assigns, :atmosphere, "embers"),
+      dynamicLighting: true,
+      backdropUrl: Map.get(assigns, :backdrop_url)
     }
   end
 

@@ -82,6 +82,8 @@ defmodule TePhoenixWeb.BattleChannel do
   # ══════════════════════════════════════════════════════════════════
 
   @impl true
+  def handle_in("action", payload, socket), do: handle_in("battle_action", payload, socket)
+
   def handle_in("battle_action", payload, socket) do
     if socket.assigns[:spectating] do
       {:reply, {:error, %{reason: "spectators_cannot_act"}}, socket}
@@ -292,7 +294,7 @@ defmodule TePhoenixWeb.BattleChannel do
         {:reply, {:error, %{reason: "not_your_turn"}}, socket}
 
       true ->
-        target_id = Map.get(payload, "target_id")
+        target_id = Map.get(payload, "target_id") || Map.get(payload, "target_char_id")
 
       opts = %{
         command_id: Map.get(payload, "command_id"),
@@ -495,7 +497,17 @@ defmodule TePhoenixWeb.BattleChannel do
       grid_w: state.grid_w,
       grid_h: state.grid_h,
       terrain_map: state.terrain_map,
-      battle_objects: state.battle_objects
+      battle_objects: state.battle_objects,
+      settings: %{
+        enable_combo_input: (state.settings && state.settings[:enable_combo_input]) != false,
+        enable_stagger_system: (state.settings && state.settings[:enable_stagger_system]) != false,
+        enable_break_shield: (state.settings && state.settings[:enable_break_shield]) != false,
+        enable_action_commands: (state.settings && state.settings[:enable_action_commands]) != false,
+        enable_limb_targeting: (state.settings && state.settings[:enable_limb_targeting]) != false,
+        enable_morale: (state.settings && state.settings[:enable_morale]) != false,
+        enable_rolling_hp: (state.settings && state.settings[:enable_rolling_hp]) == true,
+        initiative_type: (state.settings && state.settings[:initiative_type]) || "speed"
+      }
     }
   end
 
@@ -531,7 +543,17 @@ defmodule TePhoenixWeb.BattleChannel do
         stealth_active: c.stealth_active,
         ki_active: c.ki_active,
         transform_active: c.transform_active,
-        cooldowns: c.cooldowns || %{}
+        cooldowns: c.cooldowns || %{},
+        current_ap: c.current_ap || 6,
+        max_ap: c.max_ap || 6,
+        combo_arts: Enum.map(c.combo_arts || [], fn a ->
+          %{
+            name: a[:name] || a["name"],
+            sequence_str: a[:sequence_str] || a["sequence_str"],
+            ap_cost: a[:ap_cost] || a["ap_cost"] || 3,
+            damage_formula: a[:damage_formula] || a["damage_formula"] || "ATK*3"
+          }
+        end)
       }}
     end)
   end

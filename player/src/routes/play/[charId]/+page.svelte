@@ -23,6 +23,7 @@
   import { dmCampaigns } from '$stores/dm_campaigns.svelte'
   import { tilePalette } from '$stores/tile_palette.svelte'
   import { structures } from '$stores/structures.svelte'
+  import { voiceChat } from '$stores/voice_chat.svelte'
   import MapView from '$components/MapView.svelte'
   import BattlePanel from '$components/BattlePanel.svelte'
   import HotKeys from '$components/HotKeys.svelte'
@@ -33,10 +34,12 @@
   import RightRail from '$components/play/RightRail.svelte'
   import PlayHud from '$components/play/PlayHud.svelte'
   import DebugOverlay from '$components/play/DebugOverlay.svelte'
+  import AscensionModal from '$components/AscensionModal.svelte'
   import { browser } from '$app/environment'
 
   const initialCharId = Number($page.params.charId)
   let panel = $state<PanelKey>('none')
+  let ascensionOpen = $state(false)
 
   // Rail collapse state — persisted per-character so each character's
   // preferred layout sticks. Default: expanded on desktop, collapsed
@@ -68,9 +71,9 @@
 
   let joinedGame = $state(false)
   $effect(() => {
-    // Bind shop push as soon as the game channel is ready (before onMount,
-    // since open_shop events can arrive during init_self processing).
+    // Bind shop and dmCampaigns push as soon as the game channel is ready
     shop.bindPush((event, payload) => game.push(event, payload))
+    dmCampaigns.bindPush((event, payload) => game.push(event, payload))
   })
   $effect(() => {
     if (joinedGame) return
@@ -124,12 +127,20 @@
         hidden_count: p.fog.hidden_count ?? 0
       })
     }
+    if (p.mapId) {
+      voiceChat.syncProximityMap(p.mapId)
+    }
   })
 
   game.on<Record<string, unknown>>('map_data', (p) => {
     world.setMapFromPayload(p as never)
   })
-  game.on<{ mapId: number }>('map_changed', () => notifications.push('info', 'Entered a new area'))
+  game.on<{ mapId: number }>('map_changed', (p) => {
+    notifications.push('info', 'Entered a new area')
+    if (p?.mapId) {
+      voiceChat.syncProximityMap(p.mapId)
+    }
+  })
 
   // List payloads — Phoenix's V2 serializer rejects raw arrays so the
   // server wraps each in `%{<key>: [...]}`. Accept both shapes for
@@ -141,9 +152,9 @@
   }
   game.on<unknown>('player_list', (p) => world.setPlayersFromPayload(asList(p, 'players')))
   game.on<unknown>('npc_list', (p) => {
-    const arr = asList(p, 'npcs')
-    console.info('[npc] received', arr.length, 'NPCs', arr.slice(0, 3).map((n: Record<string,unknown>) => ({id: n.id, name: n.name, x: n.x, y: n.y, icon: n.icon, enemy: n.is_enemy})))
-    world.setNpcsFromPayload(arr)
+    const arr = asList<Record<string, unknown>>(p, 'npcs')
+    console.info('[npc] received', arr.length, 'NPCs', arr.slice(0, 3).map((n) => ({id: n.id, name: n.name, x: n.x, y: n.y, icon: n.icon, enemy: n.is_enemy})))
+    world.setNpcsFromPayload(arr as never)
   })
   game.on<unknown>('ground_items', (p) => world.setDrops(asList(p, 'items')))
   game.on<unknown>('active_statuses', (p) => statusEffects.set(asList(p, 'statuses')))
@@ -152,6 +163,11 @@
   game.on<unknown>('world_events_history', (p) => worldEvents.setHistory(asList(p, 'events')))
   game.on<unknown>('event_list_result',    (p) => worldEvents.setScheduled(asList(p, 'events')))
   game.on<unknown>('dm_campaigns_list',    (p) => dmCampaigns.set(asList(p, 'campaigns')))
+  game.on<{ campaignId: number; sheets: any[] }>('dm_character_sheets', (p) => dmCampaigns.setSheets(asList(p, 'sheets')))
+  game.on<{ speaker: string; text: string; sessionId?: number | string }>('dm_response', (p) => {
+    if (p && p.text) dmCampaigns.addFeedMessage(p)
+  })
+  game.on<{ campaignId: number; slots: any[] }>('action_slots', (p) => dmCampaigns.setActionSlots(asList(p, 'slots')))
   game.on<unknown>('tile_palette',         (p) => tilePalette.set(asList(p, 'tiles')))
   game.on<unknown>('deployed_structures',  (p) => structures.set(asList(p, 'structures')))
   game.on<Record<string, unknown>>('overworld_effects', (p) => visualFx.setOverworld(p ?? {}))
@@ -181,11 +197,28 @@
   game.on('buy_result', (p: unknown) => shop.onBuyResult(p as never))
   game.on('sell_result', (p: unknown) => shop.onSellResult(p as never))
   game.on<{ battle_id: number }>('battle_start', () => notifications.push('warning', 'Battle started!'))
-  game.on<{ speaker: string; body: string; portrait?: string; choices?: Array<{ id: string; label: string }>; end?: boolean }>(
+  game.on<{ speaker: string; body: string; portrait?: string; choices?: Array<{ id: string; label: string }>; end?: boolean; audio_url?: string }>(
     'dialogue', (p) => dialogue.show(p)
   )
-  game.on<{ npcName: string; text: string }>('npc_reply', (p) => {
-    dialogue.show({ speaker: p.npcName || 'NPC', body: p.text || '' })
+  game.on<{ npcName: string; text: string; audio_url?: string }>('npc_reply', (p) => {
+    dialogue.show({ speaker: p.npcName || 'NPC', body: p.text || '', audio_url: p.audio_url })
+  })
+  game.on<{ text?: string; dominant?: string; map_id?: number }>('hegemony_shift', (p) => {
+    notifications.push('warning', p.text || `Hegemony shift on Map #${p.map_id}`)
+  })
+  game.on<{ speaker?: string; message?: string }>('gods_eye_whisper', (p) => {
+    dialogue.show({
+      speaker: p.speaker || 'Uile (Omni)',
+      body: p.message || '',
+      portrait: '👁️'
+    })
+  })
+  user.on<{ speaker?: string; message?: string }>('gods_eye_whisper', (p) => {
+    dialogue.show({
+      speaker: p.speaker || 'Uile (Omni)',
+      body: p.message || '',
+      portrait: '👁️'
+    })
   })
 
   // ── Event queue runner ─────────────────────────────────────────
@@ -203,12 +236,13 @@
     shopId?: number
     discount?: number
     choices?: Array<{ id?: string; label?: string; text?: string }>
+    audio_url?: string
     [k: string]: unknown
   }
   function runEventCmd(evt: EventCmd) {
     switch (evt.cmd) {
       case 'dialogue':
-        dialogue.show({ speaker: evt.speaker || 'NPC', body: evt.text || '' })
+        dialogue.show({ speaker: evt.speaker || 'NPC', body: evt.text || '', audio_url: evt.audio_url as string | undefined })
         break
       case 'npc_choice_menu':
         dialogue.show({
@@ -291,18 +325,68 @@
     const r2 = ch.on('player_moved', (p: unknown) => {
       const m = p as { id?: number; x?: number; y?: number }
       // Own position is now confirmed via move_confirmed on the game
-      // channel — this handler updates OTHER players on the minimap.
+      // channel — this handler updates OTHER players on the map.
       if (m.id != null && m.id !== character.active?.id) {
+        const existing = world.players.find(x => x.charId === m.id)
         world.upsertPlayer({
           charId: m.id,
-          name: '',
+          name: existing?.name || `Player ${m.id}`,
           x: m.x ?? 0,
           y: m.y ?? 0,
-          level: 1
+          level: existing?.level ?? 1,
+          icon: existing?.icon
         })
       }
     })
-    return () => { ch.off('chat_msg', r1); ch.off('player_moved', r2) }
+    const r3 = ch.on('player_joined', (p: unknown) => {
+      const pl = p as { char_id?: number; id?: number; name?: string; x?: number; y?: number; level?: number }
+      const cid = pl.char_id ?? pl.id
+      if (cid != null && cid !== character.active?.id) {
+        world.upsertPlayer({
+          charId: cid,
+          name: pl.name || `Player ${cid}`,
+          x: pl.x ?? 0,
+          y: pl.y ?? 0,
+          level: pl.level ?? 1
+        })
+      }
+    })
+    const r4 = ch.on('player_left', (p: unknown) => {
+      const pl = p as { id?: number; char_id?: number }
+      const cid = pl.char_id ?? pl.id
+      if (cid != null) {
+        world.removePlayer(cid)
+      }
+    })
+    const r5 = ch.on('orbital_strike', (p: unknown) => {
+      const strike = p as { x?: number; y?: number; damage?: number; color?: string }
+      notifications.push('error', `⚡ Orbital Strike struck (${strike.x}, ${strike.y}) dealing ${strike.damage || 500} celestial damage!`)
+      visualFx.setOverworld({
+        ...visualFx.overworld,
+        orbital_strike: { x: strike.x, y: strike.y, color: strike.color || '#38bdf8', ts: Date.now() }
+      })
+    })
+    const r6 = ch.on('supply_drop', (p: unknown) => {
+      const drop = p as { x?: number; y?: number; icon?: string }
+      notifications.push('success', `🎁 Celestial Supply Drop touched down at (${drop.x}, ${drop.y})!`)
+      visualFx.setOverworld({
+        ...visualFx.overworld,
+        supply_drop: { x: drop.x, y: drop.y, icon: drop.icon || '🎁', ts: Date.now() }
+      })
+    })
+    const r7 = ch.on('territory_update', (p: unknown) => {
+      const t = p as { dominant?: string; influence?: number }
+      notifications.push('warning', `🚩 Territory Control: ${t.dominant} exerts ${t.influence}% regional influence.`)
+    })
+    return () => {
+      ch.off('chat_msg', r1)
+      ch.off('player_moved', r2)
+      ch.off('player_joined', r3)
+      ch.off('player_left', r4)
+      ch.off('orbital_strike', r5)
+      ch.off('supply_drop', r6)
+      ch.off('territory_update', r7)
+    }
   })
 
   // Per-character party topic (Phoenix broadcasts party chat to
@@ -391,7 +475,7 @@
         const entry = tilePalette.entries.find(e => e.id === targetTile)
         // is_passable from DB (1=walkable, 0=blocked). The TilePaletteEntry
         // type uses `passable` (boolean), raw channel payload uses DB column.
-        const dbPassable = (entry as Record<string, unknown> | null)?.is_passable
+        const dbPassable = (entry as unknown as Record<string, unknown> | null)?.is_passable
         // If palette hasn't loaded yet (no entries), only allow tile 0 (grass).
         // Unknown tiles are blocked until the palette data arrives.
         if (tilePalette.entries.length === 0) {
@@ -432,13 +516,24 @@
     rightCollapsed={rails.right}
   />
 
-  <LeftRail collapsed={rails.left} />
+  <LeftRail collapsed={rails.left} onOpenAscension={() => (ascensionOpen = true)} />
 
   <section class="map-region">
+    {#if character.active && (character.active.level || 1) >= 3 && !character.active.subclass_id}
+      <button class="ascension-milestone-banner" onclick={() => (ascensionOpen = true)} type="button">
+        <span class="banner-icon">⚜️</span>
+        <div class="banner-text">
+          <strong>Archetype Specialization Available</strong>
+          <small>Awaken your Level 3 path for {character.active.class_name || 'your class'}</small>
+        </div>
+        <span class="banner-btn">Ascend ➔</span>
+      </button>
+    {/if}
+
     {#if battle.snapshot}
       <BattlePanel onaction={(payload) => battleCh?.push('action', payload)} />
     {:else if world.map}
-       <MapView map={world.map} character={character.active} players={world.players} npcs={world.npcs} drops={world.drops} palette={tilePalette.entries} fogEnabled={fog.hiddenCount > 0} exploredTiles={fog.explored} />
+       <MapView map={world.map} character={character.active} players={world.players} npcs={world.npcs} drops={world.drops} palette={tilePalette.entries} equipment={inventory.equipment} fogEnabled={fog.hiddenCount > 0} exploredTiles={fog.explored} />
     {:else}
       <div class="placeholder">
         <p>Awaiting world data…</p>
@@ -478,7 +573,7 @@
   {/if}
 
   {#if panel !== 'none'}
-    <div class="overlay-panel">
+    <div class="overlay-panel" class:wide-panel={panel === 'inventory' || panel === 'sheet' || panel === 'crafting' || panel === 'camp'}>
       <PanelHost
         {panel}
         charId={initialCharId}
@@ -486,8 +581,18 @@
         inventoryItems={inventory.items}
         equipment={inventory.equipment}
         gold={inventory.gold}
-        onuse={(id) => void game.push('use_item', { item_id: id, char_id: initialCharId })}
-        onequip={(id) => void game.push('equip_item', { item_id: id, char_id: initialCharId })}
+        onuse={async (id) => {
+          await game.push('use_item', { item_id: id, char_id: initialCharId })
+          await inventory.load(initialCharId)
+        }}
+        onequip={async (id) => {
+          await game.push('equip_item', { item_id: id, char_id: initialCharId })
+          await inventory.load(initialCharId)
+        }}
+        onunequip={async (slotKey) => {
+          await game.push('unequip_item', { slotKey, char_id: initialCharId })
+          await inventory.load(initialCharId)
+        }}
         onsendchat={(channel, body) => void social.push('chat_send', { channel, text: body })}
         onqueue={(format) => { tournament.setQueued(format); void connection.channel('battle:lobby')?.push('queue_join', { format }) }}
         onleavequeue={() => { tournament.setQueued(null); void connection.channel('battle:lobby')?.push('queue_leave', {}) }}
@@ -502,6 +607,8 @@
         ontradelock={() => void social.push('trade_lock', {})}
         ontradecancel={() => void social.push('trade_cancel', {})}
         ontradesetgold={(n) => void social.push('trade_set_gold', { gold: n })}
+        onopencamp={() => (panel = 'camp')}
+        onclosepanel={() => (panel = 'none')}
       />
       <button class="overlay-close" type="button" aria-label="Close panel" onclick={() => panel = 'none'}>✕</button>
     </div>
@@ -513,6 +620,17 @@
   onclose={() => { dialogue.close(); void game.push('dialogue_close', {}) }}
   ontalk={(message) => void game.push('npc_talk', { message, npcName: dialogue.line?.speaker })}
 />
+
+{#if character.active}
+  <AscensionModal
+    open={ascensionOpen}
+    charId={initialCharId}
+    classId={character.active.class_id || 1}
+    className={character.active.class_name || 'Adventurer'}
+    charLevel={character.active.level || 1}
+    onClose={() => (ascensionOpen = false)}
+  />
+{/if}
 
 <!-- Wiring debug overlay: render only when ?debug=1 (component handles
      visibility internally so the conditional doesn't pollute callers). -->
@@ -539,6 +657,58 @@
     position: relative;
     min-height: 0;
     overflow: hidden;
+  }
+  .ascension-milestone-banner {
+    position: absolute;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 1.125rem;
+    background: linear-gradient(135deg, rgba(26, 20, 10, 0.95), rgba(15, 12, 8, 0.98));
+    border: 1px solid #c9a14a;
+    border-radius: 999px;
+    color: #f3efe6;
+    cursor: pointer;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6), 0 0 16px rgba(201, 161, 74, 0.35);
+    z-index: 20;
+    transition: all 180ms ease;
+  }
+  .ascension-milestone-banner:hover {
+    border-color: #ffd700;
+    transform: translateX(-50%) translateY(-2px);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.7), 0 0 24px rgba(255, 215, 0, 0.5);
+  }
+  .banner-icon {
+    font-size: 1.25rem;
+  }
+  .banner-text {
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+    line-height: 1.2;
+  }
+  .banner-text strong {
+    font-family: 'Cinzel', Georgia, serif;
+    font-size: 0.8125rem;
+    color: #ffd700;
+    letter-spacing: 0.04em;
+  }
+  .banner-text small {
+    font-size: 0.6875rem;
+    color: #c4b998;
+  }
+  .banner-btn {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #ffd700;
+    padding: 0.2rem 0.6rem;
+    background: rgba(201, 161, 74, 0.2);
+    border: 1px solid #c9a14a;
+    border-radius: 999px;
+    letter-spacing: 0.04em;
   }
   .placeholder {
     width: 100%; height: 100%;
@@ -578,6 +748,10 @@
     z-index: 40;
     overflow-y: auto;
     padding: 1rem;
+    transition: width 200ms ease;
+  }
+  .overlay-panel.wide-panel {
+    width: min(940px, 100%);
   }
   .overlay-close {
     position: absolute;

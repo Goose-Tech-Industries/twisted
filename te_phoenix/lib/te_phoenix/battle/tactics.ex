@@ -218,38 +218,72 @@ defmodule TePhoenix.Battle.Tactics do
 
   @doc """
   Calculate elevation advantage modifier.
-  Returns a damage multiplier.
+  Planet Mado tactical rules:
+  - High ground advantage (+15% damage, +15% hit rate, +2 range when elevation >= 1)
+  - Low ground penalty (-10% damage, -10% hit rate)
   """
   def elevation_modifier(state, attacker, defender) do
-    if not (state.settings[:enable_elevation_combat] || false) do
-      1.0
-    else
-      elev_map = state.elevation_map || %{}
-      a_elev = Map.get(elev_map, "#{attacker.grid_x},#{attacker.grid_y}", 0)
-      d_elev = Map.get(elev_map, "#{defender.grid_x},#{defender.grid_y}", 0)
+    elev_map = state.elevation_map || %{}
+    a_elev = Map.get(elev_map, "#{attacker.grid_x},#{attacker.grid_y}", 0)
+    d_elev = Map.get(elev_map, "#{defender.grid_x},#{defender.grid_y}", 0)
 
-      high_bonus = state.settings[:elevation_high_ground_bonus] || 0.10
-      low_penalty = state.settings[:elevation_low_ground_penalty] || 0.10
+    high_bonus = state.settings[:elevation_high_ground_bonus] || 0.15
+    low_penalty = state.settings[:elevation_low_ground_penalty] || 0.10
 
-      cond do
-        a_elev > d_elev -> 1.0 + high_bonus
-        a_elev < d_elev -> 1.0 - low_penalty
-        true -> 1.0
-      end
+    cond do
+      a_elev > d_elev -> 1.0 + high_bonus
+      a_elev < d_elev -> 1.0 - low_penalty
+      true -> 1.0
     end
+  end
+
+  @doc """
+  Returns full elevation metrics:
+  - has_high_ground: true if attacker is above defender or on elevated terrain (>= 1)
+  - hit_rate_bonus: +0.15 (+15%)
+  - range_bonus: +2 when on elevated terrain (elevation >= 1)
+  - damage_mult: calculated elevation damage modifier
+  """
+  def elevation_advantage(state, attacker, defender) do
+    elev_map = state.elevation_map || %{}
+    a_elev = Map.get(elev_map, "#{attacker.grid_x},#{attacker.grid_y}", 0)
+    d_elev = Map.get(elev_map, "#{defender.grid_x},#{defender.grid_y}", 0)
+
+    has_high = a_elev > d_elev or a_elev >= 1
+    mult = elevation_modifier(state, attacker, defender)
+
+    %{
+      attacker_elevation: a_elev,
+      defender_elevation: d_elev,
+      has_high_ground: has_high,
+      hit_rate_bonus: if(has_high, do: 0.15, else: 0.0),
+      range_bonus: if(a_elev >= 1, do: 2, else: 0),
+      damage_mult: mult
+    }
+  end
+
+  @doc """
+  Calculates effective attack range including high ground advantage (+2 at elevation >= 1).
+  """
+  def effective_range(state, attacker, base_range \\ 1) do
+    elev_map = state.elevation_map || %{}
+    a_elev = Map.get(elev_map, "#{attacker.grid_x},#{attacker.grid_y}", 0)
+    range_bonus = if a_elev >= 1, do: 2, else: 0
+    base_range + range_bonus
   end
 
   # ── Combined tactical modifier ──────────────────────────────────
 
   @doc """
   Calculate all tactical modifiers in one call. Returns a map:
-  `%{cover: 0.75, flanking: 1.25, elevation: 1.10, los: true, combined: mult}`.
+  `%{cover: 0.75, flanking: 1.25, elevation: 1.15, los: true, combined: mult}`.
   """
   def calculate(state, attacker, defender) do
     los = has_los?(state, attacker, defender)
     cover = cover_bonus(state, attacker, defender)
     flank = flanking_bonus(state, attacker, defender)
-    elev = elevation_modifier(state, attacker, defender)
+    elev_adv = elevation_advantage(state, attacker, defender)
+    elev = elev_adv.damage_mult
 
     combined = cover * flank * elev
 
@@ -258,6 +292,7 @@ defmodule TePhoenix.Battle.Tactics do
       cover: cover,
       flanking: flank,
       elevation: elev,
+      elevation_advantage: elev_adv,
       combined: combined
     }
   end

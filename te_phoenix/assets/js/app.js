@@ -6,10 +6,12 @@ import {VERSION as TWISTED_RENDER_VERSION} from "@twisted/render"
 import {TwistedCanvas} from "./hooks/twisted_canvas"
 import {ScriptCanvas} from "./hooks/script_canvas"
 import {ConfirmPhraseGate} from "./hooks/confirm_phrase_gate"
+import {UileVoice} from "./hooks/uile_voice"
+import {GodsEyeSonar} from "./hooks/gods_eye_sonar"
 
 console.log("[twisted] render-core", TWISTED_RENDER_VERSION)
 
-const Hooks = {TwistedCanvas, ScriptCanvas, ConfirmPhraseGate}
+const Hooks = {TwistedCanvas, ScriptCanvas, ConfirmPhraseGate, UileVoice, GodsEyeSonar}
 
 let csrfToken = document.querySelector("meta[name='csrf-token']")?.getAttribute("content")
 

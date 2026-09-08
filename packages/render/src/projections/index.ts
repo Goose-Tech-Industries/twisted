@@ -161,116 +161,6 @@ export function makeProjection(mode: RenderMode, tileSize: number): Projection {
         },
       };
 
-    case "hex": {
-      const hexW = tileSize;
-      const hexH = tileSize * 0.866; // sqrt(3)/2
-      const hw = tileSize / 2;
-      const hh = tileSize * 0.433; // half hexH
-      const qh = hh / 2;
-      return {
-        mode,
-        toScreen(x, y, elev, _step, offsetX, offsetY) {
-          const xOff = (y % 2) * (hexW / 2);
-          const sx = x * hexW + xOff + offsetX;
-          const sy = y * (hexH * 0.75) - elev * WALL_HEIGHT_PX + offsetY;
-          return { sx, sy };
-        },
-        toMap(sx, sy, _step, offsetX, offsetY) {
-          // Pointy-top offset hex inverse. Approximate by rounding to the
-          // nearest row then back-solving the column with the row's offset.
-          const u = sx - offsetX;
-          const v = sy - offsetY;
-          const row = Math.round(v / (hexH * 0.75));
-          const xOff = (row % 2) * (hexW / 2);
-          const col = Math.round((u - xOff) / hexW);
-          return { tileX: col, tileY: row };
-        },
-        drawTile(gfx, sx, sy) {
-          // Pointy-top hex
-          gfx.poly([
-            sx + hw, sy,
-            sx + tileSize, sy + qh,
-            sx + tileSize, sy + qh + hh,
-            sx + hw, sy + hh * 2,
-            sx, sy + qh + hh,
-            sx, sy + qh,
-          ]);
-        },
-        viewportSize(vpW, vpH) {
-          return {
-            w: vpW * tileSize + tileSize,
-            h: vpH * (hexH * 0.75) + hexH,
-          };
-        },
-        // O-v3 final: camX/camY is the viewport CENTER. See classic mode for rationale.
-        inViewport(x, y, camX, camY, vpW, vpH) {
-          return (
-            x >= camX - vpW / 2 - 2 &&
-            x <= camX + vpW / 2 + 2 &&
-            y >= camY - vpH / 2 - 2 &&
-            y <= camY + vpH / 2 + 2
-          );
-        },
-      };
-    }
-
-    case "side-scroll":
-      return {
-        mode,
-        toScreen(x, y, elev, _step, offsetX, offsetY) {
-          const sx = x * step + offsetX;
-          const sy = y * step - elev * WALL_HEIGHT_PX * 2 + offsetY;
-          return { sx, sy };
-        },
-        toMap(sx, sy, _step, offsetX, offsetY) {
-          return {
-            tileX: Math.floor((sx - offsetX) / step),
-            tileY: Math.floor((sy - offsetY) / step),
-          };
-        },
-        drawTile(gfx, sx, sy) {
-          gfx.rect(sx, sy, tileSize, tileSize);
-        },
-        viewportSize(vpW, vpH, s) {
-          return { w: vpW * s, h: vpH * s };
-        },
-        // O-v3 final: camX/camY is the viewport CENTER. See classic mode for rationale.
-        inViewport(x, y, camX, camY, vpW, vpH) {
-          return (
-            x >= camX - vpW / 2 - 2 &&
-            x <= camX + vpW / 2 + 2 &&
-            y >= camY - vpH / 2 - 2 &&
-            y <= camY + vpH / 2 + 2
-          );
-        },
-      };
-
-    case "first-person":
-      // Pseudo-3D corridor rendering — the actual scene is drawn by a separate
-      // first-person module, not via per-tile drawTile. toMap uses a classic
-      // inverse which matches the minimap/fallback tile grid.
-      return {
-        mode,
-        toScreen(x, y, _elev, _step, offsetX, offsetY) {
-          return { sx: x * step + offsetX, sy: y * step + offsetY };
-        },
-        toMap(sx, sy, _step, offsetX, offsetY) {
-          return {
-            tileX: Math.floor((sx - offsetX) / step),
-            tileY: Math.floor((sy - offsetY) / step),
-          };
-        },
-        drawTile(gfx, sx, sy) {
-          gfx.rect(sx, sy, tileSize, tileSize);
-        },
-        viewportSize(vpW, vpH, s) {
-          return { w: vpW * s, h: vpH * s };
-        },
-        inViewport() {
-          return true;
-        },
-      };
-
     case "2.5d":
       return {
         mode,
@@ -305,15 +195,9 @@ export function makeProjection(mode: RenderMode, tileSize: number): Projection {
         },
       };
 
-    case "3d":
-      // Three.js handles 3d mode outside Projection entirely. Return a
-      // classic projection so callers that query the strategy before
-      // branching to Three don't crash.
-      return classicProjection(mode, tileSize, step);
-
     case "classic":
     default:
-      return classicProjection(mode, tileSize, step);
+      return classicProjection("classic", tileSize, step);
   }
 }
 

@@ -20,11 +20,13 @@ export interface Item {
   buy_price?: number
   qty?: number
   inventory_id?: number
+  sprite_url?: string
 }
 
 export type EquipSlot =
-  | 'weapon' | 'offhand' | 'helmet' | 'chest' | 'gloves'
-  | 'boots' | 'ring1' | 'ring2' | 'amulet'
+  | 'helmet' | 'face' | 'amulet' | 'shoulders' | 'cloak'
+  | 'chest' | 'gloves' | 'belt' | 'weapon' | 'offhand'
+  | 'ring1' | 'ring2' | 'trinket' | 'boots'
 
 export type Equipment = Partial<Record<EquipSlot, Item | null>>
 

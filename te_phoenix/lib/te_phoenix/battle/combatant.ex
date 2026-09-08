@@ -173,7 +173,30 @@ defmodule TePhoenix.Battle.Combatant do
 
     # User/map context (loaded from DB at battle start)
     user_id: nil,
-    map_id: nil
+    map_id: nil,
+
+    # Fire Emblem Support Bonds & Synergy
+    support_bonds: %{},
+    support_partner_id: nil,
+    support_rank: nil,
+
+    # Fire Emblem Triangle Attack & Camp Meal Buffs
+    triangle_unlocked: false,
+    triangle_partners: [],
+    meal_buff: nil,
+
+    # Legend of Legaia Action Points & Combo Arts
+    current_ap: 6,
+    max_ap: 6,
+    combo_arts: [
+      %{name: "Cross Cut", sequence_str: "H,H", ap_cost: 2, damage_formula: "ATK*2.2", battle_text: "{name} delivers a swift Cross Cut!"},
+      %{name: "Somersault", sequence_str: "H,H,L", ap_cost: 3, damage_formula: "ATK*3.0", battle_text: "{name} flips and strikes with Somersault!"},
+      %{name: "Tornado Dance", sequence_str: "L,R,L,R", ap_cost: 4, damage_formula: "ATK*3.5", battle_text: "{name} unleashes the Tornado Dance!"},
+      %{name: "Rising Upper", sequence_str: "L,L,H", ap_cost: 3, damage_formula: "ATK*2.8", battle_text: "{name} launches a Rising Upper!"},
+      %{name: "Hyper Elbow", sequence_str: "H,L,H", ap_cost: 3, damage_formula: "ATK*3.0", battle_text: "{name} charges with Hyper Elbow!"},
+      %{name: "Hurricane Kick", sequence_str: "L,R,L,R,H", ap_cost: 5, damage_formula: "ATK*4.5", battle_text: "{name} roars with Hurricane Kick!"},
+      %{name: "Mystic Arte", sequence_str: "H,L,H,L,H", ap_cost: 5, damage_formula: "ATK*5.0+MO*2", battle_text: "{name} channels the ancient Mystic Arte!"}
+    ]
   ]
 
   @type t :: %__MODULE__{}

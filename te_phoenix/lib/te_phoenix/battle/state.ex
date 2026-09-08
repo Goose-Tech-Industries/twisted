@@ -40,6 +40,7 @@ defmodule TePhoenix.Battle.State do
     grid_w: 8,
     grid_h: 5,
     terrain_map: %{},
+    surface_durations: %{},
     battle_objects: %{},
     elevation_map: %{},
 
@@ -555,8 +556,9 @@ defmodule TePhoenix.Battle.State do
   defp run_turn_start_hooks(state) do
     with char_id when not is_nil(char_id) <- state.turn_char_id,
          %Combatant{} = c <- Map.get(state.combatants, char_id) do
-      # Reset reaction charges for the new turn's actor
+      # Reset reaction charges & AP for the new turn's actor
       c = Reactions.reset_charges(c)
+      c = %{c | current_ap: c.max_ap || 6}
       state = put_in(state.combatants[char_id], c)
 
       ctx = %{victim: c, attacker: nil}
@@ -862,12 +864,19 @@ defmodule TePhoenix.Battle.State do
   # ══════════════════════════════════════════════════════════════════
 
   @doc "Chebyshev distance (diagonal = 1, like a chess king)"
-  def chebyshev(%{grid_x: x1, grid_y: y1}, %{grid_x: x2, grid_y: y2}) do
+  def chebyshev(%{grid_x: x1, grid_y: y1}, %{grid_x: x2, grid_y: y2})
+      when is_number(x1) and is_number(y1) and is_number(x2) and is_number(y2) do
     max(abs(x2 - x1), abs(y2 - y1))
   end
+  def chebyshev(_, _), do: 1
 
   @doc "Check if two combatants are within range"
   def in_range?(a, b, range) do
-    chebyshev(a, b) <= range
+    if is_nil(Map.get(a, :grid_x)) or is_nil(Map.get(a, :grid_y)) or
+       is_nil(Map.get(b, :grid_x)) or is_nil(Map.get(b, :grid_y)) do
+      true
+    else
+      chebyshev(a, b) <= range
+    end
   end
 end

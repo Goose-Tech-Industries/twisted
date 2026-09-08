@@ -57,7 +57,14 @@ defmodule TePhoenix.Battle.Combat do
 
           {:ok, actor, result} ->
             # Dispatch to the appropriate action handler
-            resolve_action(state, actor, target, opts, result)
+            {state, result} = resolve_action(state, actor, target, opts, result)
+
+            # Environmental chemistry tick (BG3 / DOS2 style)
+            if state.terrain_map && state.terrain_map != %{} do
+              TePhoenix.Battle.Surfaces.tick(state, result)
+            else
+              {state, result}
+            end
         end
     end
   end
@@ -160,7 +167,7 @@ defmodule TePhoenix.Battle.Combat do
 
     cond do
       # Combo input (Legaia-style directional combos)
-      opts[:combo_input] && settings[:enable_combo_input] ->
+      opts[:combo_input] && settings[:enable_combo_input] != false ->
         resolve_combo_input(state, actor, target, opts[:combo_input], result)
 
       # Command-based actions
@@ -510,7 +517,7 @@ defmodule TePhoenix.Battle.Combat do
     {state, result}
   end
 
-  # ── Stub resolvers (to be expanded in later sessions) ───────────
+  # ── Action Resolvers (Combos & Skills) ──────────────────────────
 
   defp resolve_combo_input(state, actor, target, combo, result) do
     Systems.resolve_combo_input(state, actor, target, combo, result)
