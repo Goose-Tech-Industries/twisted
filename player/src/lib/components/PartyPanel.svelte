@@ -27,11 +27,23 @@
   let stashItemName = $state<string>('Masterwork Skeleton Key')
   let selectedTrophyKey = $state<string>('colossus_skull')
 
+  let showSettingsModal = $state(false)
+  let showWorkshopDeck = $state(false)
+  let showCatacombsDeck = $state(false)
+  let showTerritoriesDeck = $state(false)
+  let showForensicsDeck = $state(false)
+  let showVoiceCombatBar = $state(false)
+
+  let catacombPrompt = $state('ancient forgotten crypt of the shadow king')
+  let customSpellPhrase = $state('Ignis Tempest')
+  let workshopTab = $state<'runes' | 'alchemy' | 'dispatches'>('runes')
+
   onMount(() => {
     void social.loadParty()
     if (character.active?.id) {
       void companion.load(character.active.id)
     }
+    void voiceChat.getFeatureFlags()
   })
 
   function invite(e: Event) {
@@ -782,6 +794,84 @@
     >
       <span>⚔️ Colossus Raid {#if voiceChat.colossusTelegraph}<span class="alert-dot red pulse"></span>{/if}</span>
       <span>{showColossusDeck ? '▲' : '▼'}</span>
+    </button>
+    <button
+      type="button"
+      class="btn-hub workshop"
+      class:active={showWorkshopDeck}
+      onclick={() => {
+        showWorkshopDeck = !showWorkshopDeck
+        if (showWorkshopDeck) voiceChat.getSafehouseWorkshop(1)
+      }}
+      title="Bastion Workshop: Runeforging, Alchemy Alembic & Smuggler Dispatches"
+    >
+      <span>⚒️ Workshop</span>
+      <span>{showWorkshopDeck ? '▲' : '▼'}</span>
+    </button>
+    <button
+      type="button"
+      class="btn-hub catacombs"
+      class:active={showCatacombsDeck}
+      onclick={() => {
+        showCatacombsDeck = !showCatacombsDeck
+        if (showCatacombsDeck) voiceChat.getCatacombState()
+      }}
+      title="Spoken Catacombs On-Demand Manifestation"
+    >
+      <span>🗺️ Catacombs</span>
+      <span>{showCatacombsDeck ? '▲' : '▼'}</span>
+    </button>
+    <button
+      type="button"
+      class="btn-hub territory"
+      class:active={showTerritoriesDeck}
+      onclick={() => {
+        showTerritoriesDeck = !showTerritoriesDeck
+        if (showTerritoriesDeck) voiceChat.getFactionTerritories()
+      }}
+      title="Dynamic Faction Territory Wars & Turf Control"
+    >
+      <span>🚩 Turf Wars</span>
+      <span>{showTerritoriesDeck ? '▲' : '▼'}</span>
+    </button>
+    <button
+      type="button"
+      class="btn-hub forensics"
+      class:active={showForensicsDeck}
+      onclick={() => {
+        showForensicsDeck = !showForensicsDeck
+        if (showForensicsDeck) voiceChat.getForensicCases()
+      }}
+      title="Forensic Murder Mysteries & Magistrate Trials"
+    >
+      <span>🔍 Forensics</span>
+      <span>{showForensicsDeck ? '▲' : '▼'}</span>
+    </button>
+    <button
+      type="button"
+      class="btn-hub voicecombat"
+      class:active={showVoiceCombatBar}
+      onclick={() => {
+        showVoiceCombatBar = !showVoiceCombatBar
+        if (showVoiceCombatBar) voiceChat.getVoiceCombatCapabilities()
+      }}
+      title="Real-Time Spoken Incantations & Squad Voice Tactics"
+    >
+      <span>🎙️ Spoken Magic</span>
+      <span>{showVoiceCombatBar ? '▲' : '▼'}</span>
+    </button>
+    <button
+      type="button"
+      class="btn-hub matrix"
+      class:active={showSettingsModal}
+      onclick={() => {
+        showSettingsModal = !showSettingsModal
+        if (showSettingsModal) voiceChat.getFeatureFlags()
+      }}
+      title="Master Engine Systems Feature Flag Matrix"
+    >
+      <span>⚙️ Settings ({voiceChat.featureFlags.length || '10'})</span>
+      <span>{showSettingsModal ? '▲' : '▼'}</span>
     </button>
   </div>
 
@@ -2073,6 +2163,820 @@
           <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissColossusLoot()}>✕</button>
         </div>
       {/if}
+    </div>
+  {/if}
+
+  <!-- 1. Master Engine Systems Feature Flag Matrix -->
+  {#if showSettingsModal}
+    <div class="matrix-modal-card">
+      <div class="deck-header">
+        <div class="deck-brand">
+          <span class="deck-icon">⚙️</span>
+          <div>
+            <div class="deck-title">
+              <strong>GAME ENGINE SYSTEMS MATRIX</strong>
+              <span class="deck-badge">FEATURE SWITCHBOARD</span>
+            </div>
+            <p class="deck-sub">Real-time MariaDB persistence &amp; zero-nanosecond persistent_term cache toggles</p>
+          </div>
+        </div>
+        <div class="deck-actions">
+          <button type="button" class="btn-deck-refresh" onclick={() => voiceChat.getFeatureFlags()}>🔄 Sync</button>
+          <button type="button" class="btn-deck-close" onclick={() => { showSettingsModal = false }}>✕</button>
+        </div>
+      </div>
+
+      <div class="flag-matrix-grid">
+        {#each voiceChat.featureFlags as flag (flag.feature_key)}
+          <div class="flag-card" class:enabled={flag.is_enabled} class:disabled={!flag.is_enabled}>
+            <div class="flag-info">
+              <div class="flag-title-row">
+                <span class="flag-name">{flag.label}</span>
+                <span class="flag-status-pill" class:active={flag.is_enabled}>
+                  {flag.is_enabled ? 'ACTIVE' : 'OFFLINE'}
+                </span>
+              </div>
+              <p class="flag-desc">{flag.description}</p>
+            </div>
+            <button
+              type="button"
+              class="btn-toggle-flag"
+              class:is-active={flag.is_enabled}
+              onclick={() => voiceChat.toggleFeatureFlag(flag.feature_key, !flag.is_enabled)}
+              title={`Toggle ${flag.label}`}
+            >
+              {flag.is_enabled ? '🟢 Enabled' : '🔴 Disabled'}
+            </button>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
+  <!-- 2. Safehouse Bastion Workshop Deck -->
+  {#if showWorkshopDeck}
+    <div class="workshop-deck">
+      <div class="deck-header">
+        <div class="deck-brand">
+          <span class="deck-icon">⚒️</span>
+          <div>
+            <div class="deck-title">
+              <strong>SAFEHOUSE BASTION WORKSHOP</strong>
+              <span class="deck-badge">TROPHIES &amp; ALCHEMY</span>
+            </div>
+            <p class="deck-sub">Runeforging socket altar • Smuggler dispatches • Alembic brewing</p>
+          </div>
+        </div>
+        <div class="deck-actions">
+          <button type="button" class="btn-deck-refresh" onclick={() => voiceChat.getSafehouseWorkshop(1)}>🔄 Sync</button>
+          <button type="button" class="btn-deck-close" onclick={() => { showWorkshopDeck = false }}>✕</button>
+        </div>
+      </div>
+
+      <!-- Workshop Tab Navigation -->
+      <div class="workshop-tabs">
+        <button
+          type="button"
+          class="tab-btn"
+          class:active={workshopTab === 'runes'}
+          onclick={() => { workshopTab = 'runes' }}
+        >
+          💎 Rune Sockets ({voiceChat.workshopState?.runes?.length ?? 1}/3)
+        </button>
+        <button
+          type="button"
+          class="tab-btn"
+          class:active={workshopTab === 'alchemy'}
+          onclick={() => { workshopTab = 'alchemy' }}
+        >
+          ⚗️ Underworld Alembic
+        </button>
+        <button
+          type="button"
+          class="tab-btn"
+          class:active={workshopTab === 'dispatches'}
+          onclick={() => { workshopTab = 'dispatches' }}
+        >
+          📦 Smuggler Dispatches ({voiceChat.workshopState?.dispatches?.length ?? 0})
+        </button>
+      </div>
+
+      {#if voiceChat.lastWorkshopResult}
+        <div class="alert-result-card" class:success={!voiceChat.lastWorkshopResult.error} class:fail={!!voiceChat.lastWorkshopResult.error}>
+          <span>⚒️</span>
+          <div class="alert-text">
+            <strong>Workshop Operation:</strong>
+            <p>{voiceChat.lastWorkshopResult.message}</p>
+          </div>
+          <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissWorkshopAlert()}>✕</button>
+        </div>
+      {/if}
+
+      <!-- Runes Tab -->
+      {#if workshopTab === 'runes'}
+        <div class="runes-container">
+          <div class="section-lead">
+            <span>Mount ancient trophies &amp; colossus relics into gear sockets to awaken latent combat bonuses:</span>
+          </div>
+          <div class="runes-list">
+            {#each voiceChat.workshopState?.runes ?? [] as rune (rune.id)}
+              <div class="rune-card socketed">
+                <div class="rune-badge">{rune.rune_icon}</div>
+                <div class="rune-details">
+                  <div class="rune-header-row">
+                    <strong>{rune.rune_name}</strong>
+                    <span class="rune-slot-tag">{rune.socket_slot.toUpperCase()} SLOT</span>
+                  </div>
+                  <span class="rune-bonus">⭐ +{rune.bonus_value} {rune.bonus_stat.replace(/_/g, ' ')}</span>
+                </div>
+                <div class="rune-actions">
+                  <button
+                    type="button"
+                    class="btn-unsocket"
+                    onclick={() => voiceChat.unsocketWorkshopRune(1, rune.id)}
+                  >
+                    Unsocket
+                  </button>
+                </div>
+              </div>
+            {/each}
+            {#each voiceChat.workshopState?.available_runes ?? [] as avail (avail.name)}
+              <div class="rune-card">
+                <div class="rune-badge">{avail.icon}</div>
+                <div class="rune-details">
+                  <div class="rune-header-row">
+                    <strong>{avail.name}</strong>
+                  </div>
+                  <span class="rune-bonus">⭐ +{avail.value} {avail.stat.replace(/_/g, ' ')}</span>
+                </div>
+                <div class="rune-actions">
+                  <button
+                    type="button"
+                    class="btn-socket"
+                    onclick={() => voiceChat.socketWorkshopRune(1, 'weapon_1', 'Rune Blade', avail.name.toLowerCase().replace(/\s+/g, '_') + '_rune', 'primary')}
+                  >
+                    Socket
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <!-- Alchemy Alembic Tab -->
+      {#if workshopTab === 'alchemy'}
+        <div class="alchemy-container">
+          {#if voiceChat.workshopState?.alembic && voiceChat.workshopState.alembic.length > 0}
+            {#each voiceChat.workshopState.alembic as brew (brew.id)}
+              <div class="alembic-active-banner">
+                <span class="alembic-bubble-icon">{brew.icon || '⚗️'}</span>
+                <div class="alembic-info">
+                  <strong>Brewing: {brew.concoction_name}</strong>
+                  {#if brew.seconds_remaining <= 0 || brew.status === 'ready'}
+                    <span class="ready-badge">✨ CONCOCTION READY!</span>
+                  {:else}
+                    <span class="time-badge">⏳ {brew.seconds_remaining}s remaining</span>
+                  {/if}
+                </div>
+                <button
+                  type="button"
+                  class="btn-collect-alembic"
+                  onclick={() => voiceChat.claimWorkshopConcoction(1, brew.id)}
+                >
+                  Collect Potion
+                </button>
+              </div>
+            {/each}
+          {:else}
+            <div class="alembic-idle-banner">
+              <span>⚗️ The Alembic is cold and ready for distillation.</span>
+            </div>
+          {/if}
+
+          <div class="recipes-grid">
+            <div class="recipe-card">
+              <span class="recipe-icon">🧪</span>
+              <div class="recipe-meta">
+                <strong>Valyrian Elixir</strong>
+                <p>Restores 100 HP, +15% damage for 4 turns.</p>
+              </div>
+              <button type="button" class="btn-brew" onclick={() => voiceChat.brewWorkshopConcoction(1, 'valyrian_elixir')}>
+                Brew (40s)
+              </button>
+            </div>
+            <div class="recipe-card">
+              <span class="recipe-icon">💤</span>
+              <div class="recipe-meta">
+                <strong>Chloroform Knockout Vial</strong>
+                <p>Instantly renders tavern sentries unconscious.</p>
+              </div>
+              <button type="button" class="btn-brew" onclick={() => voiceChat.brewWorkshopConcoction(1, 'chloroform_knockout_vial')}>
+                Brew (30s)
+              </button>
+            </div>
+            <div class="recipe-card">
+              <span class="recipe-icon">🦨</span>
+              <div class="recipe-meta">
+                <strong>Skunkweed Tear Gas</strong>
+                <p>Flushes building interiors into windows/alleys.</p>
+              </div>
+              <button type="button" class="btn-brew" onclick={() => voiceChat.brewWorkshopConcoction(1, 'skunkweed_tear_gas')}>
+                Brew (45s)
+              </button>
+            </div>
+            <div class="recipe-card">
+              <span class="recipe-icon">👻</span>
+              <div class="recipe-meta">
+                <strong>Ghostwalk Tincture</strong>
+                <p>Complete acoustic footstep and voice dampening.</p>
+              </div>
+              <button type="button" class="btn-brew" onclick={() => voiceChat.brewWorkshopConcoction(1, 'ghostwalk_tincture')}>
+                Brew (60s)
+              </button>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Dispatches Tab -->
+      {#if workshopTab === 'dispatches'}
+        <div class="dispatches-container">
+          <div class="active-dispatches-list">
+            {#each voiceChat.workshopState?.dispatches ?? [] as dispatch (dispatch.id)}
+              <div class="dispatch-card" class:completed={dispatch.status === 'completed'}>
+                <span class="dispatch-icon">{dispatch.icon}</span>
+                <div class="dispatch-meta">
+                  <strong>{dispatch.mission_name}</strong>
+                  <span class="dispatch-runner">Agent: {dispatch.companion_name}</span>
+                  <div class="dispatch-progress-row">
+                    {#if dispatch.status === 'completed'}
+                      <span class="dispatch-done-badge">COMPLETED</span>
+                    {:else}
+                      <span class="dispatch-timer">⏳ {dispatch.seconds_remaining}s remaining</span>
+                    {/if}
+                    <span class="dispatch-rewards">💰 {dispatch.reward_gold}g • ⭐ {dispatch.reward_xp} XP</span>
+                  </div>
+                </div>
+                <div class="dispatch-actions">
+                  {#if dispatch.status === 'completed'}
+                    <button
+                      type="button"
+                      class="btn-claim-dispatch"
+                      onclick={() => voiceChat.claimWorkshopDispatch(1, dispatch.id)}
+                    >
+                      Claim Spoils
+                    </button>
+                  {:else}
+                    <span class="in-transit-badge">In Transit</span>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+
+          <div class="dispatch-launch-bar">
+            <span class="launch-title">Deploy Smuggler Expedition:</span>
+            <div class="launch-buttons">
+              <button
+                type="button"
+                class="btn-launch-mission"
+                onclick={() => voiceChat.startWorkshopDispatch(1, 1, 'Barnaby', 'syndicate_recon')}
+              >
+                🕵️ Syndicate Recon (60s, +80g, +200xp)
+              </button>
+              <button
+                type="button"
+                class="btn-launch-mission"
+                onclick={() => voiceChat.startWorkshopDispatch(1, 2, 'Rowan', 'contraband_heist')}
+              >
+                💰 Contraband Heist (120s, +180g, +450xp)
+              </button>
+              <button
+                type="button"
+                class="btn-launch-mission"
+                onclick={() => voiceChat.startWorkshopDispatch(1, 3, 'Valeria', 'colossus_excavation')}
+              >
+                ⛏️ Colossus Dig (180s, +350g, +800xp)
+              </button>
+            </div>
+          </div>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- 3. Spoken Catacombs On-Demand Deck -->
+  {#if showCatacombsDeck}
+    <div class="catacomb-deck">
+      <div class="deck-header">
+        <div class="deck-brand">
+          <span class="deck-icon">🗺️</span>
+          <div>
+            <div class="deck-title">
+              <strong>SPOKEN CATACOMBS ON-DEMAND</strong>
+              <span class="deck-badge">UILE DUNGEON ARCHITECT</span>
+            </div>
+            <p class="deck-sub">Procedural 2.5D elevation • Traps, secret chambers &amp; boss lairs</p>
+          </div>
+        </div>
+        <div class="deck-actions">
+          <button type="button" class="btn-deck-refresh" onclick={() => voiceChat.getCatacombState()}>🔄 Sync</button>
+          <button type="button" class="btn-deck-close" onclick={() => { showCatacombsDeck = false }}>✕</button>
+        </div>
+      </div>
+
+      {#if voiceChat.lastCatacombResult}
+        <div class="alert-result-card" class:success={!voiceChat.lastCatacombResult.error} class:fail={!!voiceChat.lastCatacombResult.error}>
+          <span>🗺️</span>
+          <div class="alert-text">
+            <strong>Catacomb Expedition:</strong>
+            <p>{voiceChat.lastCatacombResult.message}</p>
+          </div>
+          <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissCatacombAlert()}>✕</button>
+        </div>
+      {/if}
+
+      <!-- Manifestation Prompt Input -->
+      <div class="catacomb-input-box">
+        <label for="catacomb-prompt-input" class="input-label">Spoken Catacomb Concept (Speak or type to warp reality):</label>
+        <div class="input-group">
+          <input
+            id="catacomb-prompt-input"
+            type="text"
+            bind:value={catacombPrompt}
+            placeholder="e.g. ancient forgotten crypt beneath the burning cathedral..."
+            maxlength="100"
+          />
+          <button
+            type="button"
+            class="btn-manifest-catacomb"
+            disabled={!catacombPrompt.trim()}
+            onclick={() => voiceChat.generateCatacomb(catacombPrompt)}
+          >
+            ✨ Manifest Catacomb
+          </button>
+        </div>
+        <div class="prompt-presets">
+          <button type="button" class="btn-preset" onclick={() => { catacombPrompt = 'sunken crypt of the drowned king'; voiceChat.generateCatacomb(catacombPrompt) }}>
+            🌊 Sunken Crypt
+          </button>
+          <button type="button" class="btn-preset" onclick={() => { catacombPrompt = 'ashveil necropolis of lost embers'; voiceChat.generateCatacomb(catacombPrompt) }}>
+            🔥 Ashveil Necropolis
+          </button>
+          <button type="button" class="btn-preset" onclick={() => { catacombPrompt = 'clockwork vault of the forgotten mechanists'; voiceChat.generateCatacomb(catacombPrompt) }}>
+            ⚙️ Clockwork Vault
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Catacomb Dungeon Map -->
+      {#if voiceChat.activeCatacomb}
+        <div class="dungeon-view">
+          <div class="dungeon-banner">
+            <div>
+              <span class="dungeon-theme-tag">{voiceChat.activeCatacomb.theme.toUpperCase()}</span>
+              <h3>{voiceChat.activeCatacomb.name}</h3>
+              <p class="dungeon-prompt">Prompt: "{voiceChat.activeCatacomb.prompt}"</p>
+            </div>
+            <div class="dungeon-stats">
+              <span>Depth: {voiceChat.activeCatacomb.current_floor}/{voiceChat.activeCatacomb.floors_count}</span>
+              <span>Rooms: {voiceChat.activeCatacomb.rooms?.length ?? 5}</span>
+            </div>
+          </div>
+
+          <div class="rooms-track">
+            {#each voiceChat.activeCatacomb.rooms ?? [] as room (room.index)}
+              <div
+                class="room-card"
+                class:cleared={room.is_cleared}
+                class:boss={room.type === 'boss_chamber'}
+              >
+                <div class="room-header">
+                  <span class="room-num">Room {room.index + 1}</span>
+                  {#if room.type === 'boss_chamber'}
+                    <span class="boss-tag">👑 BOSS LAIR</span>
+                  {/if}
+                  {#if room.is_cleared}
+                    <span class="cleared-tag">✓ CLEARED</span>
+                  {/if}
+                </div>
+                <h4 class="room-title">{room.name}</h4>
+                <div class="elevation-indicator">
+                  <span>Elevation: <strong>{room.elevation}</strong></span>
+                  {#if room.doors?.length}
+                    <span class="chest-pill">🚪 Doors: {room.doors.length}</span>
+                  {/if}
+                </div>
+                <p class="room-sensory">"{room.description}"</p>
+                {#if !room.is_cleared}
+                  <button
+                    type="button"
+                    class="btn-clear-room"
+                    onclick={() => voiceChat.clearCatacombRoom(voiceChat.activeCatacomb!.id, room.index)}
+                  >
+                    ⚔️ Delve &amp; Clear Room {room.index + 1}
+                  </button>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- 4. Dynamic Faction Territory Wars Deck -->
+  {#if showTerritoriesDeck}
+    <div class="territory-deck">
+      <div class="deck-header">
+        <div class="deck-brand">
+          <span class="deck-icon">🚩</span>
+          <div>
+            <div class="deck-title">
+              <strong>FACTION TURF WARS &amp; DISTRICT CONTROL</strong>
+              <span class="deck-badge">CITY WARFARE</span>
+            </div>
+            <p class="deck-sub">Dynamic syndicate, watch, and cult influence shifts alter taxes, patrols &amp; martial law</p>
+          </div>
+        </div>
+        <div class="deck-actions">
+          <button type="button" class="btn-deck-refresh" onclick={() => voiceChat.getFactionTerritories()}>🔄 Sync</button>
+          <button type="button" class="btn-deck-close" onclick={() => { showTerritoriesDeck = false }}>✕</button>
+        </div>
+      </div>
+
+      {#if voiceChat.lastTerritoryResult}
+        <div class="alert-result-card success">
+          <span>🚩</span>
+          <div class="alert-text">
+            <strong>Territory Skirmish:</strong>
+            <p>{voiceChat.lastTerritoryResult.message || voiceChat.lastTerritoryResult.reason}</p>
+          </div>
+          <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissTerritoryAlert()}>✕</button>
+        </div>
+      {/if}
+
+      <div class="districts-grid">
+        {#each voiceChat.factionDistricts as district (district.key)}
+          <div class="district-card" class:martial-law={district.martial_law_active}>
+            <div class="district-header">
+              <div>
+                <span class="faction-controller-badge {district.controlling_faction}">
+                  {district.controlling_faction.toUpperCase()}
+                </span>
+                <h4>{district.name}</h4>
+              </div>
+              <div class="tax-tag">
+                Tax Rate: <strong>{district.tax_rate_pct}%</strong>
+              </div>
+            </div>
+
+            <!-- Influence Distribution Bars -->
+            <div class="influence-bars">
+              <div class="influence-item syndicate">
+                <span>🗡️ Syndicate: {district.syndicate_pct}%</span>
+                <div class="meter-bar"><div class="fill" style="width: {district.syndicate_pct}%"></div></div>
+              </div>
+              <div class="influence-item watch">
+                <span>🛡️ The Watch: {district.watch_pct}%</span>
+                <div class="meter-bar"><div class="fill" style="width: {district.watch_pct}%"></div></div>
+              </div>
+              <div class="influence-item cult">
+                <span>👁️ Cult of Mado: {district.cult_pct}%</span>
+                <div class="meter-bar"><div class="fill" style="width: {district.cult_pct}%"></div></div>
+              </div>
+            </div>
+
+            {#if district.martial_law_active}
+              <div class="martial-law-notice">
+                ⚠️ MARTIAL LAW DECLARED (Guard: {district.guard_type})
+              </div>
+            {/if}
+
+            <!-- Skirmish Influence Actions -->
+            <div class="influence-actions">
+              <button
+                type="button"
+                class="btn-inf syndicate"
+                onclick={() => voiceChat.shiftFactionInfluence(district.key, 'syndicate', 15, 'player_raid')}
+              >
+                🗡️ Back Syndicate (+15)
+              </button>
+              <button
+                type="button"
+                class="btn-inf watch"
+                onclick={() => voiceChat.shiftFactionInfluence(district.key, 'watch', 15, 'guard_bribe')}
+              >
+                🛡️ Enforce Watch (+15)
+              </button>
+              <button
+                type="button"
+                class="btn-inf cult"
+                onclick={() => voiceChat.shiftFactionInfluence(district.key, 'cult', 15, 'cult_ritual')}
+              >
+                👁️ Support Cult (+15)
+              </button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
+  <!-- 5. Forensic Murder Mystery & Courtroom Trials Deck -->
+  {#if showForensicsDeck}
+    <div class="forensic-deck">
+      <div class="deck-header">
+        <div class="deck-brand">
+          <span class="deck-icon">🔍</span>
+          <div>
+            <div class="deck-title">
+              <strong>FORENSIC MYSTERIES &amp; COURTROOM TRIALS</strong>
+              <span class="deck-badge">CRIME SCENE INVESTIGATION</span>
+            </div>
+            <p class="deck-sub">Fingerprint dusting • Interrogate suspects • Magistrate trials or hush bribes</p>
+          </div>
+        </div>
+        <div class="deck-actions">
+          <button type="button" class="btn-deck-refresh" onclick={() => voiceChat.getForensicCases()}>🔄 Sync</button>
+          <button type="button" class="btn-deck-close" onclick={() => { showForensicsDeck = false }}>✕</button>
+        </div>
+      </div>
+
+      {#if voiceChat.lastForensicResult}
+        <div class="alert-result-card" class:success={!voiceChat.lastForensicResult.error} class:fail={!!voiceChat.lastForensicResult.error}>
+          <span>🔍</span>
+          <div class="alert-text">
+            <strong>Forensic Investigation:</strong>
+            <p>{voiceChat.lastForensicResult.message}</p>
+          </div>
+          <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissForensicAlert()}>✕</button>
+        </div>
+      {/if}
+
+      <!-- Cases List Selector -->
+      <div class="cases-selector">
+        {#each voiceChat.forensicCases as c (c.id)}
+          <button
+            type="button"
+            class="case-btn"
+            class:active={voiceChat.activeCaseDetails?.id === c.id}
+            onclick={() => voiceChat.getForensicCaseDetails(c.id)}
+          >
+            <span>📜 {c.title}</span>
+            <span class="case-status-badge {c.status}">{c.status.toUpperCase()}</span>
+          </button>
+        {/each}
+      </div>
+
+      <!-- Active Case Dossier -->
+      {#if voiceChat.activeCaseDetails}
+        <div class="case-dossier">
+          <div class="dossier-header">
+            <h3>{voiceChat.activeCaseDetails.title}</h3>
+            <span class="victim-tag">Victim: {voiceChat.activeCaseDetails.victim_name} ({voiceChat.activeCaseDetails.crime_type})</span>
+            <p class="case-summary">Crime Scene: {voiceChat.activeCaseDetails.location_hint}</p>
+          </div>
+
+          <!-- Forensic Evidence & Clues -->
+          <div class="clues-section">
+            <h4 class="section-title">Forensic Clues &amp; Crime Scene Evidence ({voiceChat.activeCaseDetails.clues.length})</h4>
+            <div class="clues-grid">
+              {#each voiceChat.activeCaseDetails.clues as clue (clue.id)}
+                <div class="clue-card" class:analyzed={clue.is_discovered}>
+                  <div class="clue-header">
+                    <strong>{clue.icon} {clue.name}</strong>
+                    {#if clue.is_discovered}
+                      <span class="dusted-pill">🔍 DISCOVERED</span>
+                    {/if}
+                  </div>
+                  <p class="clue-desc">{clue.clue_text}</p>
+                </div>
+              {/each}
+            </div>
+            <button
+              type="button"
+              class="btn-dust-clue"
+              onclick={() => voiceChat.inspectCrimeSceneClues(voiceChat.activeCaseDetails!.id)}
+            >
+              🧪 Inspect Scene &amp; Dust for Fingerprints
+            </button>
+          </div>
+
+          <!-- Suspects & Interrogation -->
+          <div class="suspects-section">
+            <h4 class="section-title">Suspects &amp; Witnesses ({voiceChat.activeCaseDetails.suspects.length})</h4>
+            <div class="suspects-grid">
+              {#each voiceChat.activeCaseDetails.suspects as suspect (suspect.id)}
+                <div class="suspect-card" class:confessed={suspect.confessed}>
+                  <div class="suspect-header">
+                    <div>
+                      <strong>{suspect.icon} {suspect.name}</strong>
+                      <span class="suspect-role">({suspect.role})</span>
+                    </div>
+                    <span class="suspicion-tag">Interrogated: {suspect.interrogated_count}x</span>
+                  </div>
+
+                  <p class="suspect-alibi"><strong>Alibi:</strong> "{suspect.alibi}"</p>
+
+                  {#if suspect.confessed}
+                    <div class="confession-banner">
+                      📜 SIGNED CONFESSION SECURED
+                    </div>
+                  {/if}
+
+                  <div class="suspect-actions">
+                    <button
+                      type="button"
+                      class="btn-interrogate pressure"
+                      onclick={() => voiceChat.interrogateCaseSuspect(voiceChat.activeCaseDetails!.id, suspect.id, 'pressure')}
+                    >
+                      ⚡ Apply Pressure
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-interrogate evidence"
+                      onclick={() => voiceChat.interrogateCaseSuspect(voiceChat.activeCaseDetails!.id, suspect.id, 'evidence_confront')}
+                    >
+                      📄 Present Clue
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-trial-accuse"
+                      onclick={() => voiceChat.holdCourtroomTrial(voiceChat.activeCaseDetails!.id, suspect.id)}
+                    >
+                      ⚖️ Trial Accuse
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-accept-bribe"
+                      onclick={() => voiceChat.bribeFrameSuspect(voiceChat.activeCaseDetails!.id, suspect.id, 350)}
+                    >
+                      💰 Offer Bribe (350g)
+                    </button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- 6. Real-Time Spoken Combat Spellcrafting & Squad Voice Tactics Deck -->
+  {#if showVoiceCombatBar}
+    <div class="voice-combat-deck">
+      <div class="deck-header">
+        <div class="deck-brand">
+          <span class="deck-icon">🎙️</span>
+          <div>
+            <div class="deck-title">
+              <strong>SPOKEN INCANTATIONS &amp; SQUAD VOICE TACTICS</strong>
+              <span class="deck-badge">VOCAL COMBAT HARMONICS</span>
+            </div>
+            <p class="deck-sub">Microphone pitch &amp; amplitude resonance grant up to +35% damage &amp; companion tactics</p>
+          </div>
+        </div>
+        <div class="deck-actions">
+          <button type="button" class="btn-deck-refresh" onclick={() => voiceChat.getVoiceCombatCapabilities()}>🔄 Sync</button>
+          <button type="button" class="btn-deck-close" onclick={() => { showVoiceCombatBar = false }}>✕</button>
+        </div>
+      </div>
+
+      {#if voiceChat.lastVoiceCombatResult}
+        <div class="alert-result-card success">
+          <span>🎙️</span>
+          <div class="alert-text">
+            <strong>Vocal Combat Execution:</strong>
+            <p>{voiceChat.lastVoiceCombatResult.message}</p>
+            {#if voiceChat.lastVoiceCombatResult.resonance_mult && voiceChat.lastVoiceCombatResult.resonance_mult > 1.0}
+              <span class="resonance-pill">⚡ Acoustic Harmonic Resonance: {Math.round(voiceChat.lastVoiceCombatResult.resonance_mult * 100)}% (+{voiceChat.lastVoiceCombatResult.bonus_pct ?? 0}%)</span>
+            {/if}
+          </div>
+          <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissVoiceCombatAlert()}>✕</button>
+        </div>
+      {/if}
+
+      <!-- Spoken Spellcrafting Bar -->
+      <div class="spellcraft-section">
+        <h4 class="section-title">🔥 Spoken Arcane Incantations (Instant Voice Cast)</h4>
+        <div class="spells-grid">
+          <button
+            type="button"
+            class="btn-spell-chip fire"
+            onclick={() => voiceChat.castIncantation('Ignis Tempest', 0.85, 320)}
+          >
+            <span class="spell-icon">🔥</span>
+            <div class="spell-info">
+              <strong>"Ignis Tempest!"</strong>
+              <span class="spell-sub">Firestorm (75 Dmg, 25 Mana, 320Hz resonance)</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="btn-spell-chip frost"
+            onclick={() => voiceChat.castIncantation('Glacial Nova', 0.75, 400)}
+          >
+            <span class="spell-icon">❄️</span>
+            <div class="spell-info">
+              <strong>"Glacial Nova!"</strong>
+              <span class="spell-sub">Freeze Blast (55 Dmg, 20 Mana, 400Hz resonance)</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="btn-spell-chip barrier"
+            onclick={() => voiceChat.castIncantation('Aegis Barricade', 0.9, 180)}
+          >
+            <span class="spell-icon">🛡️</span>
+            <div class="spell-info">
+              <strong>"Aegis Barricade!"</strong>
+              <span class="spell-sub">Kinetic Shield (+45 Guard, 15 Mana, 180Hz resonance)</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="btn-spell-chip shadow"
+            onclick={() => voiceChat.castIncantation('Siphon Soul', 0.95, 240)}
+          >
+            <span class="spell-icon">💀</span>
+            <div class="spell-info">
+              <strong>"Siphon Soul!"</strong>
+              <span class="spell-sub">Life Drain (65 Dmg, +40 HP, 30 Mana, 240Hz resonance)</span>
+            </div>
+          </button>
+        </div>
+
+        <div class="custom-spell-row">
+          <input
+            type="text"
+            bind:value={customSpellPhrase}
+            placeholder="Speak or type custom incantation..."
+            maxlength="60"
+          />
+          <button
+            type="button"
+            class="btn-cast-custom"
+            disabled={!customSpellPhrase.trim()}
+            onclick={() => voiceChat.castIncantation(customSpellPhrase, 0.8, 300)}
+          >
+            Cast Incantation
+          </button>
+        </div>
+      </div>
+
+      <!-- Squad Voice Tactics Bar -->
+      <div class="squad-tactics-section">
+        <h4 class="section-title">🛡️ Squad Tactical Voice Orders (Real-Time Companion Coordination)</h4>
+        <div class="squad-commands-grid">
+          <button
+            type="button"
+            class="btn-squad-chip valeria"
+            onclick={() => voiceChat.issueSquadVoiceCommand('Valeria shield')}
+          >
+            <span class="companion-avatar">🛡️</span>
+            <div class="squad-cmd-info">
+              <strong>"Valeria, shield!"</strong>
+              <span class="cmd-effect">Valeria raises Tower Shield (+50% party guard)</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="btn-squad-chip barnaby"
+            onclick={() => voiceChat.issueSquadVoiceCommand('Barnaby strike')}
+          >
+            <span class="companion-avatar">⚔️</span>
+            <div class="squad-cmd-info">
+              <strong>"Barnaby, strike!"</strong>
+              <span class="cmd-effect">Barnaby performs Flank Backstab (90 physical dmg)</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="btn-squad-chip rowan"
+            onclick={() => voiceChat.issueSquadVoiceCommand('Rowan distract')}
+          >
+            <span class="companion-avatar">🎯</span>
+            <div class="squad-cmd-info">
+              <strong>"Rowan, distract!"</strong>
+              <span class="cmd-effect">Rowan fires blinding flare (-40% enemy accuracy)</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="btn-squad-chip squad"
+            onclick={() => voiceChat.issueSquadVoiceCommand('Squad turtle')}
+          >
+            <span class="companion-avatar">🐢</span>
+            <div class="squad-cmd-info">
+              <strong>"Squad, turtle!"</strong>
+              <span class="cmd-effect">All companions enter Phalanx stance (+35 armor)</span>
+            </div>
+          </button>
+        </div>
+      </div>
     </div>
   {/if}
 
@@ -4322,4 +5226,859 @@
     filter: brightness(1.2);
     transform: translateY(-1px);
   }
+
+  /* Hub Buttons for 6 New Systems */
+  .btn-hub.workshop { border-color: #f59e0b; }
+  .btn-hub.workshop.active { background: rgba(245, 158, 11, 0.25); }
+  .btn-hub.catacombs { border-color: #06b6d4; }
+  .btn-hub.catacombs.active { background: rgba(6, 182, 212, 0.25); }
+  .btn-hub.territory { border-color: #ef4444; }
+  .btn-hub.territory.active { background: rgba(239, 68, 68, 0.25); }
+  .btn-hub.forensics { border-color: #8b5cf6; }
+  .btn-hub.forensics.active { background: rgba(139, 92, 246, 0.25); }
+  .btn-hub.voicecombat { border-color: #ec4899; }
+  .btn-hub.voicecombat.active { background: rgba(236, 72, 153, 0.25); }
+  .btn-hub.matrix { border-color: #10b981; }
+  .btn-hub.matrix.active { background: rgba(16, 185, 129, 0.25); }
+
+  /* Shared Deck Styling */
+  .matrix-modal-card,
+  .workshop-deck,
+  .catacomb-deck,
+  .territory-deck,
+  .forensic-deck,
+  .voice-combat-deck {
+    margin: 0.5rem;
+    padding: 0.65rem 0.75rem;
+    border-radius: 0.5rem;
+    background: #0f172a;
+    border: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  }
+
+  .matrix-modal-card { border-color: #10b981; box-shadow: 0 0 15px rgba(16, 185, 129, 0.2); }
+  .workshop-deck { border-color: #f59e0b; box-shadow: 0 0 15px rgba(245, 158, 11, 0.2); }
+  .catacomb-deck { border-color: #06b6d4; box-shadow: 0 0 15px rgba(6, 182, 212, 0.2); }
+  .territory-deck { border-color: #ef4444; box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); }
+  .forensic-deck { border-color: #8b5cf6; box-shadow: 0 0 15px rgba(139, 92, 246, 0.2); }
+  .voice-combat-deck { border-color: #ec4899; box-shadow: 0 0 15px rgba(236, 72, 153, 0.2); }
+
+  .deck-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .deck-brand {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .deck-icon { font-size: 1.3rem; }
+  .deck-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .deck-title strong {
+    font-size: 0.82rem;
+    color: #f8fafc;
+    letter-spacing: 0.03em;
+  }
+  .deck-badge {
+    font-size: 0.6rem;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #94a3b8;
+    font-weight: 700;
+  }
+  .deck-sub {
+    margin: 0.15rem 0 0 0;
+    font-size: 0.65rem;
+    color: #94a3b8;
+  }
+  .deck-actions {
+    display: flex;
+    gap: 0.35rem;
+  }
+  .btn-deck-refresh,
+  .btn-deck-close {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #cbd5e1;
+    font-size: 0.68rem;
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .btn-deck-refresh:hover,
+  .btn-deck-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: #fff;
+  }
+
+  /* Shared Alert Cards */
+  .alert-result-card {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    padding: 0.45rem 0.6rem;
+    border-radius: 0.375rem;
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid var(--border);
+  }
+  .alert-result-card.success {
+    border-color: #10b981;
+    background: rgba(6, 78, 59, 0.4);
+  }
+  .alert-result-card.fail {
+    border-color: #ef4444;
+    background: rgba(127, 29, 29, 0.4);
+  }
+  .alert-text {
+    flex: 1;
+  }
+  .alert-text strong {
+    font-size: 0.72rem;
+    color: #f1f5f9;
+  }
+  .alert-text p {
+    margin: 0.1rem 0 0 0;
+    font-size: 0.68rem;
+    color: #cbd5e1;
+  }
+  .btn-dismiss-alert {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 0.75rem;
+  }
+  .btn-dismiss-alert:hover { color: #fff; }
+
+  /* Feature Flags Matrix */
+  .flag-matrix-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
+  }
+  .flag-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 0.375rem;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .flag-card.enabled {
+    border-left: 3px solid #10b981;
+  }
+  .flag-card.disabled {
+    border-left: 3px solid #ef4444;
+    opacity: 0.75;
+  }
+  .flag-info {
+    flex: 1;
+  }
+  .flag-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .flag-name {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #f8fafc;
+  }
+  .flag-status-pill {
+    font-size: 0.58rem;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-weight: 700;
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    border: 1px solid #ef4444;
+  }
+  .flag-status-pill.active {
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+    border-color: #10b981;
+  }
+  .flag-desc {
+    margin: 0.1rem 0 0 0;
+    font-size: 0.63rem;
+    color: #94a3b8;
+    line-height: 1.2;
+  }
+  .btn-toggle-flag {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid #ef4444;
+    color: #fca5a5;
+    transition: all 0.12s;
+  }
+  .btn-toggle-flag.is-active {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: #10b981;
+    color: #6ee7b7;
+  }
+  .btn-toggle-flag:hover {
+    filter: brightness(1.2);
+    transform: translateY(-1px);
+  }
+
+  /* Bastion Workshop */
+  .workshop-tabs {
+    display: flex;
+    gap: 0.35rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 0.35rem;
+  }
+  .tab-btn {
+    flex: 1;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.25rem;
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .tab-btn.active {
+    background: rgba(245, 158, 11, 0.25);
+    border-color: #f59e0b;
+    color: #fef08a;
+  }
+  .section-lead {
+    font-size: 0.65rem;
+    color: #cbd5e1;
+    margin-bottom: 0.4rem;
+  }
+  .runes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .rune-card {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.375rem;
+  }
+  .rune-card.socketed {
+    border-color: #fbbf24;
+    background: rgba(120, 53, 15, 0.25);
+  }
+  .rune-badge { font-size: 1.2rem; }
+  .rune-details { flex: 1; }
+  .rune-header-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .rune-header-row strong {
+    font-size: 0.72rem;
+    color: #f8fafc;
+  }
+  .rune-slot-tag {
+    font-size: 0.55rem;
+    padding: 1px 3px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    color: #94a3b8;
+  }
+  .rune-bonus {
+    display: block;
+    font-size: 0.625rem;
+    color: #34d399;
+    font-weight: 600;
+  }
+  .btn-socket,
+  .btn-unsocket {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    border-radius: 0.25rem;
+    cursor: pointer;
+  }
+  .btn-socket {
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid #f59e0b;
+    color: #fde68a;
+  }
+  .btn-unsocket {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid #ef4444;
+    color: #fca5a5;
+  }
+  .alembic-active-banner,
+  .alembic-idle-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.6rem;
+    border-radius: 0.375rem;
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.68rem;
+    color: #cbd5e1;
+    margin-bottom: 0.5rem;
+  }
+  .alembic-active-banner {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: #10b981;
+  }
+  .alembic-info { flex: 1; }
+  .alembic-info strong { display: block; color: #f8fafc; font-size: 0.72rem; }
+  .ready-badge { color: #34d399; font-weight: 800; font-size: 0.625rem; }
+  .time-badge { color: #fbbf24; font-size: 0.625rem; }
+  .btn-collect-alembic {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    border-radius: 0.25rem;
+    background: #10b981;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+  .btn-collect-alembic:disabled { opacity: 0.4; cursor: not-allowed; }
+  .recipes-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+  }
+  .recipe-card {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.45rem;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.375rem;
+  }
+  .recipe-icon { font-size: 1.1rem; }
+  .recipe-meta { flex: 1; min-width: 0; }
+  .recipe-meta strong { display: block; font-size: 0.68rem; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .recipe-meta p { margin: 0; font-size: 0.58rem; color: #94a3b8; line-height: 1.1; }
+  .btn-brew {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    border-radius: 0.25rem;
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid #f59e0b;
+    color: #fef08a;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .active-dispatches-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.5rem;
+  }
+  .dispatch-card {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.375rem;
+  }
+  .dispatch-card.completed {
+    border-color: #10b981;
+    background: rgba(6, 78, 59, 0.2);
+  }
+  .dispatch-icon { font-size: 1.1rem; }
+  .dispatch-meta { flex: 1; }
+  .dispatch-meta strong { display: block; font-size: 0.72rem; color: #f8fafc; }
+  .dispatch-runner { font-size: 0.6rem; color: #94a3b8; }
+  .dispatch-progress-row { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.1rem; }
+  .dispatch-done-badge { font-size: 0.58rem; color: #34d399; font-weight: 800; }
+  .dispatch-timer { font-size: 0.58rem; color: #fbbf24; }
+  .dispatch-rewards { font-size: 0.58rem; color: #e2e8f0; }
+  .btn-claim-dispatch {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    background: #10b981;
+    color: #fff;
+    border: none;
+    border-radius: 0.25rem;
+    cursor: pointer;
+  }
+  .in-transit-badge {
+    font-size: 0.6rem;
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.15);
+    padding: 2px 4px;
+    border-radius: 3px;
+  }
+  .dispatch-launch-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .launch-title { font-size: 0.65rem; color: #94a3b8; font-weight: 600; }
+  .launch-buttons { display: flex; flex-direction: column; gap: 0.25rem; }
+  .btn-launch-mission {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-align: left;
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.25rem;
+    color: #f1f5f9;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .btn-launch-mission:hover {
+    background: rgba(245, 158, 11, 0.25);
+    border-color: #f59e0b;
+  }
+
+  /* Catacombs */
+  .catacomb-input-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .input-label { font-size: 0.65rem; color: #94a3b8; }
+  .input-group {
+    display: flex;
+    gap: 0.35rem;
+  }
+  .input-group input {
+    flex: 1;
+    background: #090d16;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 0.25rem;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.72rem;
+    color: #f8fafc;
+  }
+  .btn-manifest-catacomb {
+    padding: 0.35rem 0.6rem;
+    background: linear-gradient(135deg, #0284c7, #06b6d4);
+    border: 1px solid #38bdf8;
+    border-radius: 0.25rem;
+    color: #fff;
+    font-size: 0.68rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn-manifest-catacomb:disabled { opacity: 0.4; cursor: not-allowed; }
+  .prompt-presets {
+    display: flex;
+    gap: 0.3rem;
+  }
+  .btn-preset {
+    font-size: 0.58rem;
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    padding: 2px 5px;
+    color: #cbd5e1;
+    cursor: pointer;
+  }
+  .btn-preset:hover { background: rgba(6, 182, 212, 0.2); border-color: #06b6d4; }
+  .dungeon-view {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.3rem;
+  }
+  .dungeon-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 0.5rem 0.6rem;
+    background: rgba(6, 182, 212, 0.1);
+    border: 1px solid #06b6d4;
+    border-radius: 0.375rem;
+  }
+  .dungeon-theme-tag {
+    font-size: 0.58rem;
+    font-weight: 800;
+    color: #38bdf8;
+    background: rgba(2, 132, 199, 0.25);
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+  .dungeon-banner h3 {
+    margin: 0.2rem 0 0 0;
+    font-size: 0.82rem;
+    color: #f8fafc;
+  }
+  .dungeon-prompt {
+    margin: 0.1rem 0 0 0;
+    font-size: 0.625rem;
+    color: #94a3b8;
+    font-style: italic;
+  }
+  .dungeon-stats {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.15rem;
+    font-size: 0.625rem;
+    color: #cbd5e1;
+  }
+  .rooms-track {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .room-card {
+    padding: 0.45rem 0.6rem;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.375rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .room-card.cleared {
+    opacity: 0.7;
+    border-left: 3px solid #10b981;
+  }
+  .room-card.boss {
+    border-color: #f59e0b;
+    background: rgba(120, 53, 15, 0.25);
+  }
+  .room-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .room-num { font-size: 0.65rem; color: #94a3b8; font-weight: 700; }
+  .boss-tag { font-size: 0.58rem; color: #fbbf24; font-weight: 800; }
+  .cleared-tag { font-size: 0.58rem; color: #34d399; font-weight: 800; }
+  .room-title { margin: 0; font-size: 0.75rem; color: #f8fafc; }
+  .elevation-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.6rem;
+    color: #94a3b8;
+  }
+  .elevation-indicator strong { color: #f8fafc; }
+  .trap-pill { color: #f87171; background: rgba(239, 68, 68, 0.15); padding: 1px 4px; border-radius: 2px; }
+  .chest-pill { color: #fbbf24; background: rgba(245, 158, 11, 0.15); padding: 1px 4px; border-radius: 2px; }
+  .room-sensory {
+    margin: 0;
+    font-size: 0.65rem;
+    color: #cbd5e1;
+    font-style: italic;
+    line-height: 1.25;
+  }
+  .btn-clear-room {
+    align-self: flex-start;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #0284c7, #06b6d4);
+    border: 1px solid #38bdf8;
+    border-radius: 0.25rem;
+    color: #fff;
+    cursor: pointer;
+  }
+
+  /* Territory Wars */
+  .districts-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  .district-card {
+    padding: 0.5rem 0.6rem;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.375rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .district-card.martial-law {
+    border-color: #ef4444;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.25);
+  }
+  .district-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+  .district-header h4 { margin: 0.15rem 0 0 0; font-size: 0.78rem; color: #f8fafc; }
+  .faction-controller-badge {
+    font-size: 0.58rem;
+    font-weight: 800;
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+  .faction-controller-badge.syndicate { background: rgba(239, 68, 68, 0.25); color: #f87171; border: 1px solid #ef4444; }
+  .faction-controller-badge.watch { background: rgba(59, 130, 246, 0.25); color: #60a5fa; border: 1px solid #3b82f6; }
+  .faction-controller-badge.cult { background: rgba(168, 85, 247, 0.25); color: #c084fc; border: 1px solid #a855f7; }
+  .faction-controller-badge.contested { background: rgba(245, 158, 11, 0.25); color: #fbbf24; border: 1px solid #f59e0b; }
+  .tax-tag { font-size: 0.625rem; color: #94a3b8; }
+  .tax-tag strong { color: #fbbf24; }
+  .district-desc { margin: 0; font-size: 0.65rem; color: #cbd5e1; line-height: 1.2; }
+  .influence-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .influence-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.6rem;
+  }
+  .influence-item span { width: 110px; font-weight: 600; }
+  .influence-item.syndicate span { color: #f87171; }
+  .influence-item.watch span { color: #60a5fa; }
+  .influence-item.cult span { color: #c084fc; }
+  .influence-item .meter-bar {
+    flex: 1;
+    height: 4px;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .influence-item.syndicate .fill { height: 100%; background: #ef4444; }
+  .influence-item.watch .fill { height: 100%; background: #3b82f6; }
+  .influence-item.cult .fill { height: 100%; background: #a855f7; }
+  .martial-law-notice {
+    font-size: 0.625rem;
+    font-weight: 800;
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid #ef4444;
+    padding: 2px 5px;
+    border-radius: 3px;
+  }
+  .influence-actions {
+    display: flex;
+    gap: 0.3rem;
+  }
+  .btn-inf {
+    flex: 1;
+    padding: 0.25rem 0.35rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .btn-inf.syndicate { background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #fca5a5; }
+  .btn-inf.watch { background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; color: #93c5fd; }
+  .btn-inf.cult { background: rgba(168, 85, 247, 0.2); border: 1px solid #a855f7; color: #d8b4fe; }
+  .btn-inf:hover { filter: brightness(1.2); }
+
+  /* Forensic Mysteries */
+  .cases-selector {
+    display: flex;
+    gap: 0.3rem;
+    overflow-x: auto;
+  }
+  .case-btn {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.25rem;
+    color: #cbd5e1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+  }
+  .case-btn.active {
+    background: rgba(139, 92, 246, 0.25);
+    border-color: #8b5cf6;
+    color: #e9d5ff;
+  }
+  .case-status-badge {
+    font-size: 0.55rem;
+    padding: 1px 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.1);
+  }
+  .case-dossier {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .dossier-header h3 { margin: 0; font-size: 0.85rem; color: #f8fafc; }
+  .victim-tag { font-size: 0.65rem; color: #f87171; font-weight: 700; }
+  .case-summary { margin: 0.15rem 0 0 0; font-size: 0.68rem; color: #cbd5e1; line-height: 1.25; }
+  .section-title { margin: 0.2rem 0; font-size: 0.72rem; color: #c4b5fd; font-weight: 700; }
+  .clues-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem;
+  }
+  .clue-card {
+    padding: 0.35rem 0.45rem;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.375rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .clue-card.analyzed { border-color: #8b5cf6; }
+  .clue-header { display: flex; justify-content: space-between; align-items: center; }
+  .clue-header strong { font-size: 0.68rem; color: #f8fafc; }
+  .dusted-pill { font-size: 0.55rem; color: #a78bfa; background: rgba(139, 92, 246, 0.2); padding: 1px 3px; border-radius: 2px; }
+  .clue-desc { margin: 0; font-size: 0.6rem; color: #94a3b8; line-height: 1.2; }
+  .btn-dust-clue {
+    align-self: flex-start;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    background: rgba(139, 92, 246, 0.2);
+    border: 1px solid #8b5cf6;
+    border-radius: 0.25rem;
+    color: #ddd6fe;
+    cursor: pointer;
+  }
+  .suspects-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .suspect-card {
+    padding: 0.45rem 0.55rem;
+    background: rgba(30, 41, 59, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.375rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .suspect-card.confessed {
+    border-color: #10b981;
+    background: rgba(6, 78, 59, 0.2);
+  }
+  .suspect-header { display: flex; justify-content: space-between; align-items: center; }
+  .suspect-header strong { font-size: 0.72rem; color: #f8fafc; }
+  .suspect-role { font-size: 0.6rem; color: #94a3b8; }
+  .suspicion-tag { font-size: 0.6rem; color: #fbbf24; font-weight: 700; }
+  .suspect-alibi { margin: 0; font-size: 0.65rem; color: #cbd5e1; font-style: italic; }
+  .confession-banner { font-size: 0.625rem; font-weight: 800; color: #34d399; background: rgba(16, 185, 129, 0.2); padding: 2px 4px; border-radius: 2px; }
+  .suspect-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  .btn-interrogate,
+  .btn-trial-accuse,
+  .btn-accept-bribe {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    border-radius: 0.25rem;
+    cursor: pointer;
+  }
+  .btn-interrogate.pressure { background: rgba(245, 158, 11, 0.2); border: 1px solid #f59e0b; color: #fef08a; }
+  .btn-interrogate.evidence { background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; color: #93c5fd; }
+  .btn-trial-accuse { background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #fca5a5; }
+  .btn-accept-bribe { background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #6ee7b7; }
+
+  /* Voice Combat */
+  .resonance-pill {
+    display: inline-block;
+    margin-top: 0.2rem;
+    font-size: 0.625rem;
+    font-weight: 800;
+    color: #f472b6;
+    background: rgba(236, 72, 153, 0.2);
+    border: 1px solid #ec4899;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .spells-grid,
+  .squad-commands-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem;
+    margin-bottom: 0.4rem;
+  }
+  .btn-spell-chip,
+  .btn-squad-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.5rem;
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.375rem;
+    color: #f8fafc;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.12s;
+  }
+  .btn-spell-chip.fire { border-color: #ef4444; }
+  .btn-spell-chip.frost { border-color: #06b6d4; }
+  .btn-spell-chip.barrier { border-color: #3b82f6; }
+  .btn-spell-chip.shadow { border-color: #a855f7; }
+  .btn-spell-chip:hover,
+  .btn-squad-chip:hover {
+    filter: brightness(1.25);
+    transform: translateY(-1px);
+  }
+  .spell-icon,
+  .companion-avatar { font-size: 1.2rem; }
+  .spell-info,
+  .squad-cmd-info { flex: 1; min-width: 0; }
+  .spell-info strong,
+  .squad-cmd-info strong { display: block; font-size: 0.72rem; color: #f8fafc; }
+  .spell-sub,
+  .cmd-effect { display: block; font-size: 0.58rem; color: #94a3b8; line-height: 1.1; }
+  .custom-spell-row {
+    display: flex;
+    gap: 0.35rem;
+  }
+  .custom-spell-row input {
+    flex: 1;
+    background: #090d16;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 0.25rem;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.72rem;
+    color: #f8fafc;
+  }
+  .btn-cast-custom {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #ec4899, #8b5cf6);
+    border: 1px solid #f472b6;
+    border-radius: 0.25rem;
+    color: #fff;
+    cursor: pointer;
+  }
+  .btn-cast-custom:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

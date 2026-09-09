@@ -385,6 +385,65 @@ defmodule TePhoenixWeb.VoiceChannel do
   @impl true
   def handle_in("brawl_round_tick" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
 
+  # Next-Tier Systems & Feature Matrix
+  @impl true
+  def handle_in("get_feature_flags" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("toggle_feature_flag" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("set_all_feature_flags" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+
+  @impl true
+  def handle_in("get_safehouse_workshop" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("socket_workshop_rune" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("unsocket_workshop_rune" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("brew_workshop_concoction" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("claim_workshop_concoction" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("start_workshop_dispatch" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("claim_workshop_dispatch" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+
+  @impl true
+  def handle_in("generate_catacomb" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("get_catacomb_state" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("clear_catacomb_room" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+
+  @impl true
+  def handle_in("get_faction_territories" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("shift_faction_influence" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("trigger_turf_skirmish" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("toggle_district_martial_law" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+
+  @impl true
+  def handle_in("get_forensic_cases" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("get_forensic_case_details" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("inspect_crime_scene_clues" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("interrogate_case_suspect" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("hold_courtroom_trial" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("bribe_frame_suspect" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+
+  @impl true
+  def handle_in("cast_spoken_spell" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("issue_squad_voice_cmd" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+  @impl true
+  def handle_in("get_voice_combat_capabilities" = e, p, s), do: TePhoenixWeb.Game.EngineSystemsHandler.handle(e, p, s)
+
   @impl true
   def terminate(_reason, socket) do
     if socket.assigns[:char_id] do

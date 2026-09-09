@@ -16,3 +16,5 @@ opencode.json
 erl_crash.dump
 player/build/
 player/.svelte-kit/
+packages/*/dist/
+dist/

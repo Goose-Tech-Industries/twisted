@@ -550,6 +550,179 @@ export interface ColossusDefenseResult {
   message: string
 }
 
+export interface EngineFeatureFlagItem {
+  feature_key: string
+  label: string
+  description: string
+  category: string
+  is_enabled: boolean
+  updated_at?: string
+}
+
+export interface SafehouseWorkshopState {
+  property_id: number
+  runes: Array<{
+    id: number
+    item_id: string
+    item_name: string
+    rune_key: string
+    rune_name: string
+    rune_icon: string
+    bonus_stat: string
+    bonus_value: number
+    socket_slot: string
+  }>
+  available_runes: Array<{
+    name: string
+    icon: string
+    stat: string
+    value: number
+    description: string
+  }>
+  alembic: Array<{
+    id: number
+    recipe_key: string
+    concoction_name: string
+    icon: string
+    quantity: number
+    brew_seconds: number
+    status: string
+    seconds_remaining: number
+  }>
+  available_recipes: Array<{
+    name: string
+    icon: string
+    brew_seconds: number
+    description: string
+  }>
+  dispatches: Array<{
+    id: number
+    companion_id: number
+    companion_name: string
+    mission_type: string
+    mission_name: string
+    icon: string
+    status: string
+    seconds_remaining: number
+    reward_gold: number
+    reward_xp: number
+    reward_item_name: string
+  }>
+  available_missions: Array<{
+    name: string
+    icon: string
+    duration_seconds: number
+    gold: number
+    xp: number
+    item_name: string
+    item_key: string
+  }>
+  is_enabled?: boolean
+}
+
+export interface CatacombDungeonState {
+  id: number
+  name: string
+  theme: string
+  danger_level: string
+  floors_count: number
+  current_floor: number
+  status: string
+  prompt: string
+  rooms: Array<{
+    index: number
+    type: string
+    name: string
+    description: string
+    elevation: number
+    is_cleared: boolean
+    doors: number[]
+    occupants: Array<{ name: string; hp: number; max_hp: number; icon: string }>
+    loot: { gold?: number; xp?: number; item?: string }
+  }>
+  active_room_index: number
+  is_enabled?: boolean
+}
+
+export interface FactionDistrictItem {
+  key: string
+  name: string
+  controlling_faction: string
+  syndicate_pct: number
+  watch_pct: number
+  cult_pct: number
+  martial_law_active: boolean
+  tax_rate_pct: number
+  guard_type: string
+  updated_at?: string
+}
+
+export interface ForensicCaseItem {
+  id: number
+  title: string
+  case_code: string
+  status: string
+  crime_type: string
+  victim_name: string
+  location_hint: string
+  reward_gold: number
+  reward_xp: number
+  created_at?: string
+  is_enabled?: boolean
+}
+
+export interface ForensicCaseDetails {
+  id: number
+  title: string
+  case_code: string
+  status: string
+  crime_type: string
+  victim_name: string
+  location_hint: string
+  culprit_suspect_id: number
+  reward_gold: number
+  reward_xp: number
+  suspects: Array<{
+    id: number
+    suspect_id: number
+    name: string
+    role: string
+    icon: string
+    alibi: string
+    is_guilty: boolean
+    interrogated_count: number
+    confessed: boolean
+  }>
+  clues: Array<{
+    id: number
+    clue_key: string
+    name: string
+    icon: string
+    clue_text: string
+    is_discovered: boolean
+    points_to_suspect_id?: number
+  }>
+  is_enabled?: boolean
+}
+
+export interface VoiceCombatCapabilities {
+  spells: Array<{
+    name: string
+    element: string
+    base_damage?: number
+    base_shield?: number
+    icon: string
+    desc: string
+  }>
+  squad_commands: Array<{
+    companion: string
+    action: string
+    icon: string
+    shout: string
+  }>
+  is_enabled?: boolean
+}
+
 function createVoiceChatStore() {
   let inVoice = $state(false)
   let isMuted = $state(false)
@@ -619,6 +792,33 @@ function createVoiceChatStore() {
   let colossusTelegraph = $state<ColossusTelegraph | null>(null)
   let colossusDefenseResult = $state<ColossusDefenseResult | null>(null)
   let colossusLootResult = $state<any | null>(null)
+
+  // 5 Next-Tier RPG Systems & Master Feature Flags
+  let featureFlags = $state<EngineFeatureFlagItem[]>([])
+  let workshopState = $state<SafehouseWorkshopState | null>(null)
+  let lastWorkshopResult = $state<{ message: string; error?: string } | null>(null)
+  let activeCatacomb = $state<CatacombDungeonState | null>(null)
+  let lastCatacombResult = $state<{ message: string; error?: string } | null>(null)
+  let factionDistricts = $state<FactionDistrictItem[]>([])
+  let lastTerritoryResult = $state<{ message?: string; reason?: string } | null>(null)
+  let forensicCases = $state<ForensicCaseItem[]>([])
+  let activeCaseDetails = $state<ForensicCaseDetails | null>(null)
+  let lastForensicResult = $state<{ message: string; error?: string } | null>(null)
+  let lastVoiceCombatResult = $state<{
+    message: string
+    error?: string
+    spell_name?: string
+    phrase?: string
+    total_power?: number
+    resonance_mult?: number
+    bonus_pct?: number
+    element?: string
+    damage?: number
+    companion?: string
+    command?: string
+    shout?: string
+  } | null>(null)
+  let voiceCombatCaps = $state<VoiceCombatCapabilities | null>(null)
 
   let channel: Channel | null = null
   let proximityChannel: Channel | null = null
@@ -931,6 +1131,102 @@ function createVoiceChatStore() {
       gain.connect(ctx.destination)
       osc.start(now)
       osc.stop(now + 0.14)
+    } catch (_) {}
+  }
+
+  function playRuneForgeClink() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(1200, ctx.currentTime)
+      osc.frequency.exponentialRampToValueAtTime(3200, ctx.currentTime + 0.18)
+      gain.gain.setValueAtTime(0.18, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.4)
+    } catch (_) {}
+  }
+
+  function playAlembicBubble() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'triangle'
+      osc.frequency.setValueAtTime(240, ctx.currentTime)
+      osc.frequency.linearRampToValueAtTime(520, ctx.currentTime + 0.15)
+      gain.gain.setValueAtTime(0.12, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.25)
+    } catch (_) {}
+  }
+
+  function playCatacombDoorRumble() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const now = ctx.currentTime
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sawtooth'
+      osc.frequency.setValueAtTime(65, now)
+      osc.frequency.exponentialRampToValueAtTime(30, now + 0.9)
+      gain.gain.setValueAtTime(0.2, now)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.9)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(now)
+      osc.stop(now + 0.9)
+    } catch (_) {}
+  }
+
+  function playGavelStrike() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'square'
+      osc.frequency.setValueAtTime(110, ctx.currentTime)
+      osc.frequency.exponentialRampToValueAtTime(45, ctx.currentTime + 0.2)
+      gain.gain.setValueAtTime(0.25, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.35)
+    } catch (_) {}
+  }
+
+  function playIncantationResonance() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sawtooth'
+      osc.frequency.setValueAtTime(320, ctx.currentTime)
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.3)
+      gain.gain.setValueAtTime(0.16, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.5)
     } catch (_) {}
   }
 
@@ -1618,6 +1914,97 @@ function createVoiceChatStore() {
           pushLog('uile', '👑 Colossus Raid Cleared!', p.message, '👑')
         }
       })
+
+      // 5. Engine Feature Flags Matrix
+      ch.on('feature_flags_state', (p: any) => {
+        featureFlags = p.flags || []
+      })
+      ch.on('feature_flag_toggled', (p: any) => {
+        featureFlags = featureFlags.map(f => f.feature_key === p.feature_key ? { ...f, is_enabled: p.is_enabled } : f)
+      })
+
+      // 6. Safehouse Bastion Workshop
+      ch.on('safehouse_workshop_state', (p: any) => {
+        workshopState = p
+      })
+      ch.on('workshop_rune_result', (p: any) => {
+        lastWorkshopResult = p
+        if (p.bonus_stat) {
+          playRuneForgeClink()
+          pushLog('diplomacy', '⚒️ Runeforging Anvil', p.message, '✨')
+        }
+      })
+      ch.on('workshop_brew_result', (p: any) => {
+        lastWorkshopResult = p
+        if (p.finishes_at || p.item_name) {
+          playAlembicBubble()
+          pushLog('diplomacy', '🧪 Alchemy Alembic', p.message, '🧪')
+        }
+      })
+      ch.on('workshop_dispatch_result', (p: any) => {
+        lastWorkshopResult = p
+        if (p.reward_gold) {
+          playFenceCoinChime()
+          pushLog('companion', '💼 Smuggler Expedition', p.message, '💼')
+        }
+      })
+
+      // 7. Spoken Dungeon Catacombs On-Demand via Uile
+      ch.on('catacomb_dungeon_state', (p: any) => {
+        activeCatacomb = p
+      })
+      ch.on('catacomb_action_result', (p: any) => {
+        lastCatacombResult = p
+        playCatacombDoorRumble()
+        pushLog('uile', '🗝️ Catacomb Expedition', p.message, '💀')
+      })
+
+      // 8. Dynamic Faction Territory Wars & Turf Control
+      ch.on('faction_territories_state', (p: any) => {
+        factionDistricts = p.districts || []
+      })
+      ch.on('territory_shift_result', (p: any) => {
+        lastTerritoryResult = p
+        playTone(520, 'triangle', 0.2)
+        pushLog('diplomacy', '🚩 Territory Shift', p.reason || 'District influence updated.', '🚩')
+      })
+
+      // 9. Forensic Murder Mystery & Courtroom Trials
+      ch.on('forensic_cases_state', (p: any) => {
+        forensicCases = p.cases || []
+      })
+      ch.on('forensic_case_details', (p: any) => {
+        activeCaseDetails = p
+      })
+      ch.on('forensic_action_result', (p: any) => {
+        lastForensicResult = p
+        playTone(600, 'sine', 0.15)
+        pushLog('npc', '🔍 Forensic Investigation', p.message, '🔍')
+      })
+      ch.on('forensic_verdict_result', (p: any) => {
+        lastForensicResult = p
+        playGavelStrike()
+        pushLog('diplomacy', '⚖️ Courtroom Verdict', p.message, '⚖️')
+      })
+
+      // 10. Real-Time Spoken Spellcrafting & Squad Voice Tactics
+      ch.on('spoken_spell_result', (p: any) => {
+        lastVoiceCombatResult = p
+        if (p.total_power) {
+          playIncantationResonance()
+          pushLog('uile', `🔥 Incantation: ${p.spell_name}`, p.message, '🔥')
+        }
+      })
+      ch.on('squad_voice_cmd_result', (p: any) => {
+        lastVoiceCombatResult = p
+        if (p.shout) {
+          playTone(480, 'sine', 0.2)
+          pushLog('companion', `🗣️ ${p.companion}`, p.shout, '🛡️')
+        }
+      })
+      ch.on('voice_combat_capabilities', (p: any) => {
+        voiceCombatCaps = p
+      })
     }
     return ch
   }
@@ -1691,6 +2078,20 @@ function createVoiceChatStore() {
     get colossusTelegraph() { return colossusTelegraph },
     get colossusDefenseResult() { return colossusDefenseResult },
     get colossusLootResult() { return colossusLootResult },
+
+    // 5 Next-Tier RPG Systems & Master Feature Flags Getters
+    get featureFlags() { return featureFlags },
+    get workshopState() { return workshopState },
+    get lastWorkshopResult() { return lastWorkshopResult },
+    get activeCatacomb() { return activeCatacomb },
+    get lastCatacombResult() { return lastCatacombResult },
+    get factionDistricts() { return factionDistricts },
+    get lastTerritoryResult() { return lastTerritoryResult },
+    get forensicCases() { return forensicCases },
+    get activeCaseDetails() { return activeCaseDetails },
+    get lastForensicResult() { return lastForensicResult },
+    get lastVoiceCombatResult() { return lastVoiceCombatResult },
+    get voiceCombatCaps() { return voiceCombatCaps },
 
     setGodsEyeRadar(data: GodsEyeScanResult) {
       godsEyeRadar = data
@@ -2448,6 +2849,156 @@ function createVoiceChatStore() {
     },
     dismissColossusLoot() {
       colossusLootResult = null
+    },
+
+    // ── 1. Master Feature Flags Matrix ──
+    getFeatureFlags() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('get_feature_flags', {})
+    },
+    toggleFeatureFlag(featureKey: string, isEnabled: boolean) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('toggle_feature_flag', { feature_key: featureKey, is_enabled: isEnabled })
+    },
+    setAllFeatureFlags(flagsMap: Record<string, boolean>) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('set_all_feature_flags', { flags: flagsMap })
+    },
+
+    // ── 2. Safehouse Bastion Workshop ──
+    getSafehouseWorkshop(propertyId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('get_safehouse_workshop', { property_id: propertyId })
+    },
+    socketWorkshopRune(propertyId: number, itemId: string, itemName: string, runeKey: string, slot: string = 'primary') {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('socket_workshop_rune', { property_id: propertyId, item_id: itemId, item_name: itemName, rune_key: runeKey, slot })
+    },
+    unsocketWorkshopRune(propertyId: number, runeId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('unsocket_workshop_rune', { property_id: propertyId, rune_id: runeId })
+    },
+    brewWorkshopConcoction(propertyId: number, recipeKey: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('brew_workshop_concoction', { property_id: propertyId, recipe_key: recipeKey })
+    },
+    claimWorkshopConcoction(propertyId: number, brewId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('claim_workshop_concoction', { property_id: propertyId, brew_id: brewId })
+    },
+    startWorkshopDispatch(propertyId: number, companionId: number, companionName: string, missionType: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('start_workshop_dispatch', { property_id: propertyId, companion_id: companionId, companion_name: companionName, mission_type: missionType })
+    },
+    claimWorkshopDispatch(propertyId: number, dispatchId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('claim_workshop_dispatch', { property_id: propertyId, dispatch_id: dispatchId })
+    },
+    dismissWorkshopResult() {
+      lastWorkshopResult = null
+    },
+
+    // ── 3. Spoken Dungeon Catacombs On-Demand via Uile ──
+    generateCatacomb(prompt: string, theme: string = 'sunken_crypt', dangerLevel: string = 'hard') {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('generate_catacomb', { prompt, theme, danger_level: dangerLevel, creator_char_id: storedCharId })
+    },
+    getCatacombState(dungeonId?: number) {
+      const activeChan = channel || proximityChannel
+      const id = dungeonId || activeCatacomb?.id || 1
+      if (activeChan) activeChan.push('get_catacomb_state', { dungeon_id: id })
+    },
+    clearCatacombRoom(dungeonId: number, roomIndex: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('clear_catacomb_room', { dungeon_id: dungeonId, room_index: roomIndex })
+    },
+    dismissCatacombResult() {
+      lastCatacombResult = null
+    },
+
+    // ── 4. Dynamic Faction Territory Wars & District Turf Control ──
+    getFactionTerritories() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('get_faction_territories', {})
+    },
+    shiftFactionInfluence(districtKey: string, faction: string, delta: number, reason?: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('shift_faction_influence', { district_key: districtKey, faction, delta, reason })
+    },
+    triggerTurfSkirmish(districtKey: string, attackingFaction: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('trigger_turf_skirmish', { district_key: districtKey, attacking_faction: attackingFaction })
+    },
+    toggleDistrictMartialLaw(districtKey: string, isActive: boolean) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('toggle_district_martial_law', { district_key: districtKey, is_active: isActive })
+    },
+
+    // ── 5. Forensic Murder Mystery & Courtroom Trials ──
+    getForensicCases() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('get_forensic_cases', {})
+    },
+    getForensicCaseDetails(caseId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('get_forensic_case_details', { case_id: caseId })
+    },
+    inspectCrimeSceneClues(caseId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('inspect_crime_scene_clues', { case_id: caseId })
+    },
+    interrogateCaseSuspect(caseId: number, suspectId: number, tactic: string = 'pressure') {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('interrogate_case_suspect', { case_id: caseId, suspect_id: suspectId, tactic })
+    },
+    holdCourtroomTrial(caseId: number, accusedSuspectId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('hold_courtroom_trial', { case_id: caseId, accused_suspect_id: accusedSuspectId })
+    },
+    bribeFrameSuspect(caseId: number, frameSuspectId: number, bribeGold: number = 350) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('bribe_frame_suspect', { case_id: caseId, frame_suspect_id: frameSuspectId, bribe_gold: bribeGold })
+    },
+    dismissForensicResult() {
+      lastForensicResult = null
+    },
+
+    // ── 6. Real-Time Spoken Combat Spellcrafting & Squad Voice Tactics ──
+    castSpokenSpell(phrase: string, pitchHz: number = 220, amplitudeDb: number = -12.0) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('cast_spoken_spell', { phrase, pitch_hz: pitchHz, amplitude_db: amplitudeDb, char_id: storedCharId })
+    },
+    issueSquadVoiceCmd(command: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('issue_squad_voice_cmd', { command, char_id: storedCharId })
+    },
+    getVoiceCombatCapabilities() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('get_voice_combat_capabilities', {})
+    },
+    dismissVoiceCombatResult() {
+      lastVoiceCombatResult = null
+    },
+    dismissVoiceCombatAlert() {
+      lastVoiceCombatResult = null
+    },
+    dismissWorkshopAlert() {
+      lastWorkshopResult = null
+    },
+    dismissCatacombAlert() {
+      lastCatacombResult = null
+    },
+    dismissTerritoryAlert() {
+      lastTerritoryResult = null
+    },
+    dismissForensicAlert() {
+      lastForensicResult = null
+    },
+    castIncantation(phrase: string, amplitude: number = 0.85, pitchHz: number = 220) {
+      this.castSpokenSpell(phrase, pitchHz, (amplitude - 1.0) * 20)
+    },
+    issueSquadVoiceCommand(command: string) {
+      this.issueSquadVoiceCmd(command)
     },
 
     leave() {
