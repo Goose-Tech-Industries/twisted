@@ -8,8 +8,10 @@
     oninteract: () => void
     ontogglepanel: (panel: 'inventory' | 'chat') => void
     ontogglestance?: () => void
+    ontogglegodseye?: () => void
+    onpinggodseye?: () => void
   }
-  let { onmove, oninteract, ontogglepanel, ontogglestance }: Props = $props()
+  let { onmove, oninteract, ontogglepanel, ontogglestance, ontogglegodseye, onpinggodseye }: Props = $props()
 
   function handleKey(e: KeyboardEvent) {
     // Skip if user is typing in a form field.
@@ -31,6 +33,8 @@
       case ' ': case 'e': case 'E': oninteract(); e.preventDefault(); break
       case 'i': case 'I': ontogglepanel('inventory'); e.preventDefault(); break
       case 'Enter': case 't': case 'T': ontogglepanel('chat'); e.preventDefault(); break
+      case 'g': case 'G': ontogglegodseye?.(); e.preventDefault(); break
+      case 'p': case 'P': onpinggodseye?.(); e.preventDefault(); break
     }
   }
 

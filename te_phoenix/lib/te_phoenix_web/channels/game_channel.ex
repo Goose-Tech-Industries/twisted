@@ -23,7 +23,8 @@ defmodule TePhoenixWeb.GameChannel do
     AiHandler,
     LookupHandler,
     NpcHandler,
-    ShopHandler
+    ShopHandler,
+    GodsEyeHandler
   }
 
   # ══════════════════════════════════════════════════════════════════
@@ -173,6 +174,12 @@ defmodule TePhoenixWeb.GameChannel do
   def handle_in("event_choice", payload, socket) do
     NpcHandler.handle("event_choice", payload, socket)
   end
+
+  # ══════════════════════════════════════════════════════════════════
+  # GOD'S EYE SURVEILLANCE & SONAR RADAR
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("gods_eye_" <> _ = e, p, s), do: GodsEyeHandler.handle(e, p, s)
 
   # Catch-all
   def handle_in(event, _payload, socket) do

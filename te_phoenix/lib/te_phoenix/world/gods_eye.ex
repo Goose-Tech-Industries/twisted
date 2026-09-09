@@ -127,21 +127,21 @@ defmodule TePhoenix.World.GodsEye do
   @doc """
   Wiretaps a specific entity to retrieve real-time psychological state and telemetry.
   """
-  def wiretap_entity("npc", npc_id) do
+  def wiretap_entity(type, npc_id) when type in ["npc", :npc] do
     npc_id = to_int(npc_id, 1)
 
     case Repo.query("SELECT id, name, role, persona, faction, level, hp, max_hp, map_id, x, y, sovereign_soul_id FROM game_npcs WHERE id=?", [npc_id]) do
       {:ok, %{rows: [[id, name, role, persona, faction, level, hp, max_hp, map_id, x, y, soul_id]]}} ->
-        # Probe Sovereign Soul Engine if registered
+        # Probe Sovereign Soul Engine if registered, fallback to archetype subconscious telemetry
         soul_data =
           if soul_id || name do
             target = soul_id || String.downcase(name)
             case SovereignBridge.inspect_soul(target) do
-              {:ok, data} -> data
-              _ -> nil
+              {:ok, data} when is_map(data) -> data
+              _ -> fallback_soul(name, role, persona)
             end
           else
-            nil
+            fallback_soul(name, role, persona)
           end
 
         {:ok,
@@ -166,7 +166,7 @@ defmodule TePhoenix.World.GodsEye do
     end
   end
 
-  def wiretap_entity("player", char_id) do
+  def wiretap_entity(type, char_id) when type in ["player", :player] do
     char_id = to_int(char_id, 1)
 
     case Repo.query("SELECT id, level, gold, alignment FROM characters WHERE id=?", [char_id]) do
@@ -189,6 +189,113 @@ defmodule TePhoenix.World.GodsEye do
       _ ->
         {:error, :not_found}
     end
+  end
+
+  def wiretap_entity(_, _), do: {:error, :invalid_type}
+
+  @doc """
+  Dispatches a localized tactical sonar ping across a specific map around (center_x, center_y).
+  Detects all players and NPCs within acoustic range, calculates distance & bearing,
+  and broadcasts an acoustic ping wave to all entities on that map.
+  """
+  def sonar_ping_map(map_id, center_x, center_y, radius \\ 15) do
+    map_id = to_int(map_id, 1)
+    center_x = to_int(center_x, 10)
+    center_y = to_int(center_y, 10)
+    radius = to_int(radius, 15)
+
+    # 1. Gather all players on this map
+    players =
+      try do
+        PlayerRegistry.on_map(map_id)
+      rescue
+        _ -> []
+      end
+      |> Enum.map(fn p ->
+        dx = (p.x || 10) - center_x
+        dy = (p.y || 10) - center_y
+        dist = :math.sqrt(dx * dx + dy * dy) |> Float.round(1)
+        bearing = calculate_bearing(dx, dy)
+
+        %{
+          id: p.char_id,
+          name: p.name,
+          type: :player,
+          x: p.x || 10,
+          y: p.y || 10,
+          level: p.level || 1,
+          hp: 100,
+          max_hp: 100,
+          distance: dist,
+          bearing: bearing,
+          in_range: dist <= radius,
+          threat_level: if(dist <= 3, do: :high, else: :ally)
+        }
+      end)
+
+    # 2. Gather active NPCs on this map
+    npcs =
+      case Repo.query("SELECT id, name, role, faction, level, hp, max_hp, x, y, is_hostile, sovereign_soul_id FROM game_npcs WHERE map_id=? AND is_active=1 LIMIT 60", [map_id]) do
+        {:ok, %{rows: rows}} ->
+          Enum.map(rows, fn [id, name, role, faction, level, hp, max_hp, x, y, is_hostile, soul_id] ->
+            x = x || 10
+            y = y || 10
+            dx = x - center_x
+            dy = y - center_y
+            dist = :math.sqrt(dx * dx + dy * dy) |> Float.round(1)
+            bearing = calculate_bearing(dx, dy)
+            type = if is_hostile == 1 or role == "boss", do: :enemy, else: :npc
+
+            threat_level =
+              cond do
+                role == "boss" -> :apex
+                is_hostile == 1 && dist <= 5 -> :high
+                is_hostile == 1 -> :medium
+                true -> :low
+              end
+
+            %{
+              id: id,
+              name: name,
+              role: role || "villager",
+              faction: faction || "neutral",
+              level: level || 1,
+              hp: hp || 100,
+              max_hp: max_hp || 100,
+              type: type,
+              x: x,
+              y: y,
+              soul_id: soul_id,
+              distance: dist,
+              bearing: bearing,
+              in_range: dist <= radius,
+              threat_level: threat_level
+            }
+          end)
+
+        _ ->
+          []
+      end
+
+    blips = (players ++ npcs) |> Enum.filter(fn b -> b.in_range end) |> Enum.sort_by(& &1.distance)
+
+    ping_payload = %{
+      map_id: map_id,
+      origin: %{x: center_x, y: center_y},
+      radius: radius,
+      blips: blips,
+      total_detected: length(blips),
+      threat_count: Enum.count(blips, fn b -> b.threat_level in [:high, :apex] end),
+      timestamp: System.system_time(:second)
+    }
+
+    try do
+      TePhoenixWeb.Endpoint.broadcast("map:#{map_id}", "gods_eye_sonar_ping", ping_payload)
+    rescue
+      _ -> :ok
+    end
+
+    {:ok, ping_payload}
   end
 
   # ── Orbital Interventions (Point-and-Click Reality Warping) ────────
@@ -306,6 +413,54 @@ defmodule TePhoenix.World.GodsEye do
       end)
 
     player_threats ++ boss_threats
+  end
+
+  defp calculate_bearing(dx, dy) do
+    # Calculate compass bearing (0-360 deg, 0 = North, 90 = East, 180 = South, 270 = West)
+    angle_rad = :math.atan2(dx, -dy)
+    deg = round(angle_rad * (180.0 / :math.pi()))
+    if deg < 0, do: deg + 360, else: deg
+  end
+
+  defp fallback_soul(name, role, persona) do
+    role_lower = String.downcase(role || "")
+    persona_lower = String.downcase(persona || "")
+
+    {conf, stress, anger, grat, attachment} =
+      cond do
+        String.contains?(role_lower, "boss") or String.contains?(persona_lower, "warlord") ->
+          {88, 30, 75, 10, "avoidant"}
+
+        String.contains?(role_lower, "cutpurse") or String.contains?(role_lower, "thief") or String.contains?(role_lower, "stalker") ->
+          {65, 70, 45, 15, "fearful"}
+
+        String.contains?(role_lower, "guard") or String.contains?(role_lower, "sentry") ->
+          {75, 40, 30, 50, "secure"}
+
+        String.contains?(role_lower, "merchant") or String.contains?(role_lower, "innkeeper") ->
+          {80, 25, 10, 85, "secure"}
+
+        true ->
+          {60, 35, 20, 60, "anxious"}
+      end
+
+    %{
+      "character_name" => name,
+      "emotional_state" => %{
+        "confidence" => conf,
+        "stress" => stress,
+        "anger" => anger,
+        "gratitude" => grat
+      },
+      "soul_profile" => %{
+        "attachment_style" => attachment,
+        "motto" => persona || "Endure the trials of the Ashveil."
+      },
+      "active_thoughts" => [
+        "Assessing immediate perimeter threats...",
+        "Monitoring nearby movement along the cobblestones."
+      ]
+    }
   end
 
   defp to_int(n, _default) when is_integer(n), do: n

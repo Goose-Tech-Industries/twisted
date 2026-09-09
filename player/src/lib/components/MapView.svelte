@@ -8,6 +8,7 @@
   import MapRendererWorker from '$lib/render/map-renderer.worker?worker'
   import { debug } from '$stores/debug.svelte'
   import { visualFx } from '$stores/visual_fx.svelte'
+  import { voiceChat } from '$stores/voice_chat.svelte'
 
   debug.register('Map render', 'stub')
 
@@ -439,6 +440,13 @@
     if (d && Date.now() - d.ts < 5000) return d
     return null
   })
+
+  let activeSonar = $derived.by(() => {
+    if (voiceChat.lastSonarPingTs && Date.now() - voiceChat.lastSonarPingTs < 2600) {
+      return voiceChat.godsEyeSonarResult
+    }
+    return null
+  })
 </script>
 
 <div class="map-frame">
@@ -470,6 +478,18 @@
     <div class="supply-drop-fx">
       <div class="drop-icon">{activeDrop.icon || '🎁'}</div>
       <div class="drop-label">SUPPLY BEACON ({activeDrop.x}, {activeDrop.y})</div>
+    </div>
+  {/if}
+
+  {#if activeSonar}
+    <div class="sonar-pulse-fx">
+      <div class="sonar-ring r1"></div>
+      <div class="sonar-ring r2"></div>
+      <div class="sonar-ring r3"></div>
+      <div class="sonar-sweep-line"></div>
+      <div class="sonar-hud-badge">
+        👁️ SONAR PING ({activeSonar.total_detected} BLIPS ACQUIRED)
+      </div>
     </div>
   {/if}
 
@@ -622,5 +642,58 @@
   @keyframes bounce-float {
     0%, 100% { transform: translate(-50%, -50%); }
     50% { transform: translate(-50%, -60%); }
+  }
+  .sonar-pulse-fx {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 24;
+    overflow: hidden;
+  }
+  .sonar-ring {
+    position: absolute;
+    border-radius: 50%;
+    border: 2px solid rgba(6, 182, 212, 0.85);
+    box-shadow: 0 0 25px rgba(6, 182, 212, 0.45);
+    animation: sonar-expand 2.5s cubic-bezier(0.1, 0.8, 0.3, 1) forwards;
+  }
+  .sonar-ring.r1 { animation-delay: 0s; }
+  .sonar-ring.r2 { animation-delay: 0.35s; }
+  .sonar-ring.r3 { animation-delay: 0.7s; }
+  .sonar-sweep-line {
+    position: absolute;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.9), transparent);
+    animation: sonar-line-sweep 2.5s ease-out forwards;
+  }
+  .sonar-hud-badge {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(8, 20, 32, 0.9);
+    border: 1px solid #06b6d4;
+    color: #67e8f9;
+    font-size: 0.72rem;
+    font-weight: 800;
+    padding: 4px 14px;
+    border-radius: 9999px;
+    letter-spacing: 0.08em;
+    font-family: monospace;
+    box-shadow: 0 0 16px rgba(6, 182, 212, 0.5);
+    animation: flash-fade 2.5s ease-out forwards;
+  }
+  @keyframes sonar-expand {
+    0% { width: 10px; height: 10px; opacity: 1; transform: scale(0.1); }
+    80% { opacity: 0.85; }
+    100% { width: 850px; height: 850px; opacity: 0; transform: scale(1.1); }
+  }
+  @keyframes sonar-line-sweep {
+    0% { transform: translateY(-300px); opacity: 0.9; }
+    100% { transform: translateY(300px); opacity: 0; }
   }
 </style>

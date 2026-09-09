@@ -43,6 +43,23 @@ defmodule TePhoenix.World.GodsEyeTest do
       assert result.action == :orbital_whisper
       assert result.message == "Uile sees all."
     end
+
+    test "sonar_ping_map emits localized tactical sonar sweep" do
+      {:ok, ping} = GodsEye.sonar_ping_map(1, 10, 10, 25)
+
+      assert ping.map_id == 1
+      assert ping.origin == %{x: 10, y: 10}
+      assert ping.radius == 25
+      assert is_list(ping.blips)
+      assert is_integer(ping.total_detected)
+      assert is_integer(ping.threat_count)
+    end
+
+    test "wiretap_entity accepts string or atom type" do
+      assert match?({:error, _}, GodsEye.wiretap_entity(:npc, 999_999))
+      assert match?({:error, _}, GodsEye.wiretap_entity("npc", 999_999))
+      assert match?({:error, :invalid_type}, GodsEye.wiretap_entity(:alien, 1))
+    end
   end
 
   describe "Autonomous Living Society" do

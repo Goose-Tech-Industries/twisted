@@ -229,6 +229,21 @@
       portrait: '👁️'
     })
   })
+  game.on<any>('gods_eye_scan_result', (p) => {
+    voiceChat.setGodsEyeRadar(p)
+  })
+  game.on<any>('gods_eye_sonar_result', (p) => {
+    voiceChat.setGodsEyeSonarResult(p)
+  })
+  game.on<any>('gods_eye_wiretap_result', (p) => {
+    voiceChat.setGodsEyeWiretap(p)
+  })
+  game.on<{ detail?: string }>('gods_eye_strike_result', (p) => {
+    voiceChat.onGodsEyeStrike(p)
+  })
+  game.on<{ detail?: string }>('gods_eye_supply_result', (p) => {
+    voiceChat.onGodsEyeSupply(p)
+  })
 
   // ── Event queue runner ─────────────────────────────────────────
   // Phoenix streams cinematic actions (NPC dialogue, shop opens, scripted
@@ -539,6 +554,8 @@
   oninteract={() => void game.push('interact', {})}
   ontogglepanel={hotkeyToggle}
   ontogglestance={cycleLocomotionStance}
+  ontogglegodseye={() => voiceChat.toggleGodsEye()}
+  onpinggodseye={() => voiceChat.pingGodsEyeSonar(15)}
 />
 
 <div class="play-shell">

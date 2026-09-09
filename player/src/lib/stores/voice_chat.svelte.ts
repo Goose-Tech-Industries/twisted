@@ -374,6 +374,77 @@ export interface TavernBrawlState {
   can_defenestrate: boolean
 }
 
+export interface GodsEyeEntity {
+  id: number
+  name: string
+  type: 'player' | 'npc' | 'enemy'
+  x: number
+  y: number
+  map_id?: number
+  level?: number
+  hp: number
+  max_hp: number
+  role?: string
+  faction?: string
+  soul_id?: string
+  distance?: number
+  bearing?: number
+  threat_level?: 'low' | 'medium' | 'high' | 'apex' | 'ally'
+}
+
+export interface GodsEyeScanResult {
+  players: GodsEyeEntity[]
+  npcs: GodsEyeEntity[]
+  maps: Array<{ id: number; name: string; width: number; height: number }>
+  critical_events: Array<{ severity: string; target: string; coords: string; map_id: number; message: string }>
+  total_tracked: number
+  timestamp: number
+}
+
+export interface GodsEyeSonarResult {
+  map_id: number
+  origin: { x: number; y: number }
+  radius: number
+  blips: GodsEyeEntity[]
+  total_detected: number
+  threat_count: number
+  timestamp: number
+}
+
+export interface GodsEyeWiretap {
+  id: number
+  type: 'player' | 'npc'
+  name: string
+  role?: string
+  persona?: string
+  faction?: string
+  level: number
+  hp: number
+  max_hp: number
+  coords: [number, number]
+  map_id: number
+  online?: boolean
+  soul_id?: string
+  soul?: {
+    character_name?: string
+    emotional_state?: {
+      confidence: number
+      stress: number
+      anger: number
+      gratitude: number
+      [key: string]: unknown
+    }
+    soul_profile?: {
+      attachment_style?: string
+      motto?: string
+      [key: string]: unknown
+    }
+    active_thoughts?: string[]
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
 function createVoiceChatStore() {
   let inVoice = $state(false)
   let isMuted = $state(false)
@@ -412,6 +483,17 @@ function createVoiceChatStore() {
   let activeBrawl = $state<TavernBrawlState | null>(null)
   let lastBrawlAction = $state<any | null>(null)
   let tacticalLog = $state<TacticalLogItem[]>([])
+
+  // God's Eye Surveillance Grid & Tactical Sonar Matrix
+  let godsEyeActive = $state(false)
+  let godsEyeRadar = $state<GodsEyeScanResult | null>(null)
+  let godsEyeSonarResult = $state<GodsEyeSonarResult | null>(null)
+  let godsEyeWiretap = $state<GodsEyeWiretap | null>(null)
+  let isScanningGodsEye = $state(false)
+  let lastSonarPingTs = $state(0)
+  let lastOrbitalStrikeResult = $state<unknown>(null)
+  let lastSupplyDropResult = $state<unknown>(null)
+  let lastWhisperResult = $state<unknown>(null)
 
   let channel: Channel | null = null
   let proximityChannel: Channel | null = null
@@ -570,6 +652,58 @@ function createVoiceChatStore() {
         osc.start(ctx.currentTime + idx * 0.05)
         osc.stop(ctx.currentTime + 1.5)
       })
+    } catch (_) {}
+  }
+
+  function playSonarPing(freq = 1400, duration = 0.75) {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      const filter = ctx.createBiquadFilter()
+
+      filter.type = 'bandpass'
+      filter.frequency.value = freq
+      filter.Q.value = 5.0
+
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(freq, ctx.currentTime)
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.45, ctx.currentTime + duration)
+
+      gain.gain.setValueAtTime(0.14, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration)
+
+      osc.connect(filter)
+      filter.connect(gain)
+      gain.connect(ctx.destination)
+
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + duration)
+    } catch (_) {}
+  }
+
+  function playOrbitalBoom() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+
+      osc.type = 'sawtooth'
+      osc.frequency.setValueAtTime(140, ctx.currentTime)
+      osc.frequency.exponentialRampToValueAtTime(25, ctx.currentTime + 1.2)
+
+      gain.gain.setValueAtTime(0.25, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2)
+
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 1.2)
     } catch (_) {}
   }
 
@@ -1080,6 +1214,14 @@ function createVoiceChatStore() {
         playTone(110, 'sawtooth', 0.45)
       })
 
+      // 29. God's Eye localized sonar ping broadcast
+      proxChan.on('gods_eye_sonar_ping', (p: any) => {
+        godsEyeSonarResult = p
+        playSonarPing(1400, 0.75)
+        lastSonarPingTs = Date.now()
+        pushLog('uile', 'Tactical Sonar Sweep', `${p.total_detected} entities acquired across sector (${p.threat_count} threats detected).`, '👁️')
+      })
+
       proxChan.join()
         .receive('ok', () => {
           proximityChannel = proxChan
@@ -1088,6 +1230,45 @@ function createVoiceChatStore() {
           console.warn('[VoiceChat] Proximity channel join failed:', err)
         })
     }
+  }
+
+  function getGameChannel(): Channel | null {
+    const ch = connection.channel('game:lobby')
+    if (ch && !(ch as unknown as { _godsEyeBound?: boolean })._godsEyeBound) {
+      ;(ch as unknown as { _godsEyeBound?: boolean })._godsEyeBound = true
+      ch.on('gods_eye_scan_result', (p: any) => {
+        godsEyeRadar = p
+        isScanningGodsEye = false
+      })
+      ch.on('gods_eye_sonar_result', (p: any) => {
+        godsEyeSonarResult = p
+        playSonarPing(1400, 0.75)
+        lastSonarPingTs = Date.now()
+        pushLog('uile', 'Sonar Echo Received', `${p.total_detected} blips acquired (${p.threat_count} hostiles in range).`, '👁️')
+      })
+      ch.on('gods_eye_wiretap_result', (p: any) => {
+        if (!p.error) {
+          godsEyeWiretap = p
+          playSonarPing(1800, 0.4)
+          pushLog('uile', `Signal Locked: ${p.name}`, `Wiretapping conscious thoughts & bio-telemetry.`, '📡')
+        }
+      })
+      ch.on('gods_eye_strike_result', (p: any) => {
+        lastOrbitalStrikeResult = p
+        playOrbitalBoom()
+        pushLog('uile', '⚡ Orbital Strike', p.detail || 'Orbital beam deployed.', '⚡')
+      })
+      ch.on('gods_eye_supply_result', (p: any) => {
+        lastSupplyDropResult = p
+        playSonarPing(980, 0.5)
+        pushLog('uile', '🎁 Supply Drop', p.detail || 'Celestial cache deployed.', '🎁')
+      })
+      ch.on('gods_eye_whisper_result', (p: any) => {
+        lastWhisperResult = p
+        pushLog('uile', '👁️ Omnipresent Whisper', `Whisper transmitted.`, '👁️')
+      })
+    }
+    return ch
   }
 
   return {
@@ -1128,6 +1309,110 @@ function createVoiceChatStore() {
     get activeBrawl() { return activeBrawl },
     get lastBrawlAction() { return lastBrawlAction },
     get tacticalLog() { return tacticalLog },
+
+    // God's Eye Getters
+    get godsEyeActive() { return godsEyeActive },
+    get godsEyeRadar() { return godsEyeRadar },
+    get godsEyeSonarResult() { return godsEyeSonarResult },
+    get godsEyeWiretap() { return godsEyeWiretap },
+    get isScanningGodsEye() { return isScanningGodsEye },
+    get lastSonarPingTs() { return lastSonarPingTs },
+    get lastOrbitalStrikeResult() { return lastOrbitalStrikeResult },
+    get lastSupplyDropResult() { return lastSupplyDropResult },
+    get lastWhisperResult() { return lastWhisperResult },
+
+    setGodsEyeRadar(data: GodsEyeScanResult) {
+      godsEyeRadar = data
+      isScanningGodsEye = false
+    },
+
+    setGodsEyeSonarResult(data: GodsEyeSonarResult) {
+      godsEyeSonarResult = data
+      playSonarPing(1400, 0.75)
+      lastSonarPingTs = Date.now()
+    },
+
+    setGodsEyeWiretap(data: GodsEyeWiretap) {
+      godsEyeWiretap = data
+      playSonarPing(1800, 0.4)
+    },
+
+    onGodsEyeStrike(res: { detail?: string }) {
+      lastOrbitalStrikeResult = res
+      playOrbitalBoom()
+      if (res.detail) pushLog('uile', '⚡ Orbital Strike Impact', res.detail, '⚡')
+    },
+
+    onGodsEyeSupply(res: { detail?: string }) {
+      lastSupplyDropResult = res
+      playSonarPing(980, 0.5)
+      if (res.detail) pushLog('uile', '🎁 Supply Drop Deployed', res.detail, '🎁')
+    },
+
+    toggleGodsEye(open?: boolean) {
+      godsEyeActive = open !== undefined ? open : !godsEyeActive
+      if (godsEyeActive) {
+        playSonarPing(1600, 0.6)
+        this.scanGodsEye()
+        this.pingGodsEyeSonar(15)
+      }
+    },
+
+    scanGodsEye() {
+      isScanningGodsEye = true
+      const ch = getGameChannel()
+      if (ch) {
+        ch.push('gods_eye_scan', {})
+      }
+    },
+
+    pingGodsEyeSonar(radius = 15) {
+      const ch = getGameChannel()
+      const mapId = character.active?.map_id || currentProximityMapId || 1
+      const x = character.active?.x || 10
+      const y = character.active?.y || 10
+
+      playSonarPing(1400, 0.75)
+      lastSonarPingTs = Date.now()
+
+      if (ch) {
+        ch.push('gods_eye_sonar_ping', { map_id: mapId, x, y, radius })
+      }
+    },
+
+    wiretapEntity(type: 'player' | 'npc', id: number) {
+      const ch = getGameChannel()
+      if (ch) {
+        ch.push('gods_eye_wiretap', { type, id })
+      }
+    },
+
+    requestOrbitalStrike(mapId: number, x: number, y: number, damage = 750) {
+      const ch = getGameChannel()
+      playOrbitalBoom()
+      if (ch) {
+        ch.push('gods_eye_orbital_strike', { map_id: mapId, x, y, damage })
+      }
+    },
+
+    requestSupplyDrop(mapId: number, x: number, y: number) {
+      const ch = getGameChannel()
+      playSonarPing(980, 0.5)
+      if (ch) {
+        ch.push('gods_eye_supply_drop', { map_id: mapId, x, y })
+      }
+    },
+
+    sendOrbitalWhisper(targetCharId: number, message: string) {
+      const ch = getGameChannel()
+      if (ch) {
+        ch.push('gods_eye_whisper', { target_char_id: targetCharId, message })
+      }
+    },
+
+    dismissGodsEyeWiretap() {
+      godsEyeWiretap = null
+    },
 
     attemptDeescalation(targetNpcId: number, approach: string) {
       const activeChan = channel || proximityChannel

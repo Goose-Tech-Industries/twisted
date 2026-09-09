@@ -19,6 +19,7 @@
   let showUnderworldDrawer = $state(false)
   let defenestrateTargetId = $state(1)
   let defenestrateTargetName = $state('Rival Cutpurse')
+  let godsEyeWhisperMsg = $state('')
 
   onMount(() => {
     void social.loadParty()
@@ -753,7 +754,322 @@
       <span>🏡 Real Estate & Deeds ({voiceChat.propertiesList.length || '3'})</span>
       <span>{showPropertiesModal ? '▲' : '▼'}</span>
     </button>
+    <button
+      type="button"
+      class="btn-hub godseye"
+      class:active={voiceChat.godsEyeActive}
+      onclick={() => voiceChat.toggleGodsEye()}
+      title="Toggle God's Eye Surveillance Grid & Tactical Sonar Matrix (Hotkeys: G to toggle, P to ping sonar)"
+    >
+      <span>👁️ God's Eye {#if voiceChat.godsEyeSonarResult?.threat_count}<span class="alert-dot red"></span>{/if}</span>
+      <span>{voiceChat.godsEyeActive ? '▲' : '▼'}</span>
+    </button>
   </div>
+
+  <!-- God's Eye Surveillance Grid & Tactical Sonar Deck -->
+  {#if voiceChat.godsEyeActive}
+    <div class="godseye-deck">
+      <div class="godseye-header">
+        <div class="godseye-brand">
+          <span class="godseye-eye-icon">👁️</span>
+          <div>
+            <div class="godseye-title">
+              <strong>AN TSÚIL UILE // GOD'S EYE</strong>
+              <span class="godseye-badge">ACTIVE SONAR RADAR</span>
+            </div>
+            <p class="godseye-sub">Acoustic Sonar Matrix • Conscious Soul Wiretap • Ramsey Threat Scanner • Orbital Interventions</p>
+          </div>
+        </div>
+        <div class="godseye-header-actions">
+          <button
+            type="button"
+            class="btn-sonar-ping"
+            onclick={() => voiceChat.pingGodsEyeSonar(15)}
+            title="Dispatch 15m localized acoustic sonar ping (Hotkey: P)"
+          >
+            📡 Ping Sonar (15m)
+          </button>
+          <button
+            type="button"
+            class="btn-sonar-scan"
+            onclick={() => voiceChat.scanGodsEye()}
+            title="Perform full realm radar scan"
+          >
+            🔄 Refresh Scan
+          </button>
+          <button
+            type="button"
+            class="btn-close-godseye"
+            onclick={() => voiceChat.toggleGodsEye(false)}
+            title="Close God's Eye"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <!-- Radar Scope Viewport + Target Wiretap -->
+      <div class="godseye-viewport-row">
+        <!-- Circular Sonar Radar Scope -->
+        <div class="radar-scope-container">
+          <div class="radar-scope">
+            <!-- Concentric acoustic distance circles -->
+            <div class="range-ring r-15m" title="15m Sonar Range Limit"></div>
+            <div class="range-ring r-10m" title="10m Range"></div>
+            <div class="range-ring r-5m" title="5m Proximity"></div>
+
+            <!-- Rotating Radar Sweep Beam -->
+            <div class="radar-sweep-beam"></div>
+
+            <!-- Compass markers -->
+            <span class="compass-mark n">N</span>
+            <span class="compass-mark e">E</span>
+            <span class="compass-mark s">S</span>
+            <span class="compass-mark w">W</span>
+
+            <!-- Center Origin (Player) -->
+            <div class="player-origin-blip" title="Self (Ping Origin)">
+              <div class="origin-ping-dot"></div>
+            </div>
+
+            <!-- Detected Blips on Sonar -->
+            {#if voiceChat.godsEyeSonarResult?.blips}
+              {#each voiceChat.godsEyeSonarResult.blips as blip}
+                {@const dist = blip.distance ?? 5}
+                {@const bearing = blip.bearing ?? 0}
+                {@const rad = (bearing - 90) * (Math.PI / 180)}
+                {@const radiusPct = Math.min(46, Math.max(8, (dist / 15) * 44))}
+                {@const left = 50 + radiusPct * Math.cos(rad)}
+                {@const top = 50 + radiusPct * Math.sin(rad)}
+                {@const isSelected = voiceChat.godsEyeWiretap?.id === blip.id}
+                <button
+                  type="button"
+                  class="radar-blip {blip.type}"
+                  class:selected={isSelected}
+                  class:apex={blip.threat_level === 'apex'}
+                  style="left: {left}%; top: {top}%;"
+                  onclick={() => voiceChat.wiretapEntity(blip.type === 'player' ? 'player' : 'npc', blip.id)}
+                  title="{blip.name} ({blip.role || blip.type}) - {blip.distance}m away [{blip.threat_level}]"
+                >
+                  <span class="blip-core"></span>
+                  <span class="blip-label">{blip.name}</span>
+                </button>
+              {/each}
+            {:else if voiceChat.godsEyeRadar?.players || voiceChat.godsEyeRadar?.npcs}
+              {#each (voiceChat.godsEyeRadar.players || []).concat(voiceChat.godsEyeRadar.npcs || []).slice(0, 15) as ent, i}
+                {@const angle = (i / 15) * 2 * Math.PI}
+                {@const left = 50 + 35 * Math.cos(angle)}
+                {@const top = 50 + 35 * Math.sin(angle)}
+                <button
+                  type="button"
+                  class="radar-blip {ent.type}"
+                  style="left: {left}%; top: {top}%;"
+                  onclick={() => voiceChat.wiretapEntity(ent.type === 'player' ? 'player' : 'npc', ent.id)}
+                  title="{ent.name} ({ent.role || ent.type})"
+                >
+                  <span class="blip-core"></span>
+                  <span class="blip-label">{ent.name}</span>
+                </button>
+              {/each}
+            {/if}
+          </div>
+
+          <!-- Radar Legend & Quick Stats -->
+          <div class="radar-legend">
+            <span class="legend-item player"><span class="legend-dot"></span>Ally</span>
+            <span class="legend-item npc"><span class="legend-dot"></span>Neutral</span>
+            <span class="legend-item enemy"><span class="legend-dot"></span>Hostile / Boss</span>
+            <span class="radar-metric">
+              Tracked: <strong>{voiceChat.godsEyeSonarResult?.total_detected ?? voiceChat.godsEyeRadar?.total_tracked ?? 0}</strong>
+            </span>
+          </div>
+        </div>
+
+        <!-- Right Side: Conscious Soul Wiretap Dossier -->
+        <div class="wiretap-dossier">
+          {#if voiceChat.godsEyeWiretap}
+            <div class="dossier-card">
+              <div class="dossier-header">
+                <span class="dossier-lock">📡 LOCKED // {voiceChat.godsEyeWiretap.type.toUpperCase()}</span>
+                <button
+                  type="button"
+                  class="btn-dossier-dismiss"
+                  onclick={() => voiceChat.dismissGodsEyeWiretap()}
+                  title="Unlock signal"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div class="dossier-entity-info">
+                <div class="dossier-name-row">
+                  <h4 class="dossier-name">{voiceChat.godsEyeWiretap.name}</h4>
+                  <span class="dossier-coords">Coords: ({voiceChat.godsEyeWiretap.coords?.[0] ?? 10}, {voiceChat.godsEyeWiretap.coords?.[1] ?? 10})</span>
+                </div>
+                <div class="dossier-meta">
+                  <span>Level {voiceChat.godsEyeWiretap.level}</span>
+                  {#if voiceChat.godsEyeWiretap.role}
+                    <span>• {voiceChat.godsEyeWiretap.role}</span>
+                  {/if}
+                  {#if voiceChat.godsEyeWiretap.faction}
+                    <span>• {voiceChat.godsEyeWiretap.faction}</span>
+                  {/if}
+                </div>
+              </div>
+
+              <!-- Subconscious Telemetry -->
+              <div class="subconscious-box">
+                <div class="subconscious-title">
+                  <span>🧠 Subconscious Telemetry</span>
+                  <span class="sse-status">Sovereign Soul Sync</span>
+                </div>
+
+                {#if voiceChat.godsEyeWiretap.soul?.emotional_state}
+                  {@const emo = voiceChat.godsEyeWiretap.soul.emotional_state}
+                  <div class="emotion-meter-grid">
+                    <div class="meter-col">
+                      <div class="meter-label">
+                        <span>Confidence</span>
+                        <strong>{emo.confidence ?? 70}%</strong>
+                      </div>
+                      <div class="meter-track">
+                        <div class="meter-fill conf" style="width: {emo.confidence ?? 70}%"></div>
+                      </div>
+                    </div>
+
+                    <div class="meter-col">
+                      <div class="meter-label">
+                        <span>Stress</span>
+                        <strong>{emo.stress ?? 30}%</strong>
+                      </div>
+                      <div class="meter-track">
+                        <div class="meter-fill stress" style="width: {emo.stress ?? 30}%"></div>
+                      </div>
+                    </div>
+
+                    <div class="meter-col">
+                      <div class="meter-label">
+                        <span>Anger</span>
+                        <strong>{emo.anger ?? 20}%</strong>
+                      </div>
+                      <div class="meter-track">
+                        <div class="meter-fill anger" style="width: {emo.anger ?? 20}%"></div>
+                      </div>
+                    </div>
+
+                    <div class="meter-col">
+                      <div class="meter-label">
+                        <span>Gratitude</span>
+                        <strong>{emo.gratitude ?? 50}%</strong>
+                      </div>
+                      <div class="meter-track">
+                        <div class="meter-fill grat" style="width: {emo.gratitude ?? 50}%"></div>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+
+                {#if voiceChat.godsEyeWiretap.soul?.soul_profile}
+                  {@const prof = voiceChat.godsEyeWiretap.soul.soul_profile}
+                  <div class="personality-row">
+                    <span class="pers-badge">Attachment: {prof.attachment_style || 'Secure'}</span>
+                    {#if prof.motto}
+                      <span class="pers-motto">"{prof.motto}"</span>
+                    {/if}
+                  </div>
+                {/if}
+
+                {#if voiceChat.godsEyeWiretap.soul?.active_thoughts?.length}
+                  <div class="thoughts-box">
+                    <span class="thoughts-label">💭 Active Thoughts:</span>
+                    <ul class="thoughts-list">
+                      {#each voiceChat.godsEyeWiretap.soul.active_thoughts as thought}
+                        <li>"{thought}"</li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Orbital Interventions -->
+              <div class="orbital-command-box">
+                <span class="orbital-title">⚡ Orbital Interventions</span>
+                <div class="orbital-btns">
+                  <button
+                    type="button"
+                    class="btn-orbital strike"
+                    onclick={() => voiceChat.requestOrbitalStrike(voiceChat.godsEyeWiretap!.map_id, voiceChat.godsEyeWiretap!.coords[0], voiceChat.godsEyeWiretap!.coords[1])}
+                    title="Dispatch celestial lightning beam onto coordinates"
+                  >
+                    ⚡ Strike Target
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-orbital supply"
+                    onclick={() => voiceChat.requestSupplyDrop(voiceChat.godsEyeWiretap!.map_id, voiceChat.godsEyeWiretap!.coords[0], voiceChat.godsEyeWiretap!.coords[1])}
+                    title="Drop divine supply cache at coordinates"
+                  >
+                    🎁 Supply Drop
+                  </button>
+                </div>
+
+                {#if voiceChat.godsEyeWiretap.type === 'player'}
+                  <div class="whisper-input-row">
+                    <input
+                      type="text"
+                      bind:value={godsEyeWhisperMsg}
+                      placeholder="Transmit omnipresent whisper..."
+                      class="godseye-whisper-input"
+                    />
+                    <button
+                      type="button"
+                      class="btn-send-whisper"
+                      onclick={() => {
+                        if (godsEyeWhisperMsg.trim()) {
+                          voiceChat.sendOrbitalWhisper(voiceChat.godsEyeWiretap!.id, godsEyeWhisperMsg.trim())
+                          godsEyeWhisperMsg = ''
+                        }
+                      }}
+                    >
+                      Whisper
+                    </button>
+                  </div>
+                {/if}
+              </div>
+            </div>
+          {:else}
+            <div class="wiretap-empty">
+              <span class="empty-icon">📡</span>
+              <p class="empty-title">NO TARGET SIGNAL LOCKED</p>
+              <p class="empty-desc">Click any blip on the tactical radar scope to lock onto their conscious thoughts, observe real-time emotional telemetry, or trigger orbital interventions.</p>
+            </div>
+          {/if}
+
+          <!-- Predictive Threat Scanner Feed -->
+          <div class="threat-matrix-card">
+            <div class="threat-header">
+              <span class="threat-title">🚨 Ramsey Threat Matrix</span>
+              <span class="threat-status-tag">REALM SCAN</span>
+            </div>
+            {#if voiceChat.godsEyeRadar?.critical_events?.length}
+              <div class="threat-list">
+                {#each voiceChat.godsEyeRadar.critical_events as alert}
+                  <div class="threat-item {alert.severity}">
+                    <span class="threat-icon">{alert.severity === 'critical' ? '🔴' : '⚠️'}</span>
+                    <div class="threat-body">
+                      <strong>{alert.target}</strong>: {alert.message}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="threat-clear">✅ All sectors stabilized. No imminent squad casualties or rogue apex breaches.</p>
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- Underworld Encounters Drawer -->
   {#if showUnderworldDrawer}
@@ -2054,4 +2370,464 @@
     0% { filter: drop-shadow(0 0 4px rgba(192, 132, 252, 0.4)); }
     100% { filter: drop-shadow(0 0 10px rgba(192, 132, 252, 0.8)); }
   }
+
+  /* God's Eye Deck & Tactical Sonar */
+  .btn-hub.godseye {
+    border-color: rgba(6, 182, 212, 0.4);
+    background: rgba(6, 182, 212, 0.08);
+    color: #67e8f9;
+  }
+  .btn-hub.godseye:hover, .btn-hub.godseye.active {
+    background: rgba(6, 182, 212, 0.2);
+    border-color: #06b6d4;
+  }
+  .alert-dot.red {
+    background: #ef4444;
+    box-shadow: 0 0 6px #ef4444;
+  }
+  .godseye-deck {
+    margin: 0.5rem 0.5rem 0.75rem 0.5rem;
+    padding: 0.75rem;
+    background: #080c14;
+    border: 1px solid rgba(6, 182, 212, 0.5);
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 20px rgba(6, 182, 212, 0.15);
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  .godseye-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(6, 182, 212, 0.3);
+  }
+  .godseye-brand {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .godseye-eye-icon {
+    font-size: 1.5rem;
+    animation: pulse 2s infinite;
+  }
+  .godseye-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    color: #38bdf8;
+    letter-spacing: 0.06em;
+  }
+  .godseye-badge {
+    font-size: 0.6rem;
+    padding: 1px 6px;
+    background: rgba(6, 182, 212, 0.2);
+    border: 1px solid #06b6d4;
+    border-radius: 4px;
+    color: #67e8f9;
+    letter-spacing: 0.1em;
+  }
+  .godseye-sub {
+    font-size: 0.65rem;
+    color: #94a3b8;
+    margin: 2px 0 0 0;
+  }
+  .godseye-header-actions {
+    display: flex;
+    gap: 0.375rem;
+  }
+  .btn-sonar-ping {
+    padding: 4px 10px;
+    font-size: 0.7rem;
+    font-weight: bold;
+    background: rgba(6, 182, 212, 0.25);
+    border: 1px solid #06b6d4;
+    color: #a5f3fc;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-sonar-ping:hover {
+    background: rgba(6, 182, 212, 0.45);
+    box-shadow: 0 0 10px rgba(6, 182, 212, 0.4);
+  }
+  .btn-sonar-scan {
+    padding: 4px 8px;
+    font-size: 0.7rem;
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid #475569;
+    color: #cbd5e1;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .btn-sonar-scan:hover { background: #334155; }
+  .btn-close-godseye {
+    padding: 2px 8px;
+    background: transparent;
+    border: 1px solid #475569;
+    color: #94a3b8;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.75rem;
+  }
+  .btn-close-godseye:hover { color: #fff; border-color: #ef4444; }
+
+  /* Viewport Layout */
+  .godseye-viewport-row {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 0.75rem;
+  }
+  @media (max-width: 640px) {
+    .godseye-viewport-row { grid-template-columns: 1fr; }
+  }
+
+  /* Radar Scope */
+  .radar-scope-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .radar-scope {
+    width: 220px;
+    height: 220px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #091a28 0%, #030712 95%);
+    border: 2px solid #06b6d4;
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.25), inset 0 0 25px rgba(6, 182, 212, 0.15);
+    position: relative;
+    overflow: hidden;
+  }
+  .range-ring {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    border: 1px dashed rgba(6, 182, 212, 0.3);
+    pointer-events: none;
+  }
+  .range-ring.r-5m { width: 33%; height: 33%; }
+  .range-ring.r-10m { width: 66%; height: 66%; }
+  .range-ring.r-15m { width: 94%; height: 94%; border-style: solid; border-color: rgba(6, 182, 212, 0.4); }
+
+  .radar-sweep-beam {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, rgba(6, 182, 212, 0.4) 0deg, transparent 60deg, transparent 360deg);
+    animation: radar-sweep 4s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes radar-sweep {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .compass-mark {
+    position: absolute;
+    font-size: 0.55rem;
+    font-weight: 800;
+    color: rgba(6, 182, 212, 0.6);
+    pointer-events: none;
+  }
+  .compass-mark.n { top: 4px; left: 50%; transform: translateX(-50%); }
+  .compass-mark.s { bottom: 4px; left: 50%; transform: translateX(-50%); }
+  .compass-mark.e { right: 5px; top: 50%; transform: translateY(-50%); }
+  .compass-mark.w { left: 5px; top: 50%; transform: translateY(-50%); }
+
+  .player-origin-blip {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 10px;
+    height: 10px;
+    z-index: 5;
+  }
+  .origin-ping-dot {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: #38bdf8;
+    box-shadow: 0 0 8px #38bdf8;
+  }
+
+  .radar-blip {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0;
+    z-index: 6;
+    transition: transform 0.15s ease-out;
+  }
+  .radar-blip:hover, .radar-blip.selected {
+    transform: translate(-50%, -50%) scale(1.4);
+    z-index: 10;
+  }
+  .blip-core {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: block;
+    box-shadow: 0 0 6px currentColor;
+  }
+  .radar-blip.player .blip-core { background: #10b981; color: #10b981; }
+  .radar-blip.npc .blip-core { background: #f59e0b; color: #f59e0b; }
+  .radar-blip.enemy .blip-core { background: #ef4444; color: #ef4444; }
+  .radar-blip.apex .blip-core {
+    background: #f43f5e;
+    color: #f43f5e;
+    width: 12px;
+    height: 12px;
+    animation: pulse 0.7s infinite;
+  }
+  .blip-label {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    white-space: nowrap;
+    font-size: 0.55rem;
+    padding: 1px 4px;
+    background: rgba(0, 0, 0, 0.9);
+    border: 1px solid #475569;
+    border-radius: 3px;
+    color: #e2e8f0;
+    pointer-events: none;
+  }
+  .radar-blip:hover .blip-label, .radar-blip.selected .blip-label { display: block; }
+
+  .radar-legend {
+    display: flex;
+    gap: 0.5rem;
+    font-size: 0.6rem;
+    color: #94a3b8;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: 3px; }
+  .legend-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .legend-item.player .legend-dot { background: #10b981; }
+  .legend-item.npc .legend-dot { background: #f59e0b; }
+  .legend-item.enemy .legend-dot { background: #ef4444; }
+  .radar-metric { margin-left: auto; color: #38bdf8; }
+
+  /* Wiretap Dossier */
+  .wiretap-dossier {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+  .wiretap-empty {
+    padding: 1.5rem;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px dashed rgba(6, 182, 212, 0.3);
+    border-radius: 0.375rem;
+    text-align: center;
+    color: #64748b;
+  }
+  .empty-icon { font-size: 1.5rem; display: block; margin-bottom: 0.25rem; }
+  .empty-title { font-size: 0.75rem; font-weight: bold; color: #94a3b8; margin: 0 0 4px 0; }
+  .empty-desc { font-size: 0.65rem; line-height: 1.4; margin: 0; }
+
+  .dossier-card {
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(6, 182, 212, 0.6);
+    border-radius: 0.375rem;
+    padding: 0.625rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    box-shadow: 0 0 15px rgba(6, 182, 212, 0.1);
+  }
+  .dossier-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(6, 182, 212, 0.25);
+    padding-bottom: 0.25rem;
+  }
+  .dossier-lock { font-size: 0.65rem; font-weight: 800; color: #38bdf8; letter-spacing: 0.08em; }
+  .btn-dossier-dismiss { background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 0.75rem; }
+  .btn-dossier-dismiss:hover { color: #ef4444; }
+
+  .dossier-name-row { display: flex; justify-content: space-between; align-items: baseline; }
+  .dossier-name { font-size: 0.85rem; font-weight: 700; color: #f8fafc; margin: 0; }
+  .dossier-coords { font-size: 0.65rem; color: #94a3b8; }
+  .dossier-meta { font-size: 0.65rem; color: #cbd5e1; display: flex; gap: 4px; }
+
+  /* Subconscious Telemetry */
+  .subconscious-box {
+    background: rgba(8, 14, 26, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 0.25rem;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+  .subconscious-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #38bdf8;
+    text-transform: uppercase;
+  }
+  .sse-status { font-size: 0.55rem; color: #10b981; font-weight: normal; }
+
+  .emotion-meter-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.375rem 0.625rem;
+  }
+  .meter-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.6rem;
+    color: #cbd5e1;
+    margin-bottom: 2px;
+  }
+  .meter-track {
+    height: 5px;
+    background: #1e293b;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .meter-fill { height: 100%; border-radius: 3px; }
+  .meter-fill.conf { background: #10b981; }
+  .meter-fill.stress { background: #f59e0b; }
+  .meter-fill.anger { background: #ef4444; }
+  .meter-fill.grat { background: #818cf8; }
+
+  .personality-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 0.25rem;
+    border-top: 1px dashed rgba(148, 163, 184, 0.2);
+  }
+  .pers-badge { font-size: 0.6rem; color: #a78bfa; font-weight: 600; }
+  .pers-motto { font-size: 0.6rem; color: #94a3b8; font-style: italic; }
+
+  .thoughts-box {
+    padding-top: 0.25rem;
+    border-top: 1px dashed rgba(148, 163, 184, 0.2);
+  }
+  .thoughts-label { font-size: 0.6rem; font-weight: 700; color: #e2e8f0; display: block; margin-bottom: 2px; }
+  .thoughts-list { margin: 0; padding-left: 1rem; font-size: 0.6rem; color: #cbd5e1; font-style: italic; }
+
+  /* Orbital Commands */
+  .orbital-command-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    padding-top: 0.25rem;
+    border-top: 1px solid rgba(6, 182, 212, 0.25);
+  }
+  .orbital-title { font-size: 0.65rem; font-weight: 700; color: #38bdf8; text-transform: uppercase; }
+  .orbital-btns {
+    display: flex;
+    gap: 0.375rem;
+  }
+  .btn-orbital {
+    flex: 1;
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    transition: all 0.15s;
+  }
+  .btn-orbital.strike {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid #ef4444;
+    color: #fca5a5;
+  }
+  .btn-orbital.strike:hover { background: rgba(239, 68, 68, 0.4); }
+  .btn-orbital.supply {
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid #10b981;
+    color: #6ee7b7;
+  }
+  .btn-orbital.supply:hover { background: rgba(16, 185, 129, 0.4); }
+
+  .whisper-input-row {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 2px;
+  }
+  .godseye-whisper-input {
+    flex: 1;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 0.65rem;
+    color: #f8fafc;
+  }
+  .godseye-whisper-input:focus { border-color: #38bdf8; outline: none; }
+  .btn-send-whisper {
+    padding: 3px 8px;
+    background: #0369a1;
+    border: 1px solid #0284c7;
+    color: #e0f2fe;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    cursor: pointer;
+  }
+  .btn-send-whisper:hover { background: #0284c7; }
+
+  /* Threat Matrix Card */
+  .threat-matrix-card {
+    background: rgba(8, 14, 26, 0.7);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 0.375rem;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+  .threat-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .threat-title { font-size: 0.65rem; font-weight: 700; color: #f87171; text-transform: uppercase; }
+  .threat-status-tag { font-size: 0.55rem; color: #94a3b8; }
+  .threat-list { display: flex; flex-direction: column; gap: 0.25rem; }
+  .threat-item {
+    display: flex;
+    gap: 0.375rem;
+    font-size: 0.62rem;
+    padding: 3px 6px;
+    border-radius: 3px;
+    line-height: 1.3;
+  }
+  .threat-item.critical {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+  }
+  .threat-item.warning {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: #fde68a;
+  }
+  .threat-clear { font-size: 0.62rem; color: #10b981; margin: 0; }
 </style>
