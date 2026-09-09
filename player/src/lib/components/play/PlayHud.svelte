@@ -8,8 +8,10 @@
     character: Character
     active: PanelKey
     onpanel: (p: PanelKey) => void
+    stance?: 'walk' | 'sprint' | 'stealth'
+    ontogglestance?: () => void
   }
-  let { character, active, onpanel }: Props = $props()
+  let { character, active, onpanel, stance = 'walk', ontogglestance }: Props = $props()
 
   debug.register('Character name+level', 'stub')
   debug.register('HP bar', 'stub')
@@ -35,6 +37,18 @@
       <div class="name">{character.name}</div>
       <div class="meta">Lv {character.level}</div>
     </div>
+    <button
+      class="stance-pill stance-{stance}"
+      type="button"
+      onclick={ontogglestance}
+      title="Locomotion Stance [Press Ctrl or C to toggle]"
+    >
+      <span class="stance-icon">{stance === 'sprint' ? '🏃' : stance === 'stealth' ? '🥷' : '🚶'}</span>
+      <div class="stance-info">
+        <span class="stance-mode">{stance.toUpperCase()}</span>
+        <span class="stance-decibels">{stance === 'sprint' ? '75 dB' : stance === 'stealth' ? '28 dB' : '55 dB'}</span>
+      </div>
+    </button>
   </div>
 
   <div class="hud-bars">
@@ -105,6 +119,32 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .meta { font-size: 0.7rem; color: #c9a14a; }
+  .stance-pill {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    background: #08080d;
+    border: 1px solid #3b3b4f;
+    cursor: pointer;
+    transition: all 160ms ease;
+    flex-shrink: 0;
+  }
+  .stance-pill:hover {
+    transform: scale(1.04);
+  }
+  .stance-icon { font-size: 1.05rem; line-height: 1; }
+  .stance-info { display: flex; flex-direction: column; text-align: left; line-height: 1.1; }
+  .stance-mode { font-size: 0.65rem; font-weight: 800; letter-spacing: 0.05em; }
+  .stance-decibels { font-size: 0.55rem; opacity: 0.8; font-variant-numeric: tabular-nums; }
+  .stance-walk { border-color: #3b82f6; color: #93c5fd; }
+  .stance-walk:hover { background: rgba(59, 130, 246, 0.15); box-shadow: 0 0 8px rgba(59, 130, 246, 0.3); }
+  .stance-sprint { border-color: #f43f5e; color: #fda4af; }
+  .stance-sprint:hover { background: rgba(244, 63, 94, 0.18); box-shadow: 0 0 10px rgba(244, 63, 94, 0.4); }
+  .stance-stealth { border-color: #a855f7; color: #e9d5ff; }
+  .stance-stealth:hover { background: rgba(168, 85, 247, 0.18); box-shadow: 0 0 10px rgba(168, 85, 247, 0.4); }
 
   .hud-bars {
     display: flex; flex-direction: column; gap: 0.375rem; min-width: 0;

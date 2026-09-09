@@ -143,6 +143,7 @@ function createWorldStore() {
   let npcs = $state<MapNpc[]>([])
   let drops = $state<GroundItem[]>([])
   let weather = $state<string>('clear')
+  let timeOfDay = $state<string>('day')
 
   return {
     get map() { return map },
@@ -150,6 +151,23 @@ function createWorldStore() {
     get npcs() { return npcs },
     get drops() { return drops },
     get weather() { return weather },
+    get timeOfDay() { return timeOfDay },
+    setTimeOfDay(t: string) { if (t) timeOfDay = t },
+    get isNight() {
+      const tod = (timeOfDay || 'day').toLowerCase()
+      return ['dusk', 'night', 'midnight', 'witching_hour'].includes(tod)
+    },
+    get nightDarkness(): number {
+      const tod = (timeOfDay || 'day').toLowerCase()
+      switch (tod) {
+        case 'dawn': return 0.20
+        case 'day': return 0.0
+        case 'dusk': return 0.45
+        case 'night': return 0.72
+        case 'midnight': return 0.88
+        default: return 0.0
+      }
+    },
 
     /** Accept any of Phoenix's known map payload shapes. */
     setMapFromPayload(p: MapDataPayload) {

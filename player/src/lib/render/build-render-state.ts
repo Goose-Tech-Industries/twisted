@@ -22,6 +22,7 @@ export interface BuildRenderStateArgs {
   tileSize: number
   fogEnabled?: boolean
   exploredTiles?: Set<string>
+  timeOfDay?: string
 }
 
 const TILE_SIZE = 32
@@ -93,6 +94,76 @@ export function buildRenderState(args: BuildRenderStateArgs): RenderState {
     camY = Math.max(0, Math.min(camTileY, map.height - tilesDown))
   }
 
+  const tod = (args.timeOfDay || 'day').toLowerCase()
+  const nightDarkness = (() => {
+    switch (tod) {
+      case 'dawn': return 0.20
+      case 'day': return 0.0
+      case 'dusk': return 0.45
+      case 'night': return 0.72
+      case 'midnight': return 0.88
+      default: return 0.0
+    }
+  })()
+
+  // Dynamic light sources (halos) for lanterns during dusk/night/midnight or in dark interiors
+  const objects: Array<{
+    x: number
+    y: number
+    type?: string
+    preset?: string
+    light?: { radius: number; color?: string; flicker?: boolean }
+  }> = []
+
+  const isDark = nightDarkness > 0 || (map.ambient_dark ?? 0) > 0.3
+
+  if (isDark) {
+    // 1. Player's handheld lantern halo
+    objects.push({
+      x: px,
+      y: py,
+      preset: 'LANTERN',
+      light: {
+        radius: 3.8,
+        color: '#ffb347',
+        flicker: true
+      }
+    })
+
+    // 2. Nearby players' lanterns
+    for (const p of players) {
+      objects.push({
+        x: p.x,
+        y: p.y,
+        preset: 'LANTERN',
+        light: {
+          radius: 3.2,
+          color: '#ffd080',
+          flicker: true
+        }
+      })
+    }
+
+    // 3. Captain Vane and lantern-bearing town watch / nocturnal sentries
+    for (const n of npcs) {
+      const name = (n.name || '').toLowerCase()
+      const isVane = name.includes('vane')
+      const isWatch = name.includes('watch') || name.includes('sentry') || name.includes('guard')
+      if (isVane || isWatch) {
+        objects.push({
+          x: n.x,
+          y: n.y,
+          preset: 'LANTERN',
+          light: {
+            radius: isVane ? 4.5 : 3.5,
+            color: isVane ? '#ff9933' : '#ffaa44',
+            flicker: true
+          }
+        })
+      }
+    }
+  }
+
   return {
     layers: {
       ground,
@@ -104,7 +175,7 @@ export function buildRenderState(args: BuildRenderStateArgs): RenderState {
     mapWidth: map.width,
     mapHeight: map.height,
 
-    objects: [],
+    objects: objects as never,
 
     entities: npcs.map(n => ({
       id: `npc:${n.id}`,
@@ -151,6 +222,7 @@ export function buildRenderState(args: BuildRenderStateArgs): RenderState {
     viewportH: tilesDown,
 
     ambientDark: map.ambient_dark,
+    nightDarkness,
 
     tilePalette: palette,
 

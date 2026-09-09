@@ -120,6 +120,7 @@
       statusEffects.set(p.statuses as never)
     }
     if (p.world?.weather) world.setWeather(p.world.weather)
+    if (p.world?.time_of_day) world.setTimeOfDay(p.world.time_of_day)
     if (p.fog?.visible && p.fog?.hidden_count != null) {
       fog.setInitial({
         visible: p.fog.visible || [],
@@ -129,6 +130,14 @@
     }
     if (p.mapId) {
       voiceChat.syncProximityMap(p.mapId)
+    }
+  })
+
+  game.on<{ time_of_day: string; is_night: boolean; lighting?: number }>('circadian_shift', (p) => {
+    if (p?.time_of_day) {
+      world.setTimeOfDay(p.time_of_day)
+      const icon = p.is_night ? '🌙' : '☀️'
+      notifications.push('info', `${icon} Circadian Shift: Realm entered ${p.time_of_day.toUpperCase()}`)
     }
   })
 
@@ -451,14 +460,32 @@
   game.on<unknown>('map_data',  (p) => console.log('[phx] map_data',  p))
   game.on<unknown>('error_msg', (p) => console.warn('[phx] error_msg', p))
 
-  // ── input + outgoing pushes ─────────────────────────────────────
-  const MOVE_COOLDOWN_MS = 220
+  // ── locomotion stance & movement pushes ────────────────────────
+  type LocomotionStance = 'walk' | 'sprint' | 'stealth'
+  let locomotionStance = $state<LocomotionStance>('walk')
   let lastMoveAt = 0
+
+  function cycleLocomotionStance() {
+    if (locomotionStance === 'walk') locomotionStance = 'sprint'
+    else if (locomotionStance === 'sprint') locomotionStance = 'stealth'
+    else locomotionStance = 'walk'
+
+    const badge = locomotionStance === 'sprint'
+      ? '🏃 SPRINT (75 dB · Swift Rush)'
+      : locomotionStance === 'stealth'
+      ? '🥷 STEALTH (28 dB · Silent Creep)'
+      : '🚶 WALK (55 dB · Standard Pace)'
+    notifications.push('info', `Locomotion: ${badge}`)
+  }
+
   function moveDirection(dir: 'up' | 'down' | 'left' | 'right') {
     const c = character.active
     if (!c) return
     const now = performance.now()
-    if (now - lastMoveAt < MOVE_COOLDOWN_MS) return
+    const cooldown = locomotionStance === 'sprint' ? 140 : locomotionStance === 'stealth' ? 290 : 220
+    if (now - lastMoveAt < cooldown) return
+    lastMoveAt = now
+
     const dx = dir === 'left' ? -1 : dir === 'right' ? 1 : 0
     const dy = dir === 'up' ? -1 : dir === 'down' ? 1 : 0
     const tx = c.x + dx, ty = c.y + dy
@@ -489,8 +516,13 @@
       return
     }
 
-    void game.push('move', { x: tx, y: ty, running: false })
-    console.warn('[move] SENT →', tx, ty, 'from', c.x, c.y)
+    void game.push('move', {
+      x: tx,
+      y: ty,
+      stance: locomotionStance,
+      running: locomotionStance === 'sprint'
+    })
+    console.warn('[move] SENT →', tx, ty, 'from', c.x, c.y, 'stance:', locomotionStance)
     character.patch({ x: tx, y: ty })
   }
 
@@ -506,6 +538,7 @@
   onmove={moveDirection}
   oninteract={() => void game.push('interact', {})}
   ontogglepanel={hotkeyToggle}
+  ontogglestance={cycleLocomotionStance}
 />
 
 <div class="play-shell">
@@ -533,7 +566,7 @@
     {#if battle.snapshot}
       <BattlePanel onaction={(payload) => battleCh?.push('action', payload)} />
     {:else if world.map}
-       <MapView map={world.map} character={character.active} players={world.players} npcs={world.npcs} drops={world.drops} palette={tilePalette.entries} equipment={inventory.equipment} fogEnabled={fog.hiddenCount > 0} exploredTiles={fog.explored} />
+       <MapView map={world.map} character={character.active} players={world.players} npcs={world.npcs} drops={world.drops} palette={tilePalette.entries} equipment={inventory.equipment} fogEnabled={fog.hiddenCount > 0} exploredTiles={fog.explored} timeOfDay={world.timeOfDay} />
     {:else}
       <div class="placeholder">
         <p>Awaiting world data…</p>
@@ -569,7 +602,13 @@
   />
 
   {#if character.active}
-    <PlayHud character={character.active} active={panel} onpanel={togglePanel} />
+    <PlayHud
+      character={character.active}
+      active={panel}
+      onpanel={togglePanel}
+      stance={locomotionStance}
+      ontogglestance={cycleLocomotionStance}
+    />
   {/if}
 
   {#if panel !== 'none'}

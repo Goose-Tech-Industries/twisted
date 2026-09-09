@@ -21,9 +21,10 @@
     equipment?: Equipment
     fogEnabled?: boolean
     exploredTiles?: Set<string>
+    timeOfDay?: string
     ontileclick?: (x: number, y: number) => void
   }
-  let { map, character, players, npcs, drops = [], palette = [], equipment, fogEnabled = false, exploredTiles, ontileclick }: Props = $props()
+  let { map, character, players, npcs, drops = [], palette = [], equipment, fogEnabled = false, exploredTiles, timeOfDay = 'day', ontileclick }: Props = $props()
 
   let canvas = $state<HTMLCanvasElement | null>(null)
   let worker: Worker | null = null
@@ -276,6 +277,64 @@
         ctx.fillText(shield, px + TILE * 0.28, py + TILE * 0.28)
         ctx.font = `${Math.floor(TILE * 0.8)}px sans-serif`
       }
+
+      // Atmospheric Night Darkness & Lantern Halos in Canvas2D fallback
+      const totalDark = Math.min(0.88, ((s as { ambientDark?: number }).ambientDark ?? 0) + ((s as { nightDarkness?: number }).nightDarkness ?? 0))
+      if (totalDark > 0.05) {
+        ctx.save()
+        ctx.fillStyle = `rgba(5, 7, 20, ${totalDark})`
+        ctx.fillRect(0, 0, c.width, c.height)
+
+        // Cut out radial lantern halos
+        ctx.globalCompositeOperation = 'destination-out'
+        const cutHalo = (hx: number, hy: number, r: number) => {
+          const grad = ctx.createRadialGradient(hx, hy, r * 0.2, hx, hy, r)
+          grad.addColorStop(0, 'rgba(0, 0, 0, 0.95)')
+          grad.addColorStop(0.6, 'rgba(0, 0, 0, 0.65)')
+          grad.addColorStop(1, 'rgba(0, 0, 0, 0)')
+          ctx.fillStyle = grad
+          ctx.beginPath()
+          ctx.arc(hx, hy, r, 0, Math.PI * 2)
+          ctx.fill()
+        }
+
+        // 1. Player handheld lantern halo
+        cutHalo(px, py, TILE * 3.8)
+
+        // 2. Nearby players' lanterns
+        for (const p of s.nearbyPlayers ?? []) {
+          cutHalo(ox + p.x * TILE + TILE / 2, oy + p.y * TILE + TILE / 2, TILE * 3.2)
+        }
+
+        // 3. Captain Vane and lantern-bearing watchmen
+        for (const e of s.entities ?? []) {
+          const n = (e.name || '').toLowerCase()
+          if (n.includes('vane') || n.includes('watch') || n.includes('sentry') || n.includes('guard')) {
+            cutHalo(ox + e.x * TILE + TILE / 2, oy + e.y * TILE + TILE / 2, n.includes('vane') ? TILE * 4.5 : TILE * 3.5)
+          }
+        }
+
+        // Warm amber tint over lantern lights
+        ctx.globalCompositeOperation = 'source-over'
+        const glowHalo = (hx: number, hy: number, r: number, color: string) => {
+          const grad = ctx.createRadialGradient(hx, hy, 0, hx, hy, r)
+          grad.addColorStop(0, color + '55')
+          grad.addColorStop(0.5, color + '22')
+          grad.addColorStop(1, color + '00')
+          ctx.fillStyle = grad
+          ctx.beginPath()
+          ctx.arc(hx, hy, r, 0, Math.PI * 2)
+          ctx.fill()
+        }
+        glowHalo(px, py, TILE * 3.5, '#ffb347')
+        for (const e of s.entities ?? []) {
+          const n = (e.name || '').toLowerCase()
+          if (n.includes('vane')) {
+            glowHalo(ox + e.x * TILE + TILE / 2, oy + e.y * TILE + TILE / 2, TILE * 4.2, '#ff9933')
+          }
+        }
+        ctx.restore()
+      }
     }
 
     return {
@@ -330,6 +389,7 @@
       tileSize: TILE_SIZE,
       fogEnabled,
       exploredTiles,
+      timeOfDay,
     })
 
     const groundLen = state.layers.ground.length
