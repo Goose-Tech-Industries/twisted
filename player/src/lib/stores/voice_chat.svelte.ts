@@ -322,6 +322,58 @@ export interface DraftResult {
   message: string
 }
 
+export interface NpcDrama {
+  id: number
+  map_id: number
+  stalker_name: string
+  stalker_icon: string
+  stalker_role: string
+  victim_name: string
+  victim_icon: string
+  victim_role: string
+  location_desc: string
+  motive: string
+  stage: 'stalking' | 'ambush_imminent' | 'rescued' | 'murdered'
+  turns_remaining: number
+  available_actions?: string[]
+  clues?: string[]
+  bounty_reward?: number
+  description?: string
+}
+
+export interface NpcDramaInterventionResult {
+  success: boolean
+  action: string
+  roll?: number
+  total?: number
+  dc?: number
+  bounty_gold?: number
+  xp_awarded?: number
+  contract_intel?: string
+  quote?: string
+  message: string
+  hostile?: boolean
+}
+
+export interface CrimeSceneResult {
+  success: boolean
+  roll?: number
+  total?: number
+  clues_found?: string[]
+  lead?: string
+  bounty_active?: boolean
+  message: string
+}
+
+export interface TavernBrawlState {
+  map_id: number
+  initiator?: string
+  brawlers: Array<{ id: number; name: string; icon: string; role: string; hp: number; x: number; y: number }>
+  decibels?: number
+  description?: string
+  can_defenestrate: boolean
+}
+
 function createVoiceChatStore() {
   let inVoice = $state(false)
   let isMuted = $state(false)
@@ -354,6 +406,11 @@ function createVoiceChatStore() {
   let lastGasDeploy = $state<GasDeployResult | null>(null)
   let propertiesList = $state<PropertyItem[]>([])
   let lastDraftResult = $state<DraftResult | null>(null)
+  let activeDrama = $state<NpcDrama | null>(null)
+  let lastDramaIntervention = $state<NpcDramaInterventionResult | null>(null)
+  let lastCrimeScene = $state<CrimeSceneResult | null>(null)
+  let activeBrawl = $state<TavernBrawlState | null>(null)
+  let lastBrawlAction = $state<any | null>(null)
   let tacticalLog = $state<TacticalLogItem[]>([])
 
   let channel: Channel | null = null
@@ -864,8 +921,84 @@ function createVoiceChatStore() {
 
       // 21. Tavern brawl cascade
       proxChan.on('tavern_brawl_cascade', (p: any) => {
+        activeBrawl = {
+          map_id: p.map_id || 1,
+          initiator: p.initiator || 'Patron',
+          brawlers: p.brawlers || [],
+          decibels: p.decibels || 80,
+          description: p.description,
+          can_defenestrate: p.can_defenestrate ?? true
+        }
         pushLog('npc', '🍻 BAR FIGHT!', p.description, '🍻')
         playTone(300, 'sawtooth', 0.35)
+      })
+
+      proxChan.on('tavern_brawl_action', (p: any) => {
+        lastBrawlAction = p
+        pushLog('npc', '🍻 Brawl Chaos!', p.description, '🍻')
+        playTone(280, 'sawtooth', 0.25)
+      })
+
+      // 21b. NPC Stalker Drama & Deadpool Interventions
+      proxChan.on('npc_drama_data', (p: any) => {
+        if (p.drama) {
+          activeDrama = p.drama
+        }
+      })
+
+      proxChan.on('stalker_altercation_detected', (p: any) => {
+        activeDrama = {
+          id: p.drama_id,
+          map_id: p.map_id,
+          stalker_name: p.stalker_name,
+          stalker_icon: p.stalker_icon,
+          stalker_role: p.stalker_role,
+          victim_name: p.victim_name,
+          victim_icon: p.victim_icon,
+          victim_role: p.victim_role,
+          location_desc: p.location_desc,
+          motive: p.motive,
+          stage: p.stage || 'stalking',
+          turns_remaining: p.turns_remaining || 5,
+          available_actions: p.available_actions || ['tackle', 'deadpool_talkdown', 'eavesdrop', 'attack'],
+          description: p.description
+        }
+        pushLog('npc', `🗡️ Stalking Altercation: ${p.stalker_name}`, p.description, '🗡️')
+        playTone(520, 'sawtooth', 0.4)
+      })
+
+      proxChan.on('npc_drama_intervene_result', (p: any) => {
+        lastDramaIntervention = p
+        if (p.success && activeDrama) {
+          activeDrama.stage = 'rescued'
+        } else if (!p.success && activeDrama) {
+          activeDrama.stage = 'ambush_imminent'
+          activeDrama.turns_remaining = 1
+        }
+        if (p.message) pushLog('diplomacy', p.success ? '🔴 Deadpool Intervention Succeeded!' : '⚠️ Intervention Resisted', p.message, '🔴')
+        playTone(p.success ? 600 : 250, 'sine', 0.3)
+      })
+
+      proxChan.on('npc_drama_resolved', (p: any) => {
+        if (activeDrama && activeDrama.id === p.drama_id) {
+          activeDrama.stage = 'rescued'
+        }
+        pushLog('npc', '✨ Drama Resolved', p.message, '✨')
+      })
+
+      proxChan.on('npc_murder_committed', (p: any) => {
+        if (activeDrama && activeDrama.id === p.drama_id) {
+          activeDrama.stage = 'murdered'
+          activeDrama.clues = p.clues
+        }
+        pushLog('npc', '🩸 MURDER IN THE SOUTHSIDE!', p.message, '🩸')
+        playTone(180, 'sawtooth', 0.6)
+      })
+
+      proxChan.on('investigate_crime_result', (p: any) => {
+        lastCrimeScene = p
+        if (p.message) pushLog('npc', '🔍 Forensic Investigation', p.message, '🔍')
+        playTone(480, 'triangle', 0.25)
       })
 
       // 22. Gas deployment result
@@ -989,6 +1122,11 @@ function createVoiceChatStore() {
     get lastGasDeploy() { return lastGasDeploy },
     get propertiesList() { return propertiesList },
     get lastDraftResult() { return lastDraftResult },
+    get activeDrama() { return activeDrama },
+    get lastDramaIntervention() { return lastDramaIntervention },
+    get lastCrimeScene() { return lastCrimeScene },
+    get activeBrawl() { return activeBrawl },
+    get lastBrawlAction() { return lastBrawlAction },
     get tacticalLog() { return tacticalLog },
 
     attemptDeescalation(targetNpcId: number, approach: string) {
@@ -1101,6 +1239,73 @@ function createVoiceChatStore() {
       if (activeChan) {
         activeChan.push('cascade_brawl', { tavern_building_id: tavernBuildingId })
       }
+    },
+
+    defenestrateBrawler(targetId: number, windowX?: number, windowY?: number, targetName?: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('defenestrate_brawler', {
+          target_id: targetId,
+          target_name: targetName,
+          window_x: windowX,
+          window_y: windowY
+        })
+      }
+    },
+
+    triggerBrawlTick() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('brawl_round_tick', {})
+      }
+    },
+
+    dismissBrawl() {
+      activeBrawl = null
+      lastBrawlAction = null
+    },
+
+    getNpcDrama() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('get_npc_drama', {})
+      }
+    },
+
+    triggerNocturnalStalking() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('trigger_nocturnal_stalking', {})
+      }
+    },
+
+    interveneNpcDrama(dramaId: number, action: 'tackle' | 'deadpool_talkdown' | 'eavesdrop' | 'attack' | 'shout' = 'deadpool_talkdown') {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('intervene_npc_drama', { drama_id: dramaId, action })
+      }
+    },
+
+    tickNpcDrama(dramaId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('tick_npc_drama', { drama_id: dramaId })
+      }
+    },
+
+    investigateCrimeScene(dramaId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) {
+        activeChan.push('investigate_crime_scene', { drama_id: dramaId })
+      }
+    },
+
+    dismissDrama() {
+      lastDramaIntervention = null
+    },
+
+    dismissCrimeScene() {
+      lastCrimeScene = null
     },
 
     deployWindowGas(windowX: number, windowY: number, gasType: 'sleeping_gas' | 'smoke_grenade' | 'skunkweed_tear_gas' = 'sleeping_gas') {

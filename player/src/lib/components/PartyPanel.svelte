@@ -760,10 +760,150 @@
     <div class="underworld-drawer">
       <div class="drawer-header">
         <span class="drawer-title">🏮 Lowtown & Underworld Shadows</span>
-        <button type="button" class="btn-spot-stalker" onclick={() => voiceChat.spotStalker(1)}>
-          👁️ Spot Stalker
-        </button>
+        <div class="drawer-header-actions">
+          <button type="button" class="btn-spot-stalker" onclick={() => voiceChat.spotStalker(1)} title="Roll perception to spot hidden shadows">
+            👁️ Spot Stalker
+          </button>
+          <button type="button" class="btn-drama-trigger" onclick={() => voiceChat.triggerNocturnalStalking()} title="Simulate autonomous nocturnal stalker altercation">
+            🗡️ Stalking Event
+          </button>
+        </div>
       </div>
+
+      <!-- Autonomous NPC-Stalking-NPC Drama Card (Deadpool Interventions) -->
+      {#if voiceChat.activeDrama}
+        <div class="drama-card" class:murdered={voiceChat.activeDrama.stage === 'murdered'} class:rescued={voiceChat.activeDrama.stage === 'rescued'}>
+          <div class="drama-header">
+            <span class="drama-icon">
+              {voiceChat.activeDrama.stage === 'murdered' ? '🩸' : (voiceChat.activeDrama.stage === 'rescued' ? '✨' : '🗡️')}
+            </span>
+            <div class="drama-title">
+              <strong>{voiceChat.activeDrama.stalker_name} ➔ {voiceChat.activeDrama.victim_name}</strong>
+              <span class="drama-badge" class:danger={voiceChat.activeDrama.stage === 'ambush_imminent'} class:murder={voiceChat.activeDrama.stage === 'murdered'} class:safe={voiceChat.activeDrama.stage === 'rescued'}>
+                {voiceChat.activeDrama.stage === 'murdered' ? 'CRIME SCENE' : (voiceChat.activeDrama.stage === 'rescued' ? 'RESCUED' : (voiceChat.activeDrama.stage === 'ambush_imminent' ? 'AMBUSH IMMINENT' : 'STALKING'))}
+              </span>
+            </div>
+            <button type="button" class="btn-dismiss-drama" onclick={() => voiceChat.dismissDrama()}>✕</button>
+          </div>
+
+          <p class="drama-desc">
+            <span class="stalker-tag">{voiceChat.activeDrama.stalker_icon} {voiceChat.activeDrama.stalker_name}</span> is shadowing <span class="victim-tag">{voiceChat.activeDrama.victim_icon} {voiceChat.activeDrama.victim_name}</span> through {voiceChat.activeDrama.location_desc}.
+          </p>
+          <div class="drama-motive">
+            <strong>Motive:</strong> {voiceChat.activeDrama.motive}
+          </div>
+
+          {#if voiceChat.activeDrama.stage !== 'murdered' && voiceChat.activeDrama.stage !== 'rescued'}
+            <div class="drama-timer-bar">
+              <span>⏳ {voiceChat.activeDrama.turns_remaining} turn{voiceChat.activeDrama.turns_remaining === 1 ? '' : 's'} before assassin strikes!</span>
+              <button type="button" class="btn-tick-turn" onclick={() => voiceChat.tickNpcDrama(voiceChat.activeDrama!.id)} title="Advance turn without intervening">
+                Skip Turn ⏩
+              </button>
+            </div>
+
+            <!-- Deadpool Intervention Actions -->
+            <div class="drama-actions">
+              <button
+                type="button"
+                class="btn-drama-act deadpool"
+                onclick={() => voiceChat.interveneNpcDrama(voiceChat.activeDrama!.id, 'deadpool_talkdown')}
+                title="Use sarcastic, fourth-wall Deadpool banter to baffle the assassin into dropping the hit contract!"
+              >
+                🔴 Deadpool Talkdown (DC 12)
+              </button>
+              <button
+                type="button"
+                class="btn-drama-act tackle"
+                onclick={() => voiceChat.interveneNpcDrama(voiceChat.activeDrama!.id, 'tackle')}
+                title="Athletics tackle ambush to pin the assassin and disarm them (STR/AGI vs DC 12)"
+              >
+                💥 Tackle Ambush
+              </button>
+              <button
+                type="button"
+                class="btn-drama-act eavesdrop"
+                onclick={() => voiceChat.interveneNpcDrama(voiceChat.activeDrama!.id, 'eavesdrop')}
+                title="Quietly shadow the assassin to discover the syndicate client's name (Stealth vs DC 11)"
+              >
+                👂 Eavesdrop Shadows
+              </button>
+              <button
+                type="button"
+                class="btn-drama-act attack"
+                onclick={() => voiceChat.interveneNpcDrama(voiceChat.activeDrama!.id, 'attack')}
+                title="Draw steel and charge into direct combat!"
+              >
+                ⚔️ Draw Steel
+              </button>
+              <button
+                type="button"
+                class="btn-drama-act shout"
+                onclick={() => voiceChat.interveneNpcDrama(voiceChat.activeDrama!.id, 'shout')}
+                title="Blow a 90 dB city watch whistle to scare the stalker off"
+              >
+                📣 Watch Whistle
+              </button>
+            </div>
+          {/if}
+
+          <!-- Intervention Result Box -->
+          {#if voiceChat.lastDramaIntervention}
+            <div class="drama-result-box" class:success={voiceChat.lastDramaIntervention.success}>
+              {#if voiceChat.lastDramaIntervention.quote}
+                <p class="deadpool-quote">{voiceChat.lastDramaIntervention.quote}</p>
+              {/if}
+              <p class="result-narrative">"{voiceChat.lastDramaIntervention.message}"</p>
+              <div class="drama-chips">
+                {#if voiceChat.lastDramaIntervention.roll}
+                  <span class="drama-chip roll">🎲 D20: {voiceChat.lastDramaIntervention.roll} (Total: {voiceChat.lastDramaIntervention.total} vs DC {voiceChat.lastDramaIntervention.dc})</span>
+                {/if}
+                {#if voiceChat.lastDramaIntervention.bounty_gold}
+                  <span class="drama-chip gold">🪙 +{voiceChat.lastDramaIntervention.bounty_gold} Gold</span>
+                {/if}
+                {#if voiceChat.lastDramaIntervention.xp_awarded}
+                  <span class="drama-chip xp">⚡ +{voiceChat.lastDramaIntervention.xp_awarded} XP</span>
+                {/if}
+                {#if voiceChat.lastDramaIntervention.contract_intel}
+                  <span class="drama-chip intel">📜 Hit Contract Secured!</span>
+                {/if}
+              </div>
+            </div>
+          {/if}
+
+          <!-- Crime Scene Investigation (when murdered) -->
+          {#if voiceChat.activeDrama.stage === 'murdered'}
+            <div class="crime-scene-box">
+              <div class="crime-banner">
+                <span class="chalk-icon">🚷</span>
+                <p>A pool of dark blood and chalk markings outline where {voiceChat.activeDrama.victim_name} was slain. The killer fled into the dark alleys.</p>
+              </div>
+              <button
+                type="button"
+                class="btn-investigate-crime"
+                onclick={() => voiceChat.investigateCrimeScene(voiceChat.activeDrama!.id)}
+              >
+                🔍 Forensic Investigation (Roll Intellect DC 10)
+              </button>
+
+              {#if voiceChat.lastCrimeScene}
+                <div class="crime-results" class:success={voiceChat.lastCrimeScene.success}>
+                  <p>"{voiceChat.lastCrimeScene.message}"</p>
+                  {#if voiceChat.lastCrimeScene.clues_found}
+                    <div class="clues-list">
+                      {#each voiceChat.lastCrimeScene.clues_found as clue}
+                        <span class="clue-tag">🔎 {clue}</span>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if voiceChat.lastCrimeScene.bounty_active}
+                    <span class="bounty-active-badge">🎯 Active City Watch Bounty Hunt Issued!</span>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
 
       <!-- Active Stalker Encounter -->
       {#if voiceChat.activeStalker && voiceChat.activeStalker.spotted}
@@ -867,23 +1007,70 @@
         </div>
       </div>
 
-      <!-- Cascading Tavern Brawl Trigger -->
-      <div class="brawl-card">
+      <!-- Cascading Tavern Brawl & Defenestration Card -->
+      <div class="brawl-card" class:active-brawl={!!voiceChat.activeBrawl}>
         <div class="brawl-header">
           <span class="brawl-icon">🍻</span>
           <div class="brawl-title">
-            <strong>The Rusty Anchor Tavern</strong>
-            <span class="brawl-sub">Rowdy Sailors & Cutthroats</span>
+            <strong>{voiceChat.activeBrawl ? '💥 TAVERN BRAWL IN PROGRESS!' : 'The Rusty Anchor Tavern'}</strong>
+            <span class="brawl-sub">{voiceChat.activeBrawl ? '80 dB Flying Tankards & Overturned Tables' : 'Rowdy Sailors & Cutthroats'}</span>
           </div>
+          {#if voiceChat.activeBrawl}
+            <button type="button" class="btn-dismiss-brawl" onclick={() => voiceChat.dismissBrawl()}>✕</button>
+          {/if}
         </div>
-        <button
-          type="button"
-          class="btn-cascade-brawl"
-          onclick={() => voiceChat.cascadeBrawl(1)}
-          title="Slam a table and fling a tankard to trigger a full-scale tavern brawl!"
-        >
-          💥 Trigger Tavern Brawl Cascade
-        </button>
+
+        {#if voiceChat.activeBrawl}
+          <p class="brawl-narrative">{voiceChat.activeBrawl.description}</p>
+
+          <!-- Active Brawlers with Defenestration Action -->
+          <div class="brawlers-list">
+            {#each voiceChat.activeBrawl.brawlers as brawler}
+              <div class="brawler-row">
+                <span class="brawler-icon">{brawler.icon || '🥊'}</span>
+                <div class="brawler-info">
+                  <span class="brawler-name">{brawler.name}</span>
+                  <span class="brawler-hp">HP: {brawler.hp}</span>
+                </div>
+                <button
+                  type="button"
+                  class="btn-defenestrate-brawler"
+                  onclick={() => voiceChat.defenestrateBrawler(brawler.id, voiceChat.nearbyWindow?.windowX, voiceChat.nearbyWindow?.windowY, brawler.name)}
+                  title="Hurl this brawler through the tavern window out onto the cobblestone street!"
+                >
+                  💥 Defenestrate!
+                </button>
+              </div>
+            {/each}
+          </div>
+
+          <!-- Brawl Chaos Controls -->
+          <div class="brawl-controls">
+            <button
+              type="button"
+              class="btn-brawl-tick"
+              onclick={() => voiceChat.triggerBrawlTick()}
+              title="Simulate autonomous round of flying mugs, chair smashes, or brawler defenestration"
+            >
+              🍺 Brawl Round Chaos (Next Tick)
+            </button>
+          </div>
+
+          {#if voiceChat.lastBrawlAction}
+            <div class="brawl-action-alert">
+              <span>💥 {voiceChat.lastBrawlAction.description}</span>
+            </div>
+          {/if}
+        {:else}
+          <button
+            type="button"
+            class="btn-cascade-brawl"
+            onclick={() => voiceChat.cascadeBrawl(1)}
+            title="Slam a table and fling a tankard to trigger a full-scale tavern brawl!"
+          >
+            💥 Trigger Tavern Brawl Cascade
+          </button>
+        {/if}
       </div>
     </div>
   {/if}
@@ -1491,8 +1678,85 @@
   .underworld-drawer { margin: 0.4rem 0.5rem; padding: 0.5rem; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 0.375rem; display: flex; flex-direction: column; gap: 0.45rem; }
   .drawer-header { display: flex; justify-content: space-between; align-items: center; }
   .drawer-title { font-size: 0.75rem; font-weight: 800; color: #fef08a; letter-spacing: 0.05em; text-transform: uppercase; }
-  .btn-spot-stalker { font-size: 0.6875rem; font-weight: 600; padding: 0.2rem 0.45rem; background: rgba(245, 158, 11, 0.2); border: 1px solid #f59e0b; border-radius: 0.25rem; color: #fef08a; cursor: pointer; }
-  .btn-spot-stalker:hover { background: rgba(245, 158, 11, 0.4); }
+  .drawer-header-actions { display: flex; gap: 0.3rem; }
+  .btn-spot-stalker, .btn-drama-trigger { font-size: 0.625rem; font-weight: 700; padding: 0.2rem 0.4rem; background: rgba(245, 158, 11, 0.2); border: 1px solid #f59e0b; border-radius: 0.25rem; color: #fef08a; cursor: pointer; transition: all 0.15s; }
+  .btn-spot-stalker:hover, .btn-drama-trigger:hover { background: rgba(245, 158, 11, 0.4); transform: translateY(-1px); }
+  .btn-drama-trigger { background: rgba(239, 68, 68, 0.25); border-color: #f87171; color: #fecaca; }
+  .btn-drama-trigger:hover { background: rgba(239, 68, 68, 0.45); }
+
+  /* Autonomous NPC Drama Card */
+  .drama-card { padding: 0.55rem; background: linear-gradient(135deg, rgba(30, 27, 75, 0.7), rgba(15, 23, 42, 0.9)); border: 1px solid #6366f1; border-radius: 0.375rem; display: flex; flex-direction: column; gap: 0.35rem; }
+  .drama-card.murdered { border-color: #ef4444; background: linear-gradient(135deg, rgba(69, 10, 10, 0.9), rgba(15, 23, 42, 0.95)); }
+  .drama-card.rescued { border-color: #10b981; background: linear-gradient(135deg, rgba(6, 78, 59, 0.8), rgba(15, 23, 42, 0.95)); }
+  .drama-header { display: flex; align-items: center; gap: 0.4rem; }
+  .drama-icon { font-size: 1.2rem; }
+  .drama-title { flex: 1; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .drama-title strong { font-size: 0.75rem; color: #e0e7ff; }
+  .drama-badge { font-size: 0.5625rem; font-weight: 800; padding: 1px 5px; border-radius: 3px; background: rgba(99, 102, 241, 0.25); border: 1px solid #818cf8; color: #c7d2fe; }
+  .drama-badge.danger { background: rgba(239, 68, 68, 0.3); border-color: #ef4444; color: #fca5a5; animation: pulse 1s infinite; }
+  .drama-badge.murder { background: rgba(185, 28, 28, 0.4); border-color: #dc2626; color: #fecaca; }
+  .drama-badge.safe { background: rgba(16, 185, 129, 0.25); border-color: #10b981; color: #a7f3d0; }
+  .btn-dismiss-drama { background: transparent; border: none; color: #94a3b8; font-size: 0.75rem; cursor: pointer; }
+  .drama-desc { margin: 0; font-size: 0.6875rem; color: #cbd5e1; line-height: 1.3; }
+  .stalker-tag { color: #fca5a5; font-weight: 700; }
+  .victim-tag { color: #93c5fd; font-weight: 700; }
+  .drama-motive { font-size: 0.625rem; color: #fef08a; background: rgba(0, 0, 0, 0.3); padding: 2px 5px; border-radius: 3px; }
+  .drama-timer-bar { display: flex; justify-content: space-between; align-items: center; font-size: 0.625rem; font-weight: 800; color: #fbbf24; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); padding: 2px 6px; border-radius: 3px; }
+  .btn-tick-turn { font-size: 0.5625rem; font-weight: 700; padding: 1px 4px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 2px; color: #fff; cursor: pointer; }
+  .btn-tick-turn:hover { background: rgba(255, 255, 255, 0.25); }
+
+  /* Deadpool Intervention Actions */
+  .drama-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.3rem; }
+  .btn-drama-act { padding: 0.3rem 0.4rem; font-size: 0.625rem; font-weight: 800; border-radius: 0.25rem; cursor: pointer; border: 1px solid transparent; transition: all 0.15s; text-align: center; }
+  .btn-drama-act.deadpool { grid-column: 1 / -1; background: linear-gradient(135deg, rgba(220, 38, 38, 0.5), rgba(185, 28, 28, 0.8)); border-color: #ef4444; color: #fff; box-shadow: 0 0 10px rgba(239, 68, 68, 0.4); }
+  .btn-drama-act.deadpool:hover { filter: brightness(1.2); transform: translateY(-1px); }
+  .btn-drama-act.tackle { background: rgba(59, 130, 246, 0.3); border-color: #3b82f6; color: #bfdbfe; }
+  .btn-drama-act.tackle:hover { background: rgba(59, 130, 246, 0.5); }
+  .btn-drama-act.eavesdrop { background: rgba(168, 85, 247, 0.3); border-color: #c084fc; color: #f3e8ff; }
+  .btn-drama-act.eavesdrop:hover { background: rgba(168, 85, 247, 0.5); }
+  .btn-drama-act.attack { background: rgba(249, 115, 22, 0.3); border-color: #f97316; color: #fed7aa; }
+  .btn-drama-act.attack:hover { background: rgba(249, 115, 22, 0.5); }
+  .btn-drama-act.shout { background: rgba(234, 179, 8, 0.3); border-color: #eab308; color: #fef08a; }
+  .btn-drama-act.shout:hover { background: rgba(234, 179, 8, 0.5); }
+
+  /* Intervention Result Box */
+  .drama-result-box { padding: 0.45rem; background: rgba(0, 0, 0, 0.4); border-left: 3px solid #ef4444; border-radius: 0.25rem; font-size: 0.6875rem; }
+  .drama-result-box.success { border-left-color: #10b981; background: rgba(6, 78, 59, 0.3); }
+  .deadpool-quote { font-style: italic; color: #fca5a5; margin: 0 0 0.3rem 0; font-weight: 600; line-height: 1.3; }
+  .result-narrative { margin: 0 0 0.35rem 0; color: #f1f5f9; }
+  .drama-chips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+  .drama-chip { font-size: 0.5625rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
+  .drama-chip.roll { background: rgba(148, 163, 184, 0.2); border: 1px solid #94a3b8; color: #e2e8f0; }
+  .drama-chip.gold { background: rgba(234, 179, 8, 0.25); border: 1px solid #eab308; color: #fef08a; }
+  .drama-chip.xp { background: rgba(16, 185, 129, 0.25); border: 1px solid #10b981; color: #a7f3d0; }
+  .drama-chip.intel { background: rgba(168, 85, 247, 0.25); border: 1px solid #a855f7; color: #f3e8ff; }
+
+  /* Crime Scene Forensics Box */
+  .crime-scene-box { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.45rem; background: rgba(0, 0, 0, 0.5); border: 1px solid #ef4444; border-radius: 0.375rem; }
+  .crime-banner { display: flex; align-items: center; gap: 0.4rem; font-size: 0.6875rem; color: #fecaca; }
+  .chalk-icon { font-size: 1.3rem; }
+  .btn-investigate-crime { padding: 0.3rem 0.5rem; background: linear-gradient(135deg, #1e3a8a, #312e81); border: 1px solid #60a5fa; color: #fff; font-size: 0.6875rem; font-weight: 700; border-radius: 0.25rem; cursor: pointer; }
+  .btn-investigate-crime:hover { filter: brightness(1.2); }
+  .crime-results { padding: 0.35rem; background: rgba(15, 23, 42, 0.8); border-left: 2px solid #3b82f6; font-size: 0.6875rem; color: #e2e8f0; }
+  .clues-list { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.3rem; }
+  .clue-tag { font-size: 0.5625rem; font-weight: 700; color: #fde047; background: rgba(234, 179, 8, 0.2); border: 1px solid #eab308; padding: 1px 4px; border-radius: 3px; }
+  .bounty-active-badge { display: inline-block; margin-top: 0.3rem; font-size: 0.625rem; font-weight: 800; color: #4ade80; }
+
+  /* Active Tavern Brawl Styles */
+  .brawl-card.active-brawl { border-color: #ef4444; background: linear-gradient(135deg, rgba(69, 10, 10, 0.85), rgba(15, 23, 42, 0.95)); box-shadow: 0 0 12px rgba(239, 68, 68, 0.35); }
+  .brawlers-list { display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.3rem; }
+  .brawler-row { display: flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.4rem; background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 0.25rem; }
+  .brawler-icon { font-size: 1rem; }
+  .brawler-info { flex: 1; display: flex; justify-content: space-between; font-size: 0.6875rem; }
+  .brawler-name { font-weight: 700; color: #fca5a5; }
+  .brawler-hp { font-size: 0.625rem; color: #94a3b8; }
+  .btn-defenestrate-brawler { padding: 0.2rem 0.45rem; font-size: 0.625rem; font-weight: 800; background: rgba(220, 38, 38, 0.4); border: 1px solid #ef4444; color: #fff; border-radius: 0.25rem; cursor: pointer; transition: all 0.15s; }
+  .btn-defenestrate-brawler:hover { background: rgba(220, 38, 38, 0.8); transform: translateY(-1px); }
+  .brawl-controls { display: flex; gap: 0.3rem; margin-top: 0.3rem; }
+  .btn-brawl-tick { flex: 1; padding: 0.3rem; background: rgba(245, 158, 11, 0.3); border: 1px solid #f59e0b; color: #fef08a; font-size: 0.6875rem; font-weight: 700; border-radius: 0.25rem; cursor: pointer; }
+  .btn-brawl-tick:hover { background: rgba(245, 158, 11, 0.5); }
+  .btn-dismiss-brawl { background: transparent; border: none; color: #fca5a5; font-size: 0.75rem; cursor: pointer; margin-left: auto; }
+  .brawl-action-alert { padding: 0.3rem; background: rgba(249, 115, 22, 0.25); border: 1px solid #f97316; border-radius: 0.25rem; font-size: 0.6875rem; color: #fed7aa; font-style: italic; }
 
   /* Stalker Card */
   .stalker-card { padding: 0.5rem; background: rgba(0, 0, 0, 0.4); border: 1px solid #f59e0b; border-radius: 0.375rem; }

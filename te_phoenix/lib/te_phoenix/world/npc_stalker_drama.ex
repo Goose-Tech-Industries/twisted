@@ -164,7 +164,7 @@ defmodule TePhoenix.World.NpcStalkerDrama do
       d20 = :rand.uniform(20)
       perception_total = d20 + wis_mod
 
-      if dist <= 12 and perception_total >= 10 do
+      if dist <= 12 and (dist <= 3 or perception_total >= 10) do
         status_msg = case drama.stage do
           "stalking" ->
             "Through the gloom near #{drama.location_desc}, you notice #{drama.stalker_name} (#{drama.stalker_icon}) creeping in the shadows, trailing #{drama.victim_name} (#{drama.victim_icon})! A murder is brewing!"
@@ -220,7 +220,7 @@ defmodule TePhoenix.World.NpcStalkerDrama do
           char_name = player[:name] || player["name"] || "Hero"
 
           case action do
-            :ambush_stalker ->
+            act when act in [:ambush_stalker, :tackle] ->
               atk = player[:atk] || player["atk"] || 10
               agi = player[:speed] || player["speed"] || 10
               mod = div(max(atk, agi) - 10, 2)
@@ -262,7 +262,65 @@ defmodule TePhoenix.World.NpcStalkerDrama do
                 }}
               end
 
-            :shout_warning ->
+            act when act in [:deadpool_talkdown, :talkdown] ->
+              mo = player[:mo] || player["mo"] || 10
+              luck = player[:luck] || player["luck"] || 10
+              cha_mod = div(max(mo, luck) - 10, 2)
+              d20 = :rand.uniform(20)
+              total = d20 + cha_mod
+              dc = 12
+
+              deadpool_quotes = [
+                "\"Hold up, pal! Nice leather duster—very 90s anti-hero brooding in the drizzle. But are we seriously shakedowning the apprentice scribe behind an apothecary? In this economy?! Let's skip the stabbing, hand over your contractor note, and we can all pretend this was just aggressive networking.\"",
+                "\"Whoa, whoa, easy there Stabby McStabface! Fourth-wall check: does the Night Guild even offer dental? Drop the daggers, hand over the hit list, and walk away before this turns into an R-rated slow-motion montage with a pop song playing in the background.\"",
+                "\"Hey buddy, question: when you put on the cowl this morning, did you think 'Today I'm gonna corner a guy carrying tax receipts'? Because between you and me, that's not very sigma of you. Give me the client's name and go get some street tacos instead.\""
+              ]
+              quote = Enum.random(deadpool_quotes)
+
+              if total >= dc do
+                Repo.query!("UPDATE game_npc_stalker_dramas SET stage = 'rescued' WHERE id = ?", [id])
+                award_gold(char_id, bounty)
+
+                intel = "Syndicate Hit Order: #{s_name} was commissioned over '#{motive}'. Client: Shadow Syndicate Handler 'Blackthorne'."
+                imprint_intel(char_id, "Deadpool Intercepted Hitlist", intel)
+
+                TePhoenixWeb.Endpoint.broadcast("map:#{map_id}", "npc_drama_resolved", %{
+                  drama_id: id,
+                  status: "rescued",
+                  intervention_type: "deadpool_talkdown",
+                  hero_name: char_name,
+                  stalker_name: s_name,
+                  victim_name: v_name,
+                  quote: quote,
+                  message: "#{char_name} leaned against the brick wall with a sarcastic smirk, unleashing a torrent of fourth-wall banter that completely broke #{s_name}'s concentration! The confused assassin surrendered the contract and fled!"
+                })
+
+                {:ok, %{
+                  success: true,
+                  action: :deadpool_talkdown,
+                  roll: d20,
+                  total: total,
+                  dc: dc,
+                  bounty_gold: bounty,
+                  xp_awarded: 75,
+                  contract_intel: intel,
+                  quote: quote,
+                  message: "#{quote}\n\n#{s_name} blinks rapidly, utterly dumbfounded: \"What... what does dental mean? Who is Sigma?! Take the blasted contract, you lunatic!\" #{s_name} drops the ledger and sprints into the fog! #{v_name} gasps: \"I don't understand half the words you said, stranger, but here is #{bounty} gold!\""
+                }}
+              else
+                Repo.query!("UPDATE game_npc_stalker_dramas SET stage = 'ambush_imminent', turn_timer = 1 WHERE id = ?", [id])
+                {:ok, %{
+                  success: false,
+                  action: :deadpool_talkdown,
+                  roll: d20,
+                  total: total,
+                  dc: dc,
+                  quote: quote,
+                  message: "#{quote}\n\n#{s_name} glares with murderous fury: \"You talk too much, jester! Your witty one-liners won't stop six inches of cold steel!\" (Stalker prepares to strike!)"
+                }}
+              end
+
+            act when act in [:shout_warning, :shout] ->
               mo = player[:mo] || player["mo"] || 10
               mod = div(mo - 10, 2)
               d20 = :rand.uniform(20)
@@ -301,7 +359,7 @@ defmodule TePhoenix.World.NpcStalkerDrama do
                 }}
               end
 
-            :shadow_stalker ->
+            act when act in [:shadow_stalker, :eavesdrop] ->
               # Stealth tracking to learn the mastermind
               agi = player[:speed] || player["speed"] || 10
               mod = div(agi - 10, 2)
@@ -333,11 +391,63 @@ defmodule TePhoenix.World.NpcStalkerDrama do
                   message: "A stray pebble crunches under your boot. #{s_name} whirls around: \"Who's following who?!\""
                 }}
               end
+
+            :attack ->
+              Repo.query!("UPDATE game_npc_stalker_dramas SET stage = 'ambush_imminent', turn_timer = 1 WHERE id = ?", [id])
+
+              TePhoenixWeb.Endpoint.broadcast("map:#{map_id}", "stalker_hostile", %{
+                drama_id: id,
+                stalker_name: s_name,
+                message: "#{char_name} drew cold steel and lunged directly at #{s_name}!"
+              })
+
+              {:ok, %{
+                success: true,
+                action: :attack,
+                hostile: true,
+                message: "You unsheath your weapon and charge! #{s_name} spins around with a feral hiss, flashing twin serrated stilettos! #{v_name} flees behind an oak barrel shouting for the guard!"
+              }}
           end
         end
 
       _ ->
         {:error, "Drama incident not found."}
+    end
+  end
+
+  @doc """
+  Simulates or forces a nocturnal stalking altercation on the map.
+  Broadcasts `stalker_altercation_detected`.
+  """
+  def simulate_nocturnal_stalking(map_id \\ 1, target_victim_name \\ nil) do
+    ensure_schema!()
+    seed_default_dramas!(map_id)
+
+    drama = get_active_drama(map_id)
+
+    if drama do
+      payload = %{
+        drama_id: drama.id,
+        map_id: map_id,
+        stalker_name: drama.stalker_name,
+        stalker_icon: drama.stalker_icon,
+        stalker_role: drama.stalker_role,
+        victim_name: target_victim_name || drama.victim_name,
+        victim_icon: drama.victim_icon,
+        victim_role: drama.victim_role,
+        location_desc: drama.location_desc,
+        motive: drama.motive,
+        stage: drama.stage,
+        turns_remaining: drama.turn_timer,
+        available_actions: [:tackle, :deadpool_talkdown, :eavesdrop, :attack, :shout_warning],
+        description: "NOCTURNAL STALKING DETECTED: #{drama.stalker_name} (#{drama.stalker_icon}) is trailing #{target_victim_name || drama.victim_name} (#{drama.victim_icon}) down #{drama.location_desc}! Motive: #{drama.motive}.",
+        timestamp: System.system_time(:second)
+      }
+
+      TePhoenixWeb.Endpoint.broadcast("map:#{map_id}", "stalker_altercation_detected", payload)
+      {:ok, payload}
+    else
+      {:error, "No active stalking incident found for map #{map_id}."}
     end
   end
 

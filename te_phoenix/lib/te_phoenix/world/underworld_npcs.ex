@@ -443,6 +443,130 @@ defmodule TePhoenix.World.UnderworldNpcs do
     end
   end
 
+  @doc """
+  Simulates a nocturnal stalking altercation between NPCs.
+  """
+  def simulate_nocturnal_stalking(map_id \\ 1, target_npc_name \\ nil) do
+    TePhoenix.World.NpcStalkerDrama.simulate_nocturnal_stalking(map_id, target_npc_name)
+  end
+
+  @doc """
+  Intervenes in an ongoing NPC-stalking altercation (ambush, deadpool_talkdown, eavesdrop, attack, shout).
+  """
+  def intervene_npc_stalking(player, _map_id, drama_id, action) do
+    TePhoenix.World.NpcStalkerDrama.intervene(player, drama_id, action)
+  end
+
+  @doc """
+  Resolves an unattended stalking incident (advances tick timer towards murder/crime scene).
+  """
+  def resolve_unattended_stalking(_map_id, drama_id) do
+    TePhoenix.World.NpcStalkerDrama.tick_drama(drama_id)
+  end
+
+  @doc """
+  Defenestrates a tavern brawler or rival through the closest window aperture.
+  If window coordinates are omitted, automatically finds the nearest window.
+  """
+  def defenestrate_brawler(player, map_id, target_id, window_x \\ nil, window_y \\ nil) do
+    target =
+      cond do
+        is_map(target_id) ->
+          target_id
+
+        true ->
+          case Repo.query("SELECT id, name, hp, max_hp, role FROM game_npcs WHERE id = ? LIMIT 1", [target_id]) do
+            {:ok, %{rows: [[tid, tname, thp, tmax, trole]]}} ->
+              %{id: tid, name: tname, hp: thp, max_hp: tmax, role: trole, def: 10}
+
+            _ ->
+              case TePhoenix.Game.PlayerRegistry.get(target_id) do
+                nil -> %{id: target_id, name: "Brawler", def: 10}
+                p -> p
+              end
+          end
+      end
+
+    px = player[:x] || player["x"] || 7
+    py = player[:y] || player["y"] || 12
+
+    {wx, wy} =
+      if window_x && window_y do
+        {window_x, window_y}
+      else
+        # Find nearest window within 4 tiles
+        windows = TePhoenix.World.BuildingManager.find_windows_near(map_id, px, py, 4)
+        case windows do
+          [first | _] -> {first.window_x, first.window_y}
+          [] ->
+            # Fallback to standard tavern exterior window
+            {6, 12}
+        end
+      end
+
+    TePhoenix.World.Defenestration.defenestrate(player, target, map_id, wx, wy)
+  end
+
+  @doc """
+  Simulates an autonomous round of chaos in an active tavern brawl.
+  """
+  def brawl_round_tick(map_id \\ 1) do
+    case Repo.query(
+           "SELECT id, name, icon, role, x, y, hp FROM game_npcs WHERE map_id = ? AND role IN ('drunk', 'brawler', 'drunkard') AND is_active = 1",
+           [map_id]
+         ) do
+      {:ok, %{rows: rows}} when length(rows) >= 2 ->
+        # Pick attacker and defender from brawlers
+        [a, b | _] = Enum.shuffle(rows)
+        [a_id, a_name, a_icon, _a_role, ax, ay, _ahp] = a
+        [b_id, b_name, b_icon, _b_role, _bx, _by, _bhp] = b
+
+        action_type = Enum.random([:pewter_tankard, :chair_smash, :defenestration])
+
+        case action_type do
+          :pewter_tankard ->
+            dmg = :rand.uniform(4) + 1
+            Repo.query("UPDATE game_npcs SET hp = GREATEST(1, hp - ?) WHERE id = ?", [dmg, b_id])
+
+            TePhoenixWeb.Endpoint.broadcast("map:#{map_id}", "tavern_brawl_action", %{
+              action: "pewter_tankard",
+              attacker: "#{a_name} (#{a_icon})",
+              defender: "#{b_name} (#{b_icon})",
+              damage: dmg,
+              description: "#{a_name} hurled a frothing pewter tankard across the room, clocking #{b_name} upside the jaw for #{dmg} damage! Foam and teeth splatter everywhere!"
+            })
+
+            {:ok, %{action: :pewter_tankard, attacker: a_name, defender: b_name, damage: dmg}}
+
+          :chair_smash ->
+            dmg = :rand.uniform(6) + 2
+            Repo.query("UPDATE game_npcs SET hp = GREATEST(1, hp - ?) WHERE id = ?", [dmg, b_id])
+
+            TePhoenixWeb.Endpoint.broadcast("map:#{map_id}", "tavern_brawl_action", %{
+              action: "chair_smash",
+              attacker: "#{a_name} (#{a_icon})",
+              defender: "#{b_name} (#{b_icon})",
+              damage: dmg,
+              description: "CRACK! #{a_name} hoisted an oak tavern chair and smashed it over #{b_name}'s back for #{dmg} damage! Splinters fly into the crowd!"
+            })
+
+            {:ok, %{action: :chair_smash, attacker: a_name, defender: b_name, damage: dmg}}
+
+          :defenestration ->
+            # NPC defenestrates NPC
+            attacker_map = %{id: a_id, name: a_name, atk: 14}
+            target_map = %{id: b_id, name: b_name, role: "brawler", def: 10}
+            case defenestrate_brawler(attacker_map, map_id, target_map, ax, ay) do
+              {:ok, defen_res} -> {:ok, Map.put(defen_res, :action, :defenestration)}
+              other -> other
+            end
+        end
+
+      _ ->
+        {:error, "Not enough brawlers active for autonomous tavern round."}
+    end
+  end
+
   # ── Helper Functions ──────────────────────────────────────────────
 
   defp get_player_gold(player_or_id) do

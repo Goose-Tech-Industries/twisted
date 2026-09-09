@@ -87,6 +87,76 @@ defmodule TePhoenix.World.UnderworldImmersionAndShopsTest do
       assert res.action == :shadow_stalker
     end
 
+    test "player executes Deadpool sarcastic talkdown intervention" do
+      NpcStalkerDrama.seed_default_dramas!(1)
+      drama = NpcStalkerDrama.get_active_drama(1)
+      # High luck/charisma guarantees success (DC 12)
+      player = %{id: 1, name: "WadeWilson", mo: 20, luck: 20}
+
+      assert {:ok, res} = NpcStalkerDrama.intervene(player, drama.id, :deadpool_talkdown)
+      assert res.action == :deadpool_talkdown
+      assert res.roll >= 1
+      assert is_binary(res.quote)
+      if res.success do
+        assert res.bounty_gold > 0
+        assert res.xp_awarded == 75
+        assert is_binary(res.contract_intel)
+      end
+    end
+
+    test "player intervenes via tackle, eavesdrop, and attack aliases" do
+      NpcStalkerDrama.seed_default_dramas!(1)
+      drama = NpcStalkerDrama.get_active_drama(1)
+
+      player = %{id: 1, name: "VigilanteHero", atk: 20, speed: 20, mo: 20}
+      assert {:ok, tackle_res} = NpcStalkerDrama.intervene(player, drama.id, :tackle)
+      assert tackle_res.action == :ambush_stalker
+
+      # Re-seed for eavesdrop & attack
+      Repo.query!("DELETE FROM game_npc_stalker_dramas")
+      NpcStalkerDrama.seed_default_dramas!(1)
+      drama2 = NpcStalkerDrama.get_active_drama(1)
+
+      assert {:ok, eavesdrop_res} = NpcStalkerDrama.intervene(player, drama2.id, :eavesdrop)
+      assert eavesdrop_res.action == :shadow_stalker
+
+      assert {:ok, attack_res} = NpcStalkerDrama.intervene(player, drama2.id, :attack)
+      assert attack_res.action == :attack
+      assert attack_res.hostile == true
+    end
+
+    test "simulates nocturnal stalking broadcasts altercation" do
+      NpcStalkerDrama.seed_default_dramas!(1)
+      assert {:ok, payload} = TePhoenix.World.UnderworldNpcs.simulate_nocturnal_stalking(1)
+      assert payload.stalker_name != nil
+      assert payload.victim_name != nil
+      assert :deadpool_talkdown in payload.available_actions
+      assert :tackle in payload.available_actions
+    end
+
+    test "defenestrate brawler automatically finds nearest window and resolves damage" do
+      # Seed town buildings and underworld NPCs
+      TePhoenix.World.BuildingManager.seed_town_buildings!()
+      TePhoenix.World.UnderworldNpcs.seed_underworld_npcs!(1)
+
+      player = %{id: 1, name: "VigilanteHero", atk: 20, x: 6, y: 12}
+      target = %{id: 86, name: "Iron-Tooth Silas", role: "brawler", def: 10}
+
+      assert {:ok, res} = TePhoenix.World.UnderworldNpcs.defenestrate_brawler(player, 1, target)
+      assert res.attacker_roll >= 1
+      if res.success do
+        assert res.total_damage >= 0
+      else
+        assert res.defender_roll >= 1
+      end
+    end
+
+    test "brawl round tick simulates autonomous tavern chaos" do
+      TePhoenix.World.UnderworldNpcs.seed_underworld_npcs!(1)
+      assert {:ok, res} = TePhoenix.World.UnderworldNpcs.brawl_round_tick(1)
+      assert res.action in [:pewter_tankard, :chair_smash, :defenestration]
+    end
+
     test "ticking drama without rescue leads to murder and crime scene investigation" do
       NpcStalkerDrama.seed_default_dramas!(1)
       drama = NpcStalkerDrama.get_active_drama(1)

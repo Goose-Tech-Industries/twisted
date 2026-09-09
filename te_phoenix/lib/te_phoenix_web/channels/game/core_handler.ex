@@ -497,6 +497,32 @@ end
     {:noreply, socket}
   end
 
+  def handle("defenestrate_brawler", payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    target_id = payload["target_id"]
+    wx = payload["window_x"]
+    wy = payload["window_y"]
+    res = TePhoenix.World.UnderworldNpcs.defenestrate_brawler(player, player.map_id, target_id, wx, wy)
+    push(socket, "defenestration_result", res)
+    {:noreply, socket}
+  end
+
+  def handle("brawl_round_tick", _payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    res = TePhoenix.World.UnderworldNpcs.brawl_round_tick(player.map_id)
+    case res do
+      {:ok, data} -> push(socket, "brawl_tick_result", data)
+      {:error, reason} -> push(socket, "brawl_tick_result", %{error: reason})
+    end
+    {:noreply, socket}
+  end
+
   def handle("deploy_window_gas", payload, socket) do
     char_id = socket.assigns[:char_id]
     player = PlayerRegistry.get(char_id)
@@ -589,6 +615,21 @@ end
     {:noreply, socket}
   end
 
+  def handle("trigger_nocturnal_stalking", _payload, socket) do
+    char_id = socket.assigns[:char_id]
+    player = PlayerRegistry.get(char_id)
+    if is_nil(player), do: {:noreply, socket}
+
+    case TePhoenix.World.UnderworldNpcs.simulate_nocturnal_stalking(player.map_id) do
+      {:ok, data} ->
+        push(socket, "stalking_triggered", data)
+        push(socket, "npc_drama_data", %{drama: data})
+      {:error, reason} ->
+        push(socket, "stalking_triggered", %{error: reason})
+    end
+    {:noreply, socket}
+  end
+
   def handle("intervene_npc_drama", payload, socket) do
     char_id = socket.assigns[:char_id]
     player = PlayerRegistry.get(char_id)
@@ -596,12 +637,17 @@ end
 
     drama_id = payload["drama_id"]
     action_atom = case payload["action"] do
+      "deadpool_talkdown" -> :deadpool_talkdown
+      "talkdown" -> :deadpool_talkdown
+      "tackle" -> :tackle
       "ambush" -> :ambush_stalker
       "ambush_stalker" -> :ambush_stalker
-      "shout" -> :shout_warning
-      "shout_warning" -> :shout_warning
+      "eavesdrop" -> :eavesdrop
       "shadow" -> :shadow_stalker
       "shadow_stalker" -> :shadow_stalker
+      "attack" -> :attack
+      "shout" -> :shout_warning
+      "shout_warning" -> :shout_warning
       _ -> :ambush_stalker
     end
 
