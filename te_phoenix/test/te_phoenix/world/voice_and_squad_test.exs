@@ -268,6 +268,10 @@ defmodule TePhoenix.World.VoiceAndSquadTest do
     test "non-hostile NPCs dynamically react to overheard speech (Bard, Priest, Merchant)" do
       alias TePhoenix.World.NpcAcousticReactor
 
+      Repo.query("UPDATE game_npcs SET x = 8, y = 12 WHERE name = 'Rowan the Tavern Bard' AND map_id = 1")
+      Repo.query("UPDATE game_npcs SET x = 14, y = 8 WHERE name = 'Mother Althea the Priestess' AND map_id = 1")
+      Repo.query("UPDATE game_npcs SET x = 12, y = 14 WHERE name = 'Barnaby the Quartermaster' AND map_id = 1")
+
       # 1. Rowan the Bard hears heroic battle plans and grants Bardic Inspiration
       {:ok, res_bard} = NpcAcousticReactor.process_acoustic_event(
         "party_1",

@@ -24,7 +24,9 @@ defmodule TePhoenixWeb.GameChannel do
     LookupHandler,
     NpcHandler,
     ShopHandler,
-    GodsEyeHandler
+    GodsEyeHandler,
+    BountyAndSyndicateHandler,
+    AshveilColossusHandler
   }
 
   # ══════════════════════════════════════════════════════════════════
@@ -180,6 +182,43 @@ defmodule TePhoenixWeb.GameChannel do
   # ══════════════════════════════════════════════════════════════════
 
   def handle_in("gods_eye_" <> _ = e, p, s), do: GodsEyeHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # BOUNTY BOARD & BLACK MARKET FENCE
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("bounty_" <> _ = e, p, s), do: BountyAndSyndicateHandler.handle(e, p, s)
+  def handle_in("fence_" <> _ = e, p, s), do: BountyAndSyndicateHandler.handle(e, p, s)
+  def handle_in("schedules_" <> _ = e, p, s), do: BountyAndSyndicateHandler.handle(e, p, s)
+  def handle_in("property_" <> _ = e, p, s), do: BountyAndSyndicateHandler.handle(e, p, s)
+  def handle_in("get_properties" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("purchase_property" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("add_fortification" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("toggle_soundproof_curtains" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("rest_property" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("check_indoor_draft" = e, p, s), do: CoreHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # LOWTOWN NOCTURNAL SHADOWS, DRAMA & FORENSICS
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("get_npc_drama" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("trigger_nocturnal_stalking" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("intervene_npc_drama" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("tick_npc_drama" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("spot_stalker" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("investigate_crime_scene" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("defenestrate_target" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("cascade_brawl" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("defenestrate_brawler" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("brawl_round_tick" = e, p, s), do: CoreHandler.handle(e, p, s)
+  def handle_in("deploy_window_gas" = e, p, s), do: CoreHandler.handle(e, p, s)
+
+  # ══════════════════════════════════════════════════════════════════
+  # ASHVEIL COLOSSUS APEX RAID & ACTIVE DEFENSE
+  # ══════════════════════════════════════════════════════════════════
+
+  def handle_in("colossus_" <> _ = e, p, s), do: AshveilColossusHandler.handle(e, p, s)
 
   # Catch-all
   def handle_in(event, _payload, socket) do

@@ -20,6 +20,12 @@
   let defenestrateTargetId = $state(1)
   let defenestrateTargetName = $state('Rival Cutpurse')
   let godsEyeWhisperMsg = $state('')
+  let showColossusDeck = $state(false)
+  let underworldTab = $state<'drama' | 'bounties' | 'fence' | 'schedules'>('drama')
+  let stashGoldAmount = $state<number>(50)
+  let stashItemKey = $state<string>('skeleton_key')
+  let stashItemName = $state<string>('Masterwork Skeleton Key')
+  let selectedTrophyKey = $state<string>('colossus_skull')
 
   onMount(() => {
     void social.loadParty()
@@ -764,6 +770,19 @@
       <span>👁️ God's Eye {#if voiceChat.godsEyeSonarResult?.threat_count}<span class="alert-dot red"></span>{/if}</span>
       <span>{voiceChat.godsEyeActive ? '▲' : '▼'}</span>
     </button>
+    <button
+      type="button"
+      class="btn-hub colossus"
+      class:active={showColossusDeck}
+      onclick={() => {
+        showColossusDeck = !showColossusDeck
+        if (showColossusDeck) voiceChat.getColossusState()
+      }}
+      title="Engage the Ashveil Colossus Apex Boss Raid & Planet Mado Active Defense Matrix"
+    >
+      <span>⚔️ Colossus Raid {#if voiceChat.colossusTelegraph}<span class="alert-dot red pulse"></span>{/if}</span>
+      <span>{showColossusDeck ? '▲' : '▼'}</span>
+    </button>
   </div>
 
   <!-- God's Eye Surveillance Grid & Tactical Sonar Deck -->
@@ -1086,6 +1105,49 @@
         </div>
       </div>
 
+      <!-- Underworld Navigation Tabs -->
+      <div class="underworld-tabs">
+        <button
+          type="button"
+          class="underworld-tab"
+          class:active={underworldTab === 'drama'}
+          onclick={() => underworldTab = 'drama'}
+        >
+          🗡️ Nocturnal Stalking
+        </button>
+        <button
+          type="button"
+          class="underworld-tab"
+          class:active={underworldTab === 'bounties'}
+          onclick={() => {
+            underworldTab = 'bounties'
+            voiceChat.getBountyBoards()
+          }}
+        >
+          🎯 Bounty Notices ({voiceChat.bountyTasks.length || '4'})
+        </button>
+        <button
+          type="button"
+          class="underworld-tab"
+          class:active={underworldTab === 'fence'}
+          onclick={() => underworldTab = 'fence'}
+        >
+          💰 Silas the Fence
+        </button>
+        <button
+          type="button"
+          class="underworld-tab"
+          class:active={underworldTab === 'schedules'}
+          onclick={() => {
+            underworldTab = 'schedules'
+            voiceChat.getNpcSchedules()
+          }}
+        >
+          ⏰ Town Routines ({voiceChat.npcSchedulesList.length || '5'})
+        </button>
+      </div>
+
+      {#if underworldTab === 'drama'}
       <!-- Autonomous NPC-Stalking-NPC Drama Card (Deadpool Interventions) -->
       {#if voiceChat.activeDrama}
         <div class="drama-card" class:murdered={voiceChat.activeDrama.stage === 'murdered'} class:rescued={voiceChat.activeDrama.stage === 'rescued'}>
@@ -1388,6 +1450,224 @@
           </button>
         {/if}
       </div>
+      {/if}
+
+      <!-- TAB 2: LOWTOWN BOUNTY NOTICE BOARD -->
+      {#if underworldTab === 'bounties'}
+        <div class="bounty-deck">
+          <div class="bounty-header">
+            <div class="bounty-intro">
+              <strong>📜 Lowtown Syndicate & Magistrate Bounties</strong>
+              <p>Live criminal warrants. Fulfill contracts alive (via non-lethal subdual or sleeping gas) for bonus payouts!</p>
+            </div>
+            <button type="button" class="btn-refresh-bounties" onclick={() => voiceChat.getBountyBoards()}>
+              🔄 Refresh Notice
+            </button>
+          </div>
+
+          <!-- Contract Result Banner -->
+          {#if voiceChat.lastBountyResult}
+            <div class="bounty-result-banner" class:success={voiceChat.lastBountyResult.success}>
+              <span>{voiceChat.lastBountyResult.success ? '🎉' : '⚠️'}</span>
+              <div class="result-text">
+                <p>{voiceChat.lastBountyResult.message || (voiceChat.lastBountyResult.error)}</p>
+              </div>
+              <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissBountyResult()}>✕</button>
+            </div>
+          {/if}
+
+          <div class="bounty-cards-grid">
+            {#each voiceChat.bountyTasks as task (task.id)}
+              <div class="bounty-card" class:accepted={task.claim_status === 'accepted'} class:completed={task.claim_status === 'completed'}>
+                <div class="bounty-card-top">
+                  <div class="bounty-target-info">
+                    <span class="bounty-icon">{task.target_icon}</span>
+                    <div>
+                      <strong class="bounty-target-name">{task.target_name}</strong>
+                      <span class="bounty-board-tag">{task.board_name || 'Syndicate Notice'}</span>
+                    </div>
+                  </div>
+                  <div class="bounty-badges">
+                    <span class="bounty-badge contract" class:alive={task.contract_type === 'wanted_alive'} class:dead={task.contract_type === 'wanted_dead'}>
+                      {task.contract_type === 'wanted_alive' ? '🟢 WANTED ALIVE' : (task.contract_type === 'wanted_dead' ? '🔴 WANTED DEAD' : '🟡 DEAD OR ALIVE')}
+                    </span>
+                    <span class="bounty-badge diff {task.difficulty}">{task.difficulty.toUpperCase()}</span>
+                  </div>
+                </div>
+
+                <p class="bounty-crime">{task.crime_desc}</p>
+                <div class="bounty-hint">📍 Hint: {task.location_hint}</div>
+
+                <div class="bounty-rewards-row">
+                  <span class="bounty-reward gold">💰 {task.reward_gold}g</span>
+                  <span class="bounty-reward xp">⭐ {task.reward_xp} XP</span>
+                  <span class="bounty-reward rep">🛡️ +{task.reward_rep} Rep</span>
+                </div>
+
+                <div class="bounty-action-buttons">
+                  {#if task.claim_status === 'completed'}
+                    <span class="bounty-status-done">✅ CONTRACT FULFILLED</span>
+                  {:else if task.claim_status === 'accepted'}
+                    <div class="turnin-btn-group">
+                      <button
+                        type="button"
+                        class="btn-turnin alive"
+                        onclick={() => voiceChat.turnInBounty(task.id, 'sleeping_gas')}
+                        title="Deliver target unconscious via sleeping gas or blunt strike (+15% subdual bonus)"
+                      >
+                        ✨ Subdue & Turn In (Alive)
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-turnin dead"
+                        onclick={() => voiceChat.turnInBounty(task.id, 'executed')}
+                        title="Turn in target eliminated"
+                      >
+                        💀 Turn In (Dead)
+                      </button>
+                    </div>
+                  {:else}
+                    <button
+                      type="button"
+                      class="btn-accept-bounty"
+                      onclick={() => voiceChat.acceptBounty(task.id)}
+                    >
+                      📜 Accept Contract
+                    </button>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <!-- TAB 3: SILAS THE SHADOW FENCE -->
+      {#if underworldTab === 'fence'}
+        <div class="fence-deck">
+          <div class="fence-header">
+            <span class="fence-icon">🗡️</span>
+            <div>
+              <strong>Silas's Contraband Pawn & Black Market</strong>
+              <p class="fence-sub">"I turn hot merchandise and bloody trinkets into cold coin. No questions asked."</p>
+            </div>
+          </div>
+
+          {#if voiceChat.lastFenceResult}
+            <div class="fence-result-banner" class:success={voiceChat.lastFenceResult.success}>
+              <span>{voiceChat.lastFenceResult.success ? '💰' : '⚠️'}</span>
+              <div class="result-text">
+                <p>{voiceChat.lastFenceResult.message || voiceChat.lastFenceResult.error}</p>
+              </div>
+              <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissFenceResult()}>✕</button>
+            </div>
+          {/if}
+
+          <!-- Quick Sell Forensic Loot -->
+          <div class="fence-section">
+            <div class="fence-sec-title">📦 Fence Forensic Loot & Hot Goods:</div>
+            <div class="fence-grid">
+              <button type="button" class="btn-fence-sell" onclick={() => voiceChat.fenceSellLoot('bloodstained_dagger', 1)}>
+                <span>🗡️ Bloodstained Dagger</span>
+                <span class="fence-price">+65g</span>
+              </button>
+              <button type="button" class="btn-fence-sell" onclick={() => voiceChat.fenceSellLoot('stolen_gold_watch', 1)}>
+                <span>⏱️ Stolen Gold Watch</span>
+                <span class="fence-price">+120g</span>
+              </button>
+              <button type="button" class="btn-fence-sell" onclick={() => voiceChat.fenceSellLoot('forged_city_seal', 1)}>
+                <span>📜 Forged City Seal</span>
+                <span class="fence-price">+180g</span>
+              </button>
+              <button type="button" class="btn-fence-sell" onclick={() => voiceChat.fenceSellLoot('contraband_valyrian_tincture', 1)}>
+                <span>🧪 Valyrian Tincture</span>
+                <span class="fence-price">+250g</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Black Market Covert Gear -->
+          <div class="fence-section">
+            <div class="fence-sec-title">🗝️ Illicit Tools & Underworld Gear:</div>
+            <div class="fence-grid">
+              <button type="button" class="btn-fence-buy" onclick={() => voiceChat.fenceBuyContraband('skeleton_key')} title="Picks locked chests and safehouse doors without breaking">
+                <div>
+                  <strong>🔑 Skeleton Key</strong>
+                  <small>Picks locked chests & doors</small>
+                </div>
+                <span class="fence-cost">50g</span>
+              </button>
+              <button type="button" class="btn-fence-buy" onclick={() => voiceChat.fenceBuyContraband('chloroform_knockout_vial')} title="Instant silent subdual weapon for Wanted Alive bounties">
+                <div>
+                  <strong>🧴 Chloroform Knockout</strong>
+                  <small>Subdues bounty targets alive</small>
+                </div>
+                <span class="fence-cost">45g</span>
+              </button>
+              <button type="button" class="btn-fence-buy" onclick={() => voiceChat.fenceBuyContraband('skunkweed_tear_gas')} title="Blinds occupants in interior rooms through open windows">
+                <div>
+                  <strong>💨 Skunkweed Gas</strong>
+                  <small>Blinds indoor occupants</small>
+                </div>
+                <span class="fence-cost">40g</span>
+              </button>
+              <button type="button" class="btn-fence-buy" onclick={() => voiceChat.fenceBuyContraband('forged_identity_papers')} title="Wipes criminal infamy and resets city watch bounty">
+                <div>
+                  <strong>📜 Forged Papers</strong>
+                  <small>Wipes city watch warrants</small>
+                </div>
+                <span class="fence-cost">120g</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- TAB 4: TOWN LIVING SCHEDULES -->
+      {#if underworldTab === 'schedules'}
+        <div class="schedules-deck">
+          <div class="schedules-header">
+            <div>
+              <strong>⏰ Autonomous Town Circadian Routines</strong>
+              <p class="schedules-sub">Living townspeople pathing between work stalls, taverns, and homes.</p>
+            </div>
+            <div class="phase-buttons-row">
+              <button type="button" class="btn-phase dawn" onclick={() => voiceChat.forceCircadianSchedule('dawn')}>☀️ Dawn</button>
+              <button type="button" class="btn-phase day" onclick={() => voiceChat.forceCircadianSchedule('day')}>🌞 Day</button>
+              <button type="button" class="btn-phase dusk" onclick={() => voiceChat.forceCircadianSchedule('dusk')}>🌅 Dusk</button>
+              <button type="button" class="btn-phase night" onclick={() => voiceChat.forceCircadianSchedule('night')}>🌙 Night</button>
+              <button type="button" class="btn-phase midnight" onclick={() => voiceChat.forceCircadianSchedule('midnight')}>⭐ Midnight</button>
+            </div>
+          </div>
+
+          <div class="schedules-list">
+            {#each voiceChat.npcSchedulesList as npc (npc.id)}
+              <div class="schedule-card" class:sleeping={npc.is_sleeping}>
+                <div class="schedule-card-left">
+                  <span class="sched-icon">{npc.is_sleeping ? '💤' : (npc.is_nocturnal ? '👤' : '🚶')}</span>
+                  <div>
+                    <strong class="sched-name">{npc.name}</strong>
+                    <span class="sched-role">{npc.role}</span>
+                  </div>
+                </div>
+                <div class="schedule-card-center">
+                  <span class="sched-activity">📍 {npc.current_activity || 'Idling in town'}</span>
+                </div>
+                <div class="schedule-card-right">
+                  <span class="sched-coords">({npc.x}, {npc.y})</span>
+                  {#if npc.is_sleeping}
+                    <span class="sched-badge sleep">ASLEEP</span>
+                  {:else if npc.is_nocturnal}
+                    <span class="sched-badge nocturnal">NOCTURNAL</span>
+                  {:else}
+                    <span class="sched-badge awake">ACTIVE</span>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -1519,12 +1799,280 @@
                   >
                     🌬️ Check Draft
                   </button>
+                  <button
+                    type="button"
+                    class="btn-check-draft"
+                    onclick={() => voiceChat.getSafehouseStash(prop.id)}
+                    title="Open your private loot vault and trophy inventory"
+                  >
+                    🔒 Open Vault
+                  </button>
+                </div>
+
+                <!-- Safehouse Stash Vault -->
+                <div class="safehouse-vault-card">
+                  <div class="vault-header">
+                    <span class="vault-icon">🔒</span>
+                    <div>
+                      <strong>Safehouse Iron Loot Vault</strong>
+                      <span class="vault-gold">💰 {voiceChat.safehouseStash?.stash_gold ?? prop.stash_gold ?? 0}g Stored</span>
+                    </div>
+                  </div>
+                  <div class="vault-controls-row">
+                    <button type="button" class="btn-vault-action" onclick={() => voiceChat.depositSafehouseGold(prop.id, 50)}>+ Deposit 50g</button>
+                    <button type="button" class="btn-vault-action" onclick={() => voiceChat.depositSafehouseGold(prop.id, 100)}>+ Deposit 100g</button>
+                    <button type="button" class="btn-vault-action" onclick={() => voiceChat.withdrawSafehouseGold(prop.id, 50)}>- Withdraw 50g</button>
+                    <button type="button" class="btn-vault-action stash" onclick={() => voiceChat.depositSafehouseItem(prop.id, 'skeleton_key', 'Masterwork Skeleton Key', 1)}>+ Stash Key</button>
+                  </div>
+
+                  {#if voiceChat.safehouseStash?.items && voiceChat.safehouseStash.items.length > 0}
+                    <div class="vault-items-list">
+                      {#each voiceChat.safehouseStash.items as item (item.id)}
+                        <div class="vault-item-row">
+                          <span>📦 {item.item_name} (x{item.quantity})</span>
+                          <button type="button" class="btn-vault-retrieve" onclick={() => voiceChat.withdrawSafehouseItem(prop.id, item.id)}>Retrieve</button>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+
+                <!-- Wall Mount Trophy Rack -->
+                <div class="trophy-rack-card">
+                  <div class="trophy-header">
+                    <span class="trophy-icon">🏆</span>
+                    <div>
+                      <strong>Wall Mount Trophy Displays</strong>
+                      <small>Permanent sanctuary buffs in town</small>
+                    </div>
+                  </div>
+
+                  {#if voiceChat.safehouseStash?.trophies && voiceChat.safehouseStash.trophies.length > 0}
+                    <div class="trophies-grid">
+                      {#each voiceChat.safehouseStash.trophies as t (t.id)}
+                        <div class="trophy-item-badge">
+                          <span class="trophy-badge-icon">{t.icon}</span>
+                          <div class="trophy-badge-text">
+                            <strong>{t.name}</strong>
+                            <small>{t.description}</small>
+                          </div>
+                          <button type="button" class="btn-rm-trophy" onclick={() => voiceChat.removeSafehouseTrophy(prop.id, t.id)}>✕</button>
+                        </div>
+                      {/each}
+                    </div>
+                  {:else}
+                    <p class="no-trophies-hint">No trophies mounted yet. Slay the Ashveil Colossus or earn syndicate honors to decorate your sanctuary walls!</p>
+                  {/if}
+
+                  <div class="trophy-mount-row">
+                    <button type="button" class="btn-mount-opt" onclick={() => voiceChat.mountSafehouseTrophy(prop.id, 'colossus_skull')}>
+                      💀 Mount Colossus Skull (+15 Def)
+                    </button>
+                    <button type="button" class="btn-mount-opt" onclick={() => voiceChat.mountSafehouseTrophy(prop.id, 'syndicate_crest')}>
+                      🗡️ Mount Syndicate Crest (+20 Stealth)
+                    </button>
+                    <button type="button" class="btn-mount-opt" onclick={() => voiceChat.mountSafehouseTrophy(prop.id, 'golden_skeleton_key')}>
+                      🔑 Mount Master Key (+15% Fence)
+                    </button>
+                    <button type="button" class="btn-mount-opt" onclick={() => voiceChat.mountSafehouseTrophy(prop.id, 'masterwork_lute')}>
+                      🪕 Mount Rowan's Lute (+30% XP)
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Safehouse Companion Guard Stationing -->
+                <div class="safehouse-guard-card">
+                  <div class="guard-header">
+                    <span>🛡️ Safehouse Sentry Guard:</span>
+                    <strong>{prop.guard_companion_name || voiceChat.safehouseStash?.guard_companion || 'Unassigned'}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn-station-guard"
+                    onclick={() => voiceChat.assignSafehouseGuard(prop.id, 42, 'Valeria the Shieldmaiden')}
+                    title="Station your squad companion to defend your safehouse from cutpurses and break-ins"
+                  >
+                    🛡️ Station Companion as Home Guard (+30% Security)
+                  </button>
                 </div>
               </div>
             {/if}
           </div>
         {/each}
       </div>
+    </div>
+  {/if}
+
+  <!-- Ashveil Colossus Apex Raid & Planet Mado Active Defense Deck -->
+  {#if showColossusDeck}
+    <div class="colossus-deck">
+      <div class="colossus-header">
+        <div class="colossus-brand">
+          <span class="colossus-icon">🗿</span>
+          <div>
+            <div class="colossus-title">
+              <strong>THE ASHVEIL COLOSSUS // APEX RAID</strong>
+              <span class="colossus-badge phase-{voiceChat.colossusRaid?.phase || 1}">
+                {voiceChat.colossusRaid?.phase_name || 'Phase 1: Granite Aegis'}
+              </span>
+            </div>
+            <p class="colossus-sub">Planet Mado Multi-Limb Engine • 150ms Active Parry/Dodge Matrix • Raid Boss Raid</p>
+          </div>
+        </div>
+        <div class="colossus-header-actions">
+          <button
+            type="button"
+            class="btn-colossus-telegraph-test"
+            onclick={() => voiceChat.triggerColossusTelegraph('overhead_slam')}
+            title="Trigger a telegraphed 1.2s overhead smash to test Active Defense timing!"
+          >
+            ⚠️ Trigger Overhead Slam
+          </button>
+          <button
+            type="button"
+            class="btn-colossus-close"
+            onclick={() => { showColossusDeck = false }}
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <!-- Boss Global HP Bar -->
+      <div class="colossus-hp-section">
+        <div class="colossus-hp-labels">
+          <span>💥 Boss Life Force</span>
+          <strong>{voiceChat.colossusRaid?.boss_hp ?? 5000} / {voiceChat.colossusRaid?.boss_max_hp ?? 5000} HP ({Math.round(((voiceChat.colossusRaid?.boss_hp ?? 5000) / (voiceChat.colossusRaid?.boss_max_hp ?? 5000)) * 100)}%)</strong>
+        </div>
+        <div class="colossus-hp-track">
+          <div class="colossus-hp-fill phase-{voiceChat.colossusRaid?.phase || 1}" style="width: {((voiceChat.colossusRaid?.boss_hp ?? 5000) / (voiceChat.colossusRaid?.boss_max_hp ?? 5000)) * 100}%"></div>
+        </div>
+      </div>
+
+      <!-- Real-Time Planet Mado Active Defense Prompt (QTE) -->
+      {#if voiceChat.colossusTelegraph}
+        <div class="active-defense-prompt pulse">
+          <div class="telegraph-top">
+            <span class="telegraph-icon">{voiceChat.colossusTelegraph.icon}</span>
+            <div class="telegraph-text">
+              <strong>{voiceChat.colossusTelegraph.name}</strong>
+              <p>{voiceChat.colossusTelegraph.desc}</p>
+            </div>
+            <div class="telegraph-damage-badge">⚠️ {voiceChat.colossusTelegraph.damage} DMG</div>
+          </div>
+          <div class="defense-actions-row">
+            <button
+              type="button"
+              class="btn-act-def parry"
+              onclick={() => voiceChat.reactColossusActiveDefense('parry', 90)}
+              title="Time your parry within 150ms window! Deflects 100% damage and staggers the boss!"
+            >
+              ⚡ PERFECT PARRY (90ms)
+            </button>
+            <button
+              type="button"
+              class="btn-act-def dodge"
+              onclick={() => voiceChat.reactColossusActiveDefense('dodge', 110)}
+              title="Dive roll to avoid damage completely!"
+            >
+              💨 PERFECT DODGE (110ms)
+            </button>
+            <button
+              type="button"
+              class="btn-act-def block"
+              onclick={() => voiceChat.reactColossusActiveDefense('block', 200)}
+              title="Brace shield to mitigate partial damage"
+            >
+              🧱 BRACE BLOCK (Mitigate)
+            </button>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Defense Result Banner -->
+      {#if voiceChat.colossusDefenseResult}
+        <div class="defense-result-card" class:perfect={voiceChat.colossusDefenseResult.staggered_boss} class:failed={!voiceChat.colossusDefenseResult.success}>
+          <span>{voiceChat.colossusDefenseResult.staggered_boss ? '⚡' : (voiceChat.colossusDefenseResult.success ? '🛡️' : '💥')}</span>
+          <div class="defense-result-text">
+            <strong>{voiceChat.colossusDefenseResult.action.toUpperCase()} ({voiceChat.colossusDefenseResult.timing_ms}ms)</strong>
+            <p>{voiceChat.colossusDefenseResult.message}</p>
+          </div>
+          <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissColossusDefense()}>✕</button>
+        </div>
+      {/if}
+
+      <!-- Multi-Limb Targeting Deck -->
+      <div class="limbs-deck">
+        <div class="limbs-title">🎯 Planet Mado Multi-Limb Targeting:</div>
+        <div class="limbs-grid">
+          {#each Object.entries(voiceChat.colossusRaid?.limbs || {
+            head: { hp: 800, max_hp: 800, broken: false, icon: '🗿', name: 'Runic Granite Helm' },
+            core: { hp: 2000, max_hp: 2000, broken: false, icon: '🔮', name: 'Arcane Flame Core' },
+            left_arm: { hp: 600, max_hp: 600, broken: false, icon: '🛡️', name: 'Aegis Gauntlet' },
+            right_arm: { hp: 600, max_hp: 600, broken: false, icon: '🔨', name: 'Crusher Fist' },
+            legs: { hp: 1000, max_hp: 1000, broken: false, icon: '🦿', name: 'Monolithic Pillars' }
+          }) as [limbKey, limb]}
+            <div class="limb-card" class:broken={limb.broken}>
+              <div class="limb-header">
+                <span class="limb-icon">{limb.icon}</span>
+                <div>
+                  <strong class="limb-name">{limb.name}</strong>
+                  <span class="limb-broken-badge" class:broken={limb.broken}>
+                    {limb.broken ? 'SHATTERED' : 'INTACT'}
+                  </span>
+                </div>
+              </div>
+              <div class="limb-hp-track">
+                <div class="limb-hp-fill" style="width: {(limb.hp / limb.max_hp) * 100}%"></div>
+              </div>
+              <div class="limb-hp-text">
+                <span>{limb.hp}/{limb.max_hp} HP</span>
+                {#if !limb.broken && (voiceChat.colossusRaid?.boss_hp ?? 5000) > 0}
+                  <button
+                    type="button"
+                    class="btn-strike-limb"
+                    onclick={() => voiceChat.strikeColossusLimb(limbKey, 180)}
+                    title="Target attack on this limb"
+                  >
+                    ⚔️ Strike (-180)
+                  </button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+
+      <!-- Victory Claim Deck -->
+      {#if (voiceChat.colossusRaid?.boss_hp ?? 5000) <= 0 || voiceChat.colossusRaid?.status === 'defeated'}
+        <div class="colossus-victory-deck">
+          <div class="victory-banner">
+            <span>👑</span>
+            <div>
+              <strong>THE COLOSSUS HAS FALLEN!</strong>
+              <p>Carve the legendary Skull of the Ashveil Colossus to mount on your safehouse trophy wall!</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="btn-claim-colossus-loot"
+            onclick={() => voiceChat.claimColossusLoot()}
+          >
+            🏆 Claim Victory Loot & Skull Trophy (+500g, +1200 XP)
+          </button>
+        </div>
+      {/if}
+
+      {#if voiceChat.colossusLootResult}
+        <div class="loot-result-card">
+          <span>🎁</span>
+          <div class="loot-text">
+            <strong>Raid Spoils Acquired:</strong>
+            <p>{voiceChat.colossusLootResult.message}</p>
+          </div>
+          <button type="button" class="btn-dismiss-alert" onclick={() => voiceChat.dismissColossusLoot()}>✕</button>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -2829,5 +3377,949 @@
     border: 1px solid rgba(245, 158, 11, 0.3);
     color: #fde68a;
   }
-  .threat-clear { font-size: 0.62rem; color: #10b981; margin: 0; }
+  .threat-clear { font-size: 0.625rem; color: #10b981; margin: 0; }
+
+  /* Hub Bar Colossus button */
+  .btn-hub.colossus {
+    border-color: rgba(239, 68, 68, 0.4);
+    background: rgba(239, 68, 68, 0.08);
+    color: #fca5a5;
+  }
+  .btn-hub.colossus:hover, .btn-hub.colossus.active {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: #ef4444;
+  }
+
+  /* Underworld Navigation Tabs */
+  .underworld-tabs {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+    overflow-x: auto;
+  }
+  .underworld-tab {
+    flex: 1;
+    min-width: fit-content;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(15, 23, 42, 0.6);
+    color: #94a3b8;
+    cursor: pointer;
+    transition: all 0.15s ease-out;
+    white-space: nowrap;
+  }
+  .underworld-tab:hover {
+    color: #e2e8f0;
+    border-color: rgba(245, 158, 11, 0.4);
+    background: rgba(245, 158, 11, 0.1);
+  }
+  .underworld-tab.active {
+    background: rgba(245, 158, 11, 0.2);
+    border-color: #f59e0b;
+    color: #fef08a;
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
+  }
+
+  /* Bounty Deck & Cards Grid */
+  .bounty-deck {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .bounty-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .bounty-intro strong {
+    font-size: 0.75rem;
+    color: #fef08a;
+    display: block;
+  }
+  .bounty-intro p {
+    margin: 0;
+    font-size: 0.625rem;
+    color: #94a3b8;
+  }
+  .btn-refresh-bounties {
+    font-size: 0.625rem;
+    font-weight: 700;
+    padding: 0.25rem 0.5rem;
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid #f59e0b;
+    border-radius: 0.25rem;
+    color: #fef08a;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn-refresh-bounties:hover {
+    background: rgba(245, 158, 11, 0.4);
+  }
+  .bounty-result-banner, .fence-result-banner, .defense-result-card, .loot-result-card {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 0.375rem;
+    font-size: 0.6875rem;
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+  }
+  .bounty-result-banner.success, .fence-result-banner.success {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: #10b981;
+    color: #a7f3d0;
+  }
+  .btn-dismiss-alert {
+    margin-left: auto;
+    background: transparent;
+    border: none;
+    color: currentColor;
+    cursor: pointer;
+    font-size: 0.75rem;
+    opacity: 0.7;
+  }
+  .btn-dismiss-alert:hover { opacity: 1; }
+  .bounty-cards-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+    max-height: 340px;
+    overflow-y: auto;
+  }
+  .bounty-card {
+    padding: 0.5rem 0.6rem;
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 0.375rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    transition: all 0.15s;
+  }
+  .bounty-card:hover {
+    border-color: rgba(245, 158, 11, 0.4);
+  }
+  .bounty-card.accepted {
+    border-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.08);
+  }
+  .bounty-card.completed {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.08);
+    opacity: 0.8;
+  }
+  .bounty-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .bounty-target-info {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .bounty-icon { font-size: 1.1rem; }
+  .bounty-target-name {
+    display: block;
+    font-size: 0.75rem;
+    color: #f8fafc;
+  }
+  .bounty-board-tag {
+    display: block;
+    font-size: 0.5625rem;
+    color: #94a3b8;
+  }
+  .bounty-badges {
+    display: flex;
+    gap: 0.25rem;
+    align-items: center;
+  }
+  .bounty-badge {
+    font-size: 0.5625rem;
+    font-weight: 800;
+    padding: 1px 4px;
+    border-radius: 3px;
+    letter-spacing: 0.04em;
+  }
+  .bounty-badge.contract.alive {
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid #10b981;
+    color: #6ee7b7;
+  }
+  .bounty-badge.contract.dead {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid #ef4444;
+    color: #fca5a5;
+  }
+  .bounty-badge.diff {
+    background: rgba(148, 163, 184, 0.2);
+    color: #cbd5e1;
+  }
+  .bounty-badge.diff.easy { color: #86efac; }
+  .bounty-badge.diff.medium { color: #fde047; }
+  .bounty-badge.diff.hard { color: #fb923c; }
+  .bounty-badge.diff.elite { color: #f43f5e; font-weight: 900; }
+
+  .bounty-crime {
+    margin: 0;
+    font-size: 0.65rem;
+    color: #cbd5e1;
+    line-height: 1.3;
+    font-style: italic;
+  }
+  .bounty-hint {
+    font-size: 0.6rem;
+    color: #93c5fd;
+  }
+  .bounty-rewards-row {
+    display: flex;
+    gap: 0.5rem;
+    font-size: 0.625rem;
+    font-weight: 700;
+  }
+  .bounty-reward.gold { color: #facc15; }
+  .bounty-reward.xp { color: #a78bfa; }
+  .bounty-reward.rep { color: #38bdf8; }
+
+  .bounty-action-buttons {
+    margin-top: 2px;
+  }
+  .btn-accept-bounty {
+    width: 100%;
+    padding: 0.25rem 0.5rem;
+    background: linear-gradient(135deg, #d97706, #b45309);
+    border: 1px solid #f59e0b;
+    border-radius: 0.25rem;
+    color: #fef08a;
+    font-size: 0.65rem;
+    font-weight: 800;
+    cursor: pointer;
+  }
+  .btn-accept-bounty:hover { filter: brightness(1.15); }
+  .turnin-btn-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.3rem;
+  }
+  .btn-turnin {
+    padding: 0.25rem 0.35rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+  }
+  .btn-turnin.alive {
+    background: rgba(16, 185, 129, 0.25);
+    border: 1px solid #10b981;
+    color: #a7f3d0;
+  }
+  .btn-turnin.alive:hover { background: rgba(16, 185, 129, 0.45); }
+  .btn-turnin.dead {
+    background: rgba(239, 68, 68, 0.25);
+    border: 1px solid #ef4444;
+    color: #fca5a5;
+  }
+  .btn-turnin.dead:hover { background: rgba(239, 68, 68, 0.45); }
+  .bounty-status-done {
+    display: block;
+    text-align: center;
+    font-size: 0.625rem;
+    font-weight: 800;
+    color: #10b981;
+    padding: 2px 0;
+  }
+
+  /* Silas the Shadow Fence Deck */
+  .fence-deck {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .fence-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .fence-header strong {
+    font-size: 0.75rem;
+    color: #fed7aa;
+  }
+  .fence-icon { font-size: 1.2rem; }
+  .fence-sub {
+    margin: 0;
+    font-size: 0.625rem;
+    color: #94a3b8;
+    font-style: italic;
+  }
+  .fence-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .fence-sec-title {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #e2e8f0;
+    text-transform: uppercase;
+  }
+  .fence-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.35rem;
+  }
+  .btn-fence-sell, .btn-fence-buy {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.35rem 0.5rem;
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 0.375rem;
+    font-size: 0.65rem;
+    color: #e2e8f0;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: left;
+  }
+  .btn-fence-sell:hover {
+    border-color: #facc15;
+    background: rgba(250, 204, 21, 0.1);
+  }
+  .btn-fence-buy:hover {
+    border-color: #38bdf8;
+    background: rgba(56, 189, 248, 0.1);
+  }
+  .fence-price {
+    font-weight: 800;
+    color: #4ade80;
+  }
+  .fence-cost {
+    font-weight: 800;
+    color: #facc15;
+  }
+  .btn-fence-buy small {
+    display: block;
+    font-size: 0.55rem;
+    color: #94a3b8;
+    font-weight: normal;
+  }
+
+  /* Town Living Schedules Deck */
+  .schedules-deck {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .schedules-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .schedules-header strong {
+    font-size: 0.75rem;
+    color: #fef08a;
+  }
+  .schedules-sub {
+    margin: 0;
+    font-size: 0.625rem;
+    color: #94a3b8;
+  }
+  .phase-buttons-row {
+    display: flex;
+    gap: 0.2rem;
+    flex-wrap: wrap;
+  }
+  .btn-phase {
+    padding: 2px 6px;
+    font-size: 0.58rem;
+    font-weight: 700;
+    border-radius: 3px;
+    cursor: pointer;
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: rgba(15, 23, 42, 0.8);
+    color: #cbd5e1;
+    transition: all 0.15s;
+  }
+  .btn-phase.dawn { border-color: #f59e0b; color: #fde68a; }
+  .btn-phase.day { border-color: #eab308; color: #fef08a; }
+  .btn-phase.dusk { border-color: #f97316; color: #fdba74; }
+  .btn-phase.night { border-color: #8b5cf6; color: #c4b5fd; }
+  .btn-phase.midnight { border-color: #3b82f6; color: #93c5fd; }
+  .btn-phase:hover { filter: brightness(1.3); transform: translateY(-1px); }
+
+  .schedules-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .schedule-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 0.375rem;
+  }
+  .schedule-card.sleeping {
+    border-color: rgba(99, 102, 241, 0.4);
+    background: rgba(30, 27, 75, 0.35);
+  }
+  .schedule-card-left {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 130px;
+  }
+  .sched-icon { font-size: 1rem; }
+  .sched-name {
+    font-size: 0.6875rem;
+    color: #f1f5f9;
+    display: block;
+  }
+  .sched-role {
+    font-size: 0.5625rem;
+    color: #94a3b8;
+    display: block;
+  }
+  .schedule-card-center {
+    flex: 1;
+    font-size: 0.625rem;
+    color: #e2e8f0;
+  }
+  .schedule-card-right {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .sched-coords {
+    font-size: 0.5625rem;
+    color: #64748b;
+    font-family: monospace;
+  }
+  .sched-badge {
+    font-size: 0.5625rem;
+    font-weight: 800;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .sched-badge.sleep {
+    background: rgba(99, 102, 241, 0.25);
+    border: 1px solid #818cf8;
+    color: #c7d2fe;
+  }
+  .sched-badge.nocturnal {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid #ef4444;
+    color: #fca5a5;
+  }
+  .sched-badge.awake {
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid #10b981;
+    color: #86efac;
+  }
+
+  /* Safehouse Stash Vault & Trophy Wall Styles */
+  .safehouse-vault-card, .trophy-rack-card, .safehouse-guard-card {
+    margin-top: 0.45rem;
+    padding: 0.45rem 0.6rem;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    border-radius: 0.375rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .vault-header, .trophy-header, .guard-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .vault-icon, .trophy-icon { font-size: 1rem; }
+  .vault-header strong, .trophy-header strong {
+    font-size: 0.72rem;
+    color: #a7f3d0;
+  }
+  .vault-gold {
+    font-size: 0.65rem;
+    font-weight: 800;
+    color: #facc15;
+    margin-left: 0.5rem;
+  }
+  .vault-controls-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  .btn-vault-action {
+    padding: 2px 6px;
+    font-size: 0.6rem;
+    font-weight: 700;
+    border-radius: 3px;
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid #10b981;
+    color: #a7f3d0;
+    cursor: pointer;
+  }
+  .btn-vault-action:hover {
+    background: rgba(16, 185, 129, 0.4);
+  }
+  .btn-vault-action.stash {
+    background: rgba(56, 189, 248, 0.2);
+    border-color: #38bdf8;
+    color: #bae6fd;
+  }
+  .vault-items-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    border-top: 1px dashed rgba(16, 185, 129, 0.3);
+    padding-top: 0.3rem;
+  }
+  .vault-item-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.65rem;
+    color: #f1f5f9;
+  }
+  .btn-vault-retrieve {
+    padding: 1px 5px;
+    font-size: 0.58rem;
+    font-weight: 700;
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid #ef4444;
+    color: #fca5a5;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .btn-vault-retrieve:hover { background: rgba(239, 68, 68, 0.4); }
+
+  .trophies-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.3rem;
+  }
+  .trophy-item-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.45rem;
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: 0.25rem;
+  }
+  .trophy-badge-icon { font-size: 1rem; }
+  .trophy-badge-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .trophy-badge-text strong {
+    font-size: 0.65rem;
+    color: #fef08a;
+  }
+  .trophy-badge-text small {
+    font-size: 0.55rem;
+    color: #cbd5e1;
+  }
+  .btn-rm-trophy {
+    background: transparent;
+    border: none;
+    color: #f87171;
+    cursor: pointer;
+    font-size: 0.75rem;
+  }
+  .no-trophies-hint {
+    margin: 0;
+    font-size: 0.6rem;
+    color: #94a3b8;
+    font-style: italic;
+  }
+  .trophy-mount-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+  }
+  .btn-mount-opt {
+    padding: 2px 6px;
+    font-size: 0.58rem;
+    font-weight: 700;
+    background: rgba(234, 179, 8, 0.2);
+    border: 1px solid #eab308;
+    color: #fef08a;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .btn-mount-opt:hover { background: rgba(234, 179, 8, 0.4); }
+
+  .safehouse-guard-card {
+    border-color: rgba(56, 189, 248, 0.4);
+  }
+  .guard-header {
+    justify-content: space-between;
+    font-size: 0.6875rem;
+    color: #bae6fd;
+  }
+  .btn-station-guard {
+    width: 100%;
+    padding: 0.25rem;
+    font-size: 0.625rem;
+    font-weight: 700;
+    background: rgba(14, 165, 233, 0.25);
+    border: 1px solid #0ea5e9;
+    color: #e0f2fe;
+    border-radius: 0.25rem;
+    cursor: pointer;
+  }
+  .btn-station-guard:hover { background: rgba(14, 165, 233, 0.45); }
+
+  /* Ashveil Colossus Apex Raid & Planet Mado Deck */
+  .colossus-deck {
+    margin: 0.5rem 0.5rem 0.75rem 0.5rem;
+    padding: 0.75rem;
+    background: #0d090a;
+    border: 2px solid #ef4444;
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 25px rgba(239, 68, 68, 0.3);
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+  .colossus-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid rgba(239, 68, 68, 0.3);
+    padding-bottom: 0.45rem;
+  }
+  .colossus-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .colossus-icon { font-size: 1.5rem; }
+  .colossus-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+  .colossus-title strong {
+    font-size: 0.85rem;
+    color: #fca5a5;
+    letter-spacing: 0.05em;
+  }
+  .colossus-badge {
+    font-size: 0.6rem;
+    font-weight: 800;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(239, 68, 68, 0.25);
+    border: 1px solid #ef4444;
+    color: #fee2e2;
+  }
+  .colossus-badge.phase-2 {
+    background: rgba(245, 158, 11, 0.3);
+    border-color: #f59e0b;
+    color: #fef08a;
+  }
+  .colossus-badge.phase-3 {
+    background: rgba(168, 85, 247, 0.3);
+    border-color: #a855f7;
+    color: #f3e8ff;
+    animation: pulse 0.7s infinite;
+  }
+  .colossus-sub {
+    margin: 2px 0 0 0;
+    font-size: 0.6rem;
+    color: #94a3b8;
+  }
+  .colossus-header-actions {
+    display: flex;
+    gap: 0.3rem;
+  }
+  .btn-colossus-telegraph-test {
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 3px 6px;
+    background: rgba(239, 68, 68, 0.3);
+    border: 1px solid #ef4444;
+    color: #fecaca;
+    border-radius: 0.25rem;
+    cursor: pointer;
+  }
+  .btn-colossus-telegraph-test:hover { background: rgba(239, 68, 68, 0.5); }
+  .btn-colossus-close {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .btn-colossus-close:hover { color: #ef4444; }
+
+  /* Boss Global HP Bar */
+  .colossus-hp-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .colossus-hp-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.6875rem;
+    color: #fca5a5;
+  }
+  .colossus-hp-track {
+    height: 12px;
+    background: #1e1012;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .colossus-hp-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #dc2626, #ef4444);
+    transition: width 200ms ease-out;
+  }
+  .colossus-hp-fill.phase-2 {
+    background: linear-gradient(90deg, #ea580c, #f59e0b);
+  }
+  .colossus-hp-fill.phase-3 {
+    background: linear-gradient(90deg, #9333ea, #c084fc);
+  }
+
+  /* Active Defense QTE Prompt */
+  .active-defense-prompt {
+    padding: 0.6rem 0.75rem;
+    background: linear-gradient(135deg, rgba(69, 10, 10, 0.95), rgba(120, 53, 15, 0.95));
+    border: 2px solid #fbbf24;
+    border-radius: 0.375rem;
+    box-shadow: 0 0 20px rgba(251, 191, 36, 0.5);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .active-defense-prompt.pulse {
+    animation: cry-shake 0.4s ease-in-out infinite alternate;
+  }
+  .telegraph-top {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .telegraph-icon { font-size: 1.4rem; }
+  .telegraph-text { flex: 1; }
+  .telegraph-text strong {
+    font-size: 0.8rem;
+    color: #fef08a;
+    display: block;
+  }
+  .telegraph-text p {
+    margin: 0;
+    font-size: 0.65rem;
+    color: #fed7aa;
+  }
+  .telegraph-damage-badge {
+    font-size: 0.7rem;
+    font-weight: 900;
+    color: #fee2e2;
+    background: rgba(220, 38, 38, 0.6);
+    border: 1px solid #ef4444;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .defense-actions-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.35rem;
+  }
+  .btn-act-def {
+    padding: 0.4rem 0.3rem;
+    font-size: 0.65rem;
+    font-weight: 900;
+    border-radius: 0.25rem;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.12s;
+    text-align: center;
+  }
+  .btn-act-def.parry {
+    background: linear-gradient(135deg, #0284c7, #0369a1);
+    border-color: #38bdf8;
+    color: #e0f2fe;
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+  }
+  .btn-act-def.parry:hover {
+    filter: brightness(1.25);
+    transform: scale(1.03);
+  }
+  .btn-act-def.dodge {
+    background: linear-gradient(135deg, #059669, #047857);
+    border-color: #34d399;
+    color: #ecfdf5;
+  }
+  .btn-act-def.dodge:hover {
+    filter: brightness(1.25);
+    transform: scale(1.03);
+  }
+  .btn-act-def.block {
+    background: linear-gradient(135deg, #475569, #334155);
+    border-color: #94a3b8;
+    color: #f8fafc;
+  }
+  .btn-act-def.block:hover {
+    filter: brightness(1.25);
+    transform: scale(1.03);
+  }
+
+  .defense-result-card.perfect {
+    background: rgba(14, 165, 233, 0.25);
+    border-color: #38bdf8;
+    color: #e0f2fe;
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+  }
+
+  /* Planet Mado Multi-Limb Grid */
+  .limbs-deck {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .limbs-title {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: #fca5a5;
+    text-transform: uppercase;
+  }
+  .limbs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 0.4rem;
+  }
+  .limb-card {
+    padding: 0.45rem;
+    background: rgba(24, 14, 16, 0.85);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 0.375rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    transition: all 0.15s;
+  }
+  .limb-card.broken {
+    opacity: 0.5;
+    border-color: rgba(100, 116, 139, 0.3);
+    background: rgba(15, 23, 42, 0.4);
+  }
+  .limb-header {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .limb-icon { font-size: 1rem; }
+  .limb-name {
+    font-size: 0.65rem;
+    color: #f8fafc;
+    display: block;
+  }
+  .limb-broken-badge {
+    font-size: 0.5rem;
+    font-weight: 800;
+    color: #86efac;
+  }
+  .limb-broken-badge.broken { color: #f87171; }
+  .limb-hp-track {
+    height: 5px;
+    background: #200f12;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .limb-hp-fill {
+    height: 100%;
+    background: #ef4444;
+    transition: width 150ms ease-out;
+  }
+  .limb-hp-text {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.58rem;
+    color: #cbd5e1;
+  }
+  .btn-strike-limb {
+    padding: 1px 5px;
+    font-size: 0.58rem;
+    font-weight: 800;
+    background: rgba(220, 38, 38, 0.4);
+    border: 1px solid #ef4444;
+    color: #fee2e2;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .btn-strike-limb:hover {
+    background: rgba(220, 38, 38, 0.8);
+    transform: scale(1.05);
+  }
+
+  /* Colossus Victory Deck */
+  .colossus-victory-deck {
+    padding: 0.65rem 0.75rem;
+    background: linear-gradient(135deg, rgba(120, 53, 15, 0.95), rgba(20, 83, 45, 0.95));
+    border: 2px solid #fbbf24;
+    border-radius: 0.375rem;
+    box-shadow: 0 0 20px rgba(251, 191, 36, 0.5);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .victory-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .victory-banner strong {
+    font-size: 0.82rem;
+    color: #fef08a;
+  }
+  .victory-banner p {
+    margin: 0;
+    font-size: 0.65rem;
+    color: #d1fae5;
+  }
+  .btn-claim-colossus-loot {
+    width: 100%;
+    padding: 0.4rem;
+    background: linear-gradient(135deg, #d97706, #059669);
+    border: 1px solid #facc15;
+    border-radius: 0.25rem;
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 0 10px rgba(250, 204, 21, 0.4);
+    transition: all 0.15s;
+  }
+  .btn-claim-colossus-loot:hover {
+    filter: brightness(1.2);
+    transform: translateY(-1px);
+  }
 </style>

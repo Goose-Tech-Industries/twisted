@@ -310,6 +310,8 @@ export interface PropertyItem {
   has_alarm_glyphs?: boolean
   curtains_drawn: boolean
   security_rating?: number
+  stash_gold?: number
+  guard_companion_name?: string | null
 }
 
 export interface DraftResult {
@@ -445,6 +447,109 @@ export interface GodsEyeWiretap {
   [key: string]: unknown
 }
 
+export interface BountyBoardItem {
+  id: number
+  board_key: string
+  name: string
+  location_name: string
+  faction: string
+  description?: string
+  map_id: number
+}
+
+export interface BountyTaskItem {
+  id: number
+  board_id: number
+  board_name?: string
+  target_name: string
+  target_icon: string
+  contract_type: 'wanted_alive' | 'wanted_dead' | 'dead_or_alive'
+  difficulty: string
+  crime_desc: string
+  location_hint: string
+  reward_gold: number
+  reward_xp: number
+  reward_rep: number
+  is_active: number | boolean
+  claim_status?: 'unclaimed' | 'accepted' | 'completed'
+}
+
+export interface NpcScheduleItem {
+  id: number
+  name: string
+  role: string
+  x: number
+  y: number
+  is_sleeping: number | boolean
+  is_nocturnal: number | boolean
+  current_activity: string
+  icon?: string
+}
+
+export interface SafehouseStashData {
+  property_id: number
+  property_name: string
+  stash_gold: number
+  guard_companion?: string | null
+  items: Array<{
+    id: number
+    item_key: string
+    item_name: string
+    quantity: number
+    meta?: Record<string, unknown>
+  }>
+  trophies: Array<{
+    id: number
+    trophy_key: string
+    name: string
+    icon: string
+    buff_type: string
+    buff_value: number
+    description: string
+  }>
+}
+
+export interface ColossusRaidState {
+  id: number
+  map_id: number
+  status: string
+  boss_name: string
+  boss_hp: number
+  boss_max_hp: number
+  phase: number
+  phase_name: string
+  limbs: Record<string, {
+    hp: number
+    max_hp: number
+    broken: boolean
+    icon: string
+    name: string
+  }>
+  telegraph?: ColossusTelegraph | null
+  is_defeated?: boolean
+  message?: string
+}
+
+export interface ColossusTelegraph {
+  attack_type: string
+  name: string
+  damage: number
+  icon: string
+  desc: string
+  started_at: number
+  deadline: number
+  telegraph_ms: number
+}
+
+export interface ColossusDefenseResult {
+  success: boolean
+  action: string
+  timing_ms: number
+  damage_taken: number
+  staggered_boss: boolean
+  message: string
+}
+
 function createVoiceChatStore() {
   let inVoice = $state(false)
   let isMuted = $state(false)
@@ -494,6 +599,26 @@ function createVoiceChatStore() {
   let lastOrbitalStrikeResult = $state<unknown>(null)
   let lastSupplyDropResult = $state<unknown>(null)
   let lastWhisperResult = $state<unknown>(null)
+
+  // 1. Lowtown Bounty Board & Black Market Fence
+  let bountyBoards = $state<BountyBoardItem[]>([])
+  let bountyTasks = $state<BountyTaskItem[]>([])
+  let lastBountyResult = $state<any | null>(null)
+  let lastFenceResult = $state<any | null>(null)
+
+  // 2. Autonomous NPC Living Schedules
+  let npcSchedulesList = $state<NpcScheduleItem[]>([])
+
+  // 3. Safehouse Stash Vault, Trophy Wall & Guard
+  let safehouseStash = $state<SafehouseStashData | null>(null)
+  let lastStashAction = $state<any | null>(null)
+  let lastTrophyAction = $state<any | null>(null)
+
+  // 4. Ashveil Colossus Apex Raid & Planet Mado Active Defense
+  let colossusRaid = $state<ColossusRaidState | null>(null)
+  let colossusTelegraph = $state<ColossusTelegraph | null>(null)
+  let colossusDefenseResult = $state<ColossusDefenseResult | null>(null)
+  let colossusLootResult = $state<any | null>(null)
 
   let channel: Channel | null = null
   let proximityChannel: Channel | null = null
@@ -704,6 +829,108 @@ function createVoiceChatStore() {
 
       osc.start(ctx.currentTime)
       osc.stop(ctx.currentTime + 1.2)
+    } catch (_) {}
+  }
+
+  function playBountyFanfare() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const notes = [523.25, 659.25, 783.99, 1046.50]
+      notes.forEach((freq, idx) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'triangle'
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.08)
+        gain.gain.setValueAtTime(0.12, ctx.currentTime + idx * 0.08)
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + idx * 0.08 + 0.35)
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.start(ctx.currentTime + idx * 0.08)
+        osc.stop(ctx.currentTime + idx * 0.08 + 0.35)
+      })
+    } catch (_) {}
+  }
+
+  function playFenceCoinChime() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const freqs = [1800, 2400, 3200]
+      freqs.forEach((freq, idx) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.05)
+        gain.gain.setValueAtTime(0.09, ctx.currentTime + idx * 0.05)
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + idx * 0.05 + 0.22)
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.start(ctx.currentTime + idx * 0.05)
+        osc.stop(ctx.currentTime + idx * 0.05 + 0.22)
+      })
+    } catch (_) {}
+  }
+
+  function playPerfectParryClash() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const now = ctx.currentTime
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'square'
+      osc.frequency.setValueAtTime(1150, now)
+      osc.frequency.exponentialRampToValueAtTime(840, now + 0.25)
+      gain.gain.setValueAtTime(0.28, now)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.4)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(now)
+      osc.stop(now + 0.4)
+    } catch (_) {}
+  }
+
+  function playColossusRoar() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const now = ctx.currentTime
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sawtooth'
+      osc.frequency.setValueAtTime(85, now)
+      osc.frequency.exponentialRampToValueAtTime(28, now + 1.4)
+      gain.gain.setValueAtTime(0.24, now)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.4)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(now)
+      osc.stop(now + 1.4)
+    } catch (_) {}
+  }
+
+  function playSafehouseLatch() {
+    if (!browser || isDeafened) return
+    try {
+      const ctx = getAudioContext()
+      if (!ctx) return
+      const now = ctx.currentTime
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'triangle'
+      osc.frequency.setValueAtTime(260, now)
+      osc.frequency.exponentialRampToValueAtTime(90, now + 0.12)
+      gain.gain.setValueAtTime(0.18, now)
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(now)
+      osc.stop(now + 0.14)
     } catch (_) {}
   }
 
@@ -1268,6 +1495,130 @@ function createVoiceChatStore() {
         pushLog('uile', '👁️ Omnipresent Whisper', `Whisper transmitted.`, '👁️')
       })
     }
+
+    if (ch && !(ch as unknown as { _systemsBound?: boolean })._systemsBound) {
+      ;(ch as unknown as { _systemsBound?: boolean })._systemsBound = true
+
+      // 1. Bounty Board & Black Market Fence
+      ch.on('bounty_tasks_result', (p: any) => {
+        bountyBoards = p.boards || []
+        bountyTasks = p.tasks || []
+      })
+      ch.on('bounty_tasks', (p: any) => {
+        if (p.tasks) bountyTasks = p.tasks
+      })
+      ch.on('bounty_action_result', (p: any) => {
+        lastBountyResult = p
+        if (p.success) {
+          playBountyFanfare()
+          pushLog('diplomacy', '📜 Bounty Contract', p.message, '🎯')
+        }
+      })
+      ch.on('fence_action_result', (p: any) => {
+        lastFenceResult = p
+        if (p.success) {
+          playFenceCoinChime()
+          pushLog('npc', '🗡️ Silas the Fence', p.message, '💰')
+        }
+      })
+
+      // 2. Autonomous NPC Living Schedules
+      ch.on('npc_schedules_list', (p: any) => {
+        npcSchedulesList = p.schedules || []
+      })
+      ch.on('npc_schedules_update', (p: any) => {
+        if (p.schedules) {
+          const updates = p.schedules as Array<{ npc_name: string; x: number; y: number; activity: string; icon?: string }>
+          npcSchedulesList = npcSchedulesList.map(item => {
+            const up = updates.find(u => u.npc_name === item.name)
+            return up ? { ...item, x: up.x, y: up.y, current_activity: up.activity, icon: up.icon || item.icon } : item
+          })
+          pushLog('npc', `⏰ Circadian Phase: ${p.phase.toUpperCase()}`, `Town denizens migrated to scheduled routines.`, '🚶')
+        }
+      })
+
+      // 3. Safehouse Stash Vault, Trophy Wall & Guard
+      ch.on('property_stash_result', (p: any) => {
+        if (p.success) {
+          safehouseStash = {
+            property_id: p.property_id,
+            property_name: p.property_name,
+            stash_gold: p.stash_gold || 0,
+            guard_companion: p.guard_companion || null,
+            items: p.items || [],
+            trophies: p.trophies || []
+          }
+        }
+      })
+      ch.on('property_stash_action', (p: any) => {
+        lastStashAction = p
+        if (p.success) {
+          playSafehouseLatch()
+          pushLog('diplomacy', '🔒 Safehouse Vault', p.message, '🗝️')
+        }
+      })
+      ch.on('property_trophy_action', (p: any) => {
+        lastTrophyAction = p
+        if (p.success) {
+          playTone(680, 'triangle', 0.25)
+          pushLog('diplomacy', '🏆 Wall Mount Trophy', p.message, '🏆')
+        }
+      })
+      ch.on('property_guard_action', (p: any) => {
+        if (p.success) {
+          pushLog('companion', '🛡️ Safehouse Guard', p.message, '🛡️')
+        }
+      })
+
+      // 4. Ashveil Colossus Apex Raid & Planet Mado Active Defense
+      ch.on('colossus_state', (p: any) => {
+        colossusRaid = p
+      })
+      ch.on('colossus_strike_update', (p: any) => {
+        if (colossusRaid) {
+          colossusRaid = {
+            ...colossusRaid,
+            boss_hp: p.boss_hp,
+            phase: p.phase,
+            phase_name: p.phase_name,
+            limbs: p.limbs,
+            is_defeated: p.is_defeated
+          }
+        }
+        if (p.limb_broken) {
+          playTone(280, 'sawtooth', 0.3)
+          pushLog('uile', '💥 Colossus Limb Broken!', `${p.limb_hit.replace('_', ' ').toUpperCase()} has been destroyed!`, '🔨')
+        }
+      })
+      ch.on('colossus_strike_result', (p: any) => {
+        if (p.message) {
+          pushLog('uile', '⚔️ Raid Strike', p.message, '⚔️')
+        }
+      })
+      ch.on('colossus_telegraph', (p: any) => {
+        colossusTelegraph = p
+        playColossusRoar()
+        pushLog('uile', `⚠️ Colossus Telegraph: ${p.name}`, `Telegraph window active (${p.telegraph_ms}ms)! Time your Parry/Dodge!`, '🌋')
+      })
+      ch.on('colossus_defense_result', (p: any) => {
+        colossusDefenseResult = p
+        colossusTelegraph = null
+        if (p.staggered_boss) {
+          playPerfectParryClash()
+          pushLog('uile', '⚡ PERFECT PARRY!', p.message, '🛡️')
+        } else {
+          playTone(180, 'sawtooth', 0.25)
+          pushLog('uile', '💥 Colossus Impact', p.message, '💥')
+        }
+      })
+      ch.on('colossus_loot_result', (p: any) => {
+        colossusLootResult = p
+        if (p.success) {
+          playBountyFanfare()
+          pushLog('uile', '👑 Colossus Raid Cleared!', p.message, '👑')
+        }
+      })
+    }
     return ch
   }
 
@@ -1320,6 +1671,26 @@ function createVoiceChatStore() {
     get lastOrbitalStrikeResult() { return lastOrbitalStrikeResult },
     get lastSupplyDropResult() { return lastSupplyDropResult },
     get lastWhisperResult() { return lastWhisperResult },
+
+    // 1. Bounty & Fence Getters
+    get bountyBoards() { return bountyBoards },
+    get bountyTasks() { return bountyTasks },
+    get lastBountyResult() { return lastBountyResult },
+    get lastFenceResult() { return lastFenceResult },
+
+    // 2. Schedules Getters
+    get npcSchedulesList() { return npcSchedulesList },
+
+    // 3. Safehouse Stash & Trophies Getters
+    get safehouseStash() { return safehouseStash },
+    get lastStashAction() { return lastStashAction },
+    get lastTrophyAction() { return lastTrophyAction },
+
+    // 4. Ashveil Colossus Getters
+    get colossusRaid() { return colossusRaid },
+    get colossusTelegraph() { return colossusTelegraph },
+    get colossusDefenseResult() { return colossusDefenseResult },
+    get colossusLootResult() { return colossusLootResult },
 
     setGodsEyeRadar(data: GodsEyeScanResult) {
       godsEyeRadar = data
@@ -1970,6 +2341,113 @@ function createVoiceChatStore() {
         x,
         y
       })
+    },
+
+    // ── Bounty Board & Fence Methods ──
+    getBountyBoards() {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('bounty_get_boards', {})
+    },
+    acceptBounty(taskId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('bounty_accept_task', { task_id: taskId })
+    },
+    turnInBounty(taskId: number, captureMethod: string = 'alive') {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('bounty_turn_in', { task_id: taskId, capture_method: captureMethod })
+    },
+    fenceSellLoot(lootType: string, quantity: number = 1) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('fence_sell_loot', { loot_type: lootType, quantity })
+    },
+    fenceBuyContraband(itemType: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('fence_buy_contraband', { item_type: itemType })
+    },
+    dismissBountyResult() {
+      lastBountyResult = null
+    },
+    dismissFenceResult() {
+      lastFenceResult = null
+    },
+
+    // ── NPC Living Schedules Methods ──
+    getNpcSchedules(mapId?: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('schedules_get_active', { map_id: mapId })
+    },
+    forceCircadianSchedule(phase: string, mapId?: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('schedules_force_phase', { phase, map_id: mapId })
+    },
+
+    // ── Safehouse Stash & Trophy Wall Methods ──
+    getSafehouseStash(propertyId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('property_get_stash', { property_id: propertyId })
+    },
+    depositSafehouseGold(propertyId: number, amount: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('property_deposit_gold', { property_id: propertyId, amount })
+    },
+    withdrawSafehouseGold(propertyId: number, amount: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('property_withdraw_gold', { property_id: propertyId, amount })
+    },
+    depositSafehouseItem(propertyId: number, itemKey: string, itemName: string, quantity: number = 1, meta?: Record<string, unknown>) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('property_deposit_item', { property_id: propertyId, item_key: itemKey, item_name: itemName, quantity, meta })
+    },
+    withdrawSafehouseItem(propertyId: number, stashId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('property_withdraw_item', { property_id: propertyId, stash_id: stashId })
+    },
+    mountSafehouseTrophy(propertyId: number, trophyKey: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('property_mount_trophy', { property_id: propertyId, trophy_key: trophyKey })
+    },
+    removeSafehouseTrophy(propertyId: number, trophyId: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('property_remove_trophy', { property_id: propertyId, trophy_id: trophyId })
+    },
+    assignSafehouseGuard(propertyId: number, companionId: number, companionName: string) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('property_assign_guard', { property_id: propertyId, companion_id: companionId, companion_name: companionName })
+    },
+
+    // ── Ashveil Colossus Apex Raid & Active Defense Methods ──
+    getColossusState(mapId?: number) {
+      const activeChan = channel || proximityChannel
+      if (activeChan) activeChan.push('colossus_get_state', { map_id: mapId })
+    },
+    strikeColossusLimb(limb: string, damage: number = 150) {
+      const activeChan = channel || proximityChannel
+      const raidId = colossusRaid?.id || 1
+      if (activeChan) activeChan.push('colossus_strike_limb', { raid_id: raidId, limb, damage })
+    },
+    triggerColossusTelegraph(attackType: string = 'overhead_slam') {
+      const activeChan = channel || proximityChannel
+      const raidId = colossusRaid?.id || 1
+      if (activeChan) activeChan.push('colossus_trigger_telegraph', { raid_id: raidId, attack_type: attackType })
+    },
+    reactColossusActiveDefense(defenseType: 'parry' | 'dodge' | 'block', timingMs?: number) {
+      const activeChan = channel || proximityChannel
+      const raidId = colossusRaid?.id || 1
+      const now = Date.now()
+      const t = colossusTelegraph
+      const computedTimingMs = timingMs !== undefined ? timingMs : (t ? Math.round(now - (t.started_at + t.telegraph_ms)) : 100)
+      if (activeChan) activeChan.push('colossus_active_defense_react', { raid_id: raidId, defense_type: defenseType, timing_ms: computedTimingMs })
+    },
+    claimColossusLoot() {
+      const activeChan = channel || proximityChannel
+      const raidId = colossusRaid?.id || 1
+      if (activeChan) activeChan.push('colossus_claim_loot', { raid_id: raidId })
+    },
+    dismissColossusDefense() {
+      colossusDefenseResult = null
+    },
+    dismissColossusLoot() {
+      colossusLootResult = null
     },
 
     leave() {

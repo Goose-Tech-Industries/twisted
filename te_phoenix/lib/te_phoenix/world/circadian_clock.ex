@@ -136,6 +136,13 @@ defmodule TePhoenix.World.CircadianClock do
       _ -> :ok
     end
 
+    # 4. Trigger autonomous NPC living schedule migrations and waypoint relocation
+    try do
+      TePhoenix.World.NpcSchedules.apply_schedules_for_phase(map_id, phase)
+    rescue
+      _ -> :ok
+    end
+
     payload = %{
       time_of_day: phase,
       is_night: is_night,

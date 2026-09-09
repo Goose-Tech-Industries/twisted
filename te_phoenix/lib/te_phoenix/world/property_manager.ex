@@ -32,11 +32,54 @@ defmodule TePhoenix.World.PropertyManager do
       is_for_sale TINYINT(1) NOT NULL DEFAULT 1,
       fortifications_json LONGTEXT,
       curtains_drawn TINYINT(1) NOT NULL DEFAULT 0,
+      stash_gold INT NOT NULL DEFAULT 0,
+      guard_companion_id INT NULL,
+      guard_companion_name VARCHAR(64) NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_prop_map (map_id),
       INDEX idx_prop_owner (owner_char_id)
     )
     """)
+
+    # Ensure added columns exist on existing tables
+    try do
+      Repo.query!("ALTER TABLE game_properties ADD COLUMN IF NOT EXISTS stash_gold INT NOT NULL DEFAULT 0")
+      Repo.query!("ALTER TABLE game_properties ADD COLUMN IF NOT EXISTS guard_companion_id INT NULL")
+      Repo.query!("ALTER TABLE game_properties ADD COLUMN IF NOT EXISTS guard_companion_name VARCHAR(64) NULL")
+    rescue
+      _ -> :ok
+    end
+
+    Repo.query!("""
+    CREATE TABLE IF NOT EXISTS game_property_stashes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      property_id INT NOT NULL,
+      char_id INT NOT NULL,
+      item_key VARCHAR(64) NOT NULL,
+      item_name VARCHAR(128) NOT NULL,
+      quantity INT NOT NULL DEFAULT 1,
+      item_meta_json LONGTEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_prop_stash (property_id)
+    )
+    """)
+
+    Repo.query!("""
+    CREATE TABLE IF NOT EXISTS game_property_trophies (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      property_id INT NOT NULL,
+      char_id INT NOT NULL,
+      trophy_key VARCHAR(64) NOT NULL,
+      name VARCHAR(128) NOT NULL,
+      icon VARCHAR(16) NOT NULL DEFAULT '🏆',
+      buff_type VARCHAR(64) NOT NULL,
+      buff_value INT NOT NULL DEFAULT 10,
+      description TEXT,
+      mounted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_prop_trophy (property_id)
+    )
+    """)
+
     :ok
   end
 
@@ -85,7 +128,7 @@ defmodule TePhoenix.World.PropertyManager do
     ensure_schema!()
 
     case Repo.query(
-           "SELECT id, building_id, map_id, name, price_gold, owner_char_id, owner_name, is_for_sale, fortifications_json, curtains_drawn FROM game_properties WHERE map_id = ?",
+           "SELECT id, building_id, map_id, name, price_gold, owner_char_id, owner_name, is_for_sale, fortifications_json, curtains_drawn, stash_gold, guard_companion_name FROM game_properties WHERE map_id = ?",
            [map_id]
          ) do
       {:ok, %{rows: rows, columns: cols}} ->
@@ -239,7 +282,7 @@ defmodule TePhoenix.World.PropertyManager do
     char_id = player[:id] || player["id"]
 
     case Repo.query("SELECT id, name, owner_char_id FROM game_properties WHERE id = ? LIMIT 1", [property_id]) do
-      {:ok, %{rows: [[id, name, owner]]}} ->
+      {:ok, %{rows: [[_id, name, owner]]}} ->
         if owner != char_id do
           {:error, "You do not own #{name}. Trespassing in private quarters is forbidden."}
         else
@@ -260,6 +303,325 @@ defmodule TePhoenix.World.PropertyManager do
     end
   end
 
+  # ── Safehouse Stash Vault ──────────────────────────────────────────
+
+  @doc """
+  Retrieves safehouse stash: stored gold, items, trophies, and guard companion.
+  """
+  def get_safehouse_stash(player, property_id) do
+    ensure_schema!()
+    char_id = player[:id] || player["id"]
+
+    case Repo.query("SELECT id, name, owner_char_id, stash_gold, guard_companion_name FROM game_properties WHERE id = ? LIMIT 1", [property_id]) do
+      {:ok, %{rows: [[id, name, owner, gold, guard]]}} ->
+        if owner != char_id do
+          {:error, "Only the deed owner may access the safehouse stash vault."}
+        else
+          items = case Repo.query("SELECT id, item_key, item_name, quantity, item_meta_json FROM game_property_stashes WHERE property_id = ? ORDER BY id DESC", [id]) do
+            {:ok, %{rows: rows, columns: cols}} ->
+              Enum.map(rows, fn r ->
+                row = Enum.zip(cols, r) |> Map.new()
+                %{
+                  id: row["id"],
+                  item_key: row["item_key"],
+                  item_name: row["item_name"],
+                  quantity: row["quantity"],
+                  meta: decode_json(row["item_meta_json"], %{})
+                }
+              end)
+            _ -> []
+          end
+
+          trophies = list_trophies(player, id)
+
+          {:ok, %{
+            property_id: id,
+            property_name: name,
+            stash_gold: gold || 0,
+            guard_companion: guard,
+            items: items,
+            trophies: trophies
+          }}
+        end
+
+      _ ->
+        {:error, "Property not found."}
+    end
+  end
+
+  @doc """
+  Deposits gold from the player's purse into the safehouse vault.
+  """
+  def deposit_stash_gold(player, property_id, amount) when is_integer(amount) and amount > 0 do
+    ensure_schema!()
+    char_id = player[:id] || player["id"]
+
+    case Repo.query("SELECT id, name, owner_char_id, stash_gold FROM game_properties WHERE id = ? LIMIT 1", [property_id]) do
+      {:ok, %{rows: [[id, name, owner, current_stash]]}} ->
+        if owner != char_id do
+          {:error, "You do not own this property."}
+        else
+          gold = get_player_gold(player)
+          if gold < amount do
+            {:error, "Insufficient gold in purse: you have #{gold}g, trying to deposit #{amount}g."}
+          else
+            deduct_player_gold(char_id, amount)
+            new_stash = (current_stash || 0) + amount
+            Repo.query("UPDATE game_properties SET stash_gold = ? WHERE id = ?", [new_stash, id])
+
+            {:ok, %{
+              success: true,
+              property_name: name,
+              deposited_gold: amount,
+              new_stash_gold: new_stash,
+              message: "Securely deposited #{amount} gold into #{name}'s iron vault. Total stored: #{new_stash}g."
+            }}
+          end
+        end
+
+      _ -> {:error, "Property not found."}
+    end
+  end
+
+  @doc """
+  Withdraws gold from the safehouse vault into the player's purse.
+  """
+  def withdraw_stash_gold(player, property_id, amount) when is_integer(amount) and amount > 0 do
+    ensure_schema!()
+    char_id = player[:id] || player["id"]
+
+    case Repo.query("SELECT id, name, owner_char_id, stash_gold FROM game_properties WHERE id = ? LIMIT 1", [property_id]) do
+      {:ok, %{rows: [[id, name, owner, current_stash]]}} ->
+        if owner != char_id do
+          {:error, "You do not own this property."}
+        else
+          current = current_stash || 0
+          if current < amount do
+            {:error, "Vault has insufficient funds: stored #{current}g, requested #{amount}g."}
+          else
+            new_stash = current - amount
+            Repo.query("UPDATE game_properties SET stash_gold = ? WHERE id = ?", [new_stash, id])
+            award_player_gold(char_id, amount)
+
+            {:ok, %{
+              success: true,
+              property_name: name,
+              withdrawn_gold: amount,
+              new_stash_gold: new_stash,
+              message: "Withdrew #{amount} gold from #{name}'s vault. Stash remaining: #{new_stash}g."
+            }}
+          end
+        end
+
+      _ -> {:error, "Property not found."}
+    end
+  end
+
+  @doc """
+  Stores an item or contraband into the safehouse loot stash.
+  """
+  def deposit_stash_item(player, property_id, item_key, item_name, quantity \\ 1, meta \\ %{}) do
+    ensure_schema!()
+    char_id = player[:id] || player["id"]
+
+    case Repo.query("SELECT id, name, owner_char_id FROM game_properties WHERE id = ? LIMIT 1", [property_id]) do
+      {:ok, %{rows: [[id, name, owner]]}} ->
+        if owner != char_id do
+          {:error, "You do not own this property."}
+        else
+          json = Jason.encode!(meta)
+          Repo.query(
+            "INSERT INTO game_property_stashes (property_id, char_id, item_key, item_name, quantity, item_meta_json) VALUES (?, ?, ?, ?, ?, ?)",
+            [id, char_id, item_key, item_name, quantity, json]
+          )
+
+          {:ok, %{
+            success: true,
+            property_name: name,
+            item_key: item_key,
+            item_name: item_name,
+            quantity: quantity,
+            message: "Stored #{quantity}x #{item_name} safely in #{name}."
+          }}
+        end
+
+      _ -> {:error, "Property not found."}
+    end
+  end
+
+  @doc """
+  Withdraws an item from the safehouse loot stash into player inventory.
+  """
+  def withdraw_stash_item(player, property_id, stash_id) do
+    ensure_schema!()
+    _char_id = player[:id] || player["id"]
+
+    case Repo.query("SELECT id, property_id, item_key, item_name, quantity FROM game_property_stashes WHERE id = ? AND property_id = ? LIMIT 1", [stash_id, property_id]) do
+      {:ok, %{rows: [[id, prop_id, item_key, item_name, qty]]}} ->
+        Repo.query("DELETE FROM game_property_stashes WHERE id = ?", [id])
+
+        {:ok, %{
+          success: true,
+          property_id: prop_id,
+          item_key: item_key,
+          item_name: item_name,
+          quantity: qty,
+          message: "Retrieved #{qty}x #{item_name} from your safehouse locker."
+        }}
+
+      _ ->
+        {:error, "Item not found in stash."}
+    end
+  end
+
+  # ── Trophy Wall System ──────────────────────────────────────────────
+
+  @doc """
+  Lists mounted trophies on the property's walls.
+  """
+  def list_trophies(_player, property_id) do
+    ensure_schema!()
+
+    case Repo.query("SELECT id, trophy_key, name, icon, buff_type, buff_value, description FROM game_property_trophies WHERE property_id = ? ORDER BY id ASC", [property_id]) do
+      {:ok, %{rows: rows, columns: cols}} ->
+        Enum.map(rows, fn r -> Enum.zip(cols, r) |> Map.new() end)
+      _ -> []
+    end
+  end
+
+  @doc """
+  Mounts a legendary trophy, boss head, or guild artifact on the safehouse wall.
+  """
+  def mount_trophy(player, property_id, trophy_key) do
+    ensure_schema!()
+    char_id = player[:id] || player["id"]
+
+    catalog = %{
+      "colossus_skull" => %{
+        name: "Skull of the Ashveil Colossus",
+        icon: "💀",
+        buff_type: "defense_bonus",
+        buff_value: 15,
+        desc: "Ancient runic stone skull radiating defensive wards (+15 Phys/Arcane Def in town)."
+      },
+      "syndicate_crest" => %{
+        name: "Shadow Syndicate Inscribed Crest",
+        icon: "🗡️",
+        buff_type: "stealth_bonus",
+        buff_value: 20,
+        desc: "Mark of the Underworld Council (+20 Stealth rating)."
+      },
+      "golden_skeleton_key" => %{
+        name: "Silas's Golden Master Key",
+        icon: "🔑",
+        buff_type: "fence_bonus",
+        buff_value: 15,
+        desc: "Increases Black Market Fence barter payout by +15%."
+      },
+      "masterwork_lute" => %{
+        name: "Rowan's Masterwork Bardic Lute",
+        icon: "🪕",
+        buff_type: "rest_bonus",
+        buff_value: 10,
+        desc: "Enhances Well Rested buff bonus to +30% XP."
+      }
+    }
+
+    case Map.get(catalog, trophy_key) do
+      nil -> {:error, "Unknown trophy type."}
+      t ->
+        case Repo.query("SELECT id, name, owner_char_id FROM game_properties WHERE id = ? LIMIT 1", [property_id]) do
+          {:ok, %{rows: [[id, name, owner]]}} ->
+            if owner != char_id do
+              {:error, "Only the deed owner can mount trophies on the walls."}
+            else
+              # Check if already mounted
+              case Repo.query("SELECT id FROM game_property_trophies WHERE property_id = ? AND trophy_key = ? LIMIT 1", [id, trophy_key]) do
+                {:ok, %{rows: [[_]]}} ->
+                  {:error, "#{t.name} is already mounted on the wall of #{name}."}
+
+                _ ->
+                  Repo.query(
+                    """
+                    INSERT INTO game_property_trophies
+                    (property_id, char_id, trophy_key, name, icon, buff_type, buff_value, description)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [id, char_id, trophy_key, t.name, t.icon, t.buff_type, t.buff_value, t.desc]
+                  )
+
+                  {:ok, %{
+                    success: true,
+                    trophy_key: trophy_key,
+                    name: t.name,
+                    icon: t.icon,
+                    buff_type: t.buff_type,
+                    buff_value: t.buff_value,
+                    property_name: name,
+                    message: "Mounted #{t.name} proudly on the wall of #{name}! #{t.desc}"
+                  }}
+              end
+            end
+
+          _ -> {:error, "Property not found."}
+        end
+    end
+  end
+
+  @doc """
+  Removes a mounted trophy from the wall.
+  """
+  def remove_trophy(player, property_id, trophy_id) do
+    ensure_schema!()
+    char_id = player[:id] || player["id"]
+
+    case Repo.query("SELECT id, name, owner_char_id FROM game_properties WHERE id = ? LIMIT 1", [property_id]) do
+      {:ok, %{rows: [[id, name, owner]]}} ->
+        if owner != char_id do
+          {:error, "You do not own this property."}
+        else
+          Repo.query("DELETE FROM game_property_trophies WHERE id = ? AND property_id = ?", [trophy_id, id])
+
+          {:ok, %{
+            success: true,
+            property_name: name,
+            message: "Removed trophy from the wall of #{name}."
+          }}
+        end
+
+      _ -> {:error, "Property not found."}
+    end
+  end
+
+  @doc """
+  Assigns a companion NPC to guard the safehouse, boosting security rating and defending against intruders.
+  """
+  def assign_guard_companion(player, property_id, companion_id, companion_name) do
+    ensure_schema!()
+    char_id = player[:id] || player["id"]
+
+    case Repo.query("SELECT id, name, owner_char_id FROM game_properties WHERE id = ? LIMIT 1", [property_id]) do
+      {:ok, %{rows: [[id, name, owner]]}} ->
+        if owner != char_id do
+          {:error, "You do not own this property."}
+        else
+          Repo.query(
+            "UPDATE game_properties SET guard_companion_id = ?, guard_companion_name = ? WHERE id = ?",
+            [companion_id, companion_name, id]
+          )
+
+          {:ok, %{
+            success: true,
+            property_name: name,
+            guard_companion_name: companion_name,
+            message: "#{companion_name} has been stationed to guard #{name}! Intrusion defense and alert readiness increased."
+          }}
+        end
+
+      _ -> {:error, "Property not found."}
+    end
+  end
+
   # ── Helpers ────────────────────────────────────────────────────────
 
   defp parse_property_row(row) do
@@ -273,7 +635,9 @@ defmodule TePhoenix.World.PropertyManager do
       owner_name: row["owner_name"],
       is_for_sale: row["is_for_sale"] == 1,
       fortifications: decode_json(row["fortifications_json"], []),
-      curtains_drawn: row["curtains_drawn"] == 1
+      curtains_drawn: row["curtains_drawn"] == 1,
+      stash_gold: row["stash_gold"] || 0,
+      guard_companion_name: row["guard_companion_name"]
     }
   end
 
@@ -297,6 +661,10 @@ defmodule TePhoenix.World.PropertyManager do
 
   defp deduct_player_gold(char_id, amount) do
     Repo.query("UPDATE characters SET gold = GREATEST(0, gold - ?) WHERE id = ?", [amount, char_id])
+  end
+
+  defp award_player_gold(char_id, amount) do
+    Repo.query("UPDATE characters SET gold = gold + ? WHERE id = ?", [amount, char_id])
   end
 
   defp decode_json(nil, default), do: default

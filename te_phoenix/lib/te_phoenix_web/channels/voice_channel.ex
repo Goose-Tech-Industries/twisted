@@ -320,6 +320,71 @@ defmodule TePhoenixWeb.VoiceChannel do
     {:reply, :ok, socket}
   end
 
+  # ── Interactive World, Underworld, Property & Colossus Delegations ─
+
+  @impl true
+  def handle_in("bounty_" <> _ = e, p, socket), do: TePhoenixWeb.Game.BountyAndSyndicateHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("fence_" <> _ = e, p, socket), do: TePhoenixWeb.Game.BountyAndSyndicateHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("schedules_" <> _ = e, p, socket), do: TePhoenixWeb.Game.BountyAndSyndicateHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("property_" <> _ = e, p, socket), do: TePhoenixWeb.Game.BountyAndSyndicateHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("colossus_" <> _ = e, p, socket), do: TePhoenixWeb.Game.AshveilColossusHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("get_properties" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("purchase_property" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("add_fortification" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("toggle_soundproof_curtains" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("rest_property" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("check_indoor_draft" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("deploy_window_gas" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("get_npc_drama" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("trigger_nocturnal_stalking" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("intervene_npc_drama" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("tick_npc_drama" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("spot_stalker" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("investigate_crime_scene" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("defenestrate_target" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("cascade_brawl" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
+  @impl true
+  def handle_in("brawl_round_tick" = e, p, socket), do: TePhoenixWeb.Game.CoreHandler.handle(e, p, socket)
+
   @impl true
   def terminate(_reason, socket) do
     if socket.assigns[:char_id] do
