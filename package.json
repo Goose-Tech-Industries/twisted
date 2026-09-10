@@ -1,22 +1,20 @@
 {
   "name": "twisted-engine-monorepo",
-  "version": "22.1.0",
+  "version": "23.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"npm run dev:te\" \"npm run dev:ui\" --names \"backend,ui\" --prefix-colors \"cyan,magenta\"",
-    "dev:te": "cd te && npm run dev",
-    "dev:ui": "cd ui && npm run dev",
-    "install:all": "npm install && cd te && npm install && cd ../ui && npm install",
-    "build:ui": "cd ui && npm run build",
-    "start:prod": "pm2 start ecosystem.config.js --env production",
-    "stop:prod": "pm2 stop ecosystem.config.js",
-    "restart:prod": "pm2 restart ecosystem.config.js",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:player\" --names \"backend,player\" --prefix-colors \"cyan,green\"",
+    "dev:backend": "cd te_phoenix && mix phx.server",
+    "dev:player": "pnpm --filter @twisted/player dev",
+    "test:backend": "cd te_phoenix && mix test",
+    "build:player": "pnpm --filter @twisted/player build",
+    "start:prod": "pm2 start ecosystem.player.config.js",
+    "stop:prod": "pm2 stop ecosystem.player.config.js",
+    "restart:prod": "pm2 restart ecosystem.player.config.js",
     "logs": "pm2 logs",
     "deploy": "bash scripts/deploy.sh",
     "backup": "bash scripts/backup-db.sh",
-    "generate-secret": "node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\"",
-    "test-restore": "bash scripts/test-restore.sh",
-    "logrotate:install": "sudo cp scripts/twisted-logrotate.conf /etc/logrotate.d/twisted && sudo logrotate -d /etc/logrotate.d/twisted"
+    "generate-secret": "node -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\""
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

@@ -50,6 +50,4 @@ defmodule TePhoenixWeb.UserChannel do
       :error -> 0
     end
   end
-  defp parse_int(val) when is_integer(val), do: val
-  defp parse_int(_), do: 0
 end

@@ -52,9 +52,6 @@ defmodule TePhoenix.Game.OnboardingSeeder do
         {:ok, summary} ->
           mark_seeded(genre, summary)
           {:ok, Map.put(summary, :genre, genre)}
-
-        {:error, _} = err ->
-          err
       end
     end
   end

@@ -234,7 +234,7 @@ defmodule TePhoenix.Battle.Damage do
           # ── Tactical modifiers (cover, flanking, elevation, LOS) ─
           # Range calculation with Planet Mado high ground advantage (+2 range at elevation >= 1)
           base_range = Map.get(effects, "range", 1)
-          range = base_range + (tactics.elevation_advantage.range_bonus || 0)
+          range = base_range + tactics.elevation_advantage.range_bonus
 
           if range > 1 and not tactics.los and not Map.get(effects, "ignore_los", false) do
             result = %{result | log: ["⛔ No line of sight to #{target.name}!" | result.log]}

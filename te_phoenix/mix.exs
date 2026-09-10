@@ -1,3 +1,5 @@
+Code.put_compiler_option(:infer_signatures, [])
+
 defmodule TePhoenix.MixProject do
   use Mix.Project
 
@@ -7,6 +9,7 @@ defmodule TePhoenix.MixProject do
       version: "0.1.0",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
+      elixirc_options: [infer_signatures: false, verification: false],
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
@@ -69,7 +72,7 @@ defmodule TePhoenix.MixProject do
       {:phoenix_html, "~> 4.2"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
-      {:myxql, ">= 0.0.0"},
+      {:postgrex, ">= 0.0.0"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
       {:heroicons,

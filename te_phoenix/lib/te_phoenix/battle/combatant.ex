@@ -64,11 +64,14 @@ defmodule TePhoenix.Battle.Combatant do
     # Stealth
     stealth_active: false,
 
-    # Brave/Default BP
+    # Brave/Default BP & Limit Break
     bp: 0,
+    limitbreak: 0,
+    breaklevel: 0,
 
     # Morale
     morale: 100,
+    morale_fanatic: false,
 
     # Stagger gauge
     stagger: 0,

@@ -1,32 +1,34 @@
-###############################################
-# Twisted Engine — Full Stack
+#################################################
+# Twisted Engine — Full Stack (SOTA Architecture)
 # Usage:
 #   docker compose up -d              # start all services
 #   docker compose up -d --build      # rebuild + start
-#   docker compose logs -f backend    # tail backend logs
+#   docker compose logs -f backend    # tail Phoenix logs
 #   docker compose down               # stop all
-###############################################
+#################################################
 
 services:
-  # ── MySQL/MariaDB ──────────────────────────
+  # ── PostgreSQL 16 + pgvector ─────────────────
   db:
-    image: mariadb:11
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: ${DB_PASS:-twisted_dev_pass}
-      MARIADB_DATABASE: ${DB_NAME:-twisted_rpg}
+      POSTGRES_USER: ${TE_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${TE_DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${TE_DB_DATABASE:-twisted_rpg}
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - db_data:/var/lib/mysql
-      - ./te/schema_FULL.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - postgres_data:/var/lib/postgresql/data
+      - ./twisted_rpg_postgres.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./sequences.sql:/docker-entrypoint-initdb.d/02-sequences.sql:ro
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD-SHELL", "pg_isready -U ${TE_DB_USER:-postgres} -d ${TE_DB_DATABASE:-twisted_rpg}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── Redis (optional — enables multi-instance scaling) ──
+  # ── Redis (optional PubSub / caching) ────────
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -40,46 +42,45 @@ services:
       timeout: 3s
       retries: 3
 
-  # ── Backend (Express + Socket.IO) ──────────
+  # ── Phoenix Backend (Elixir / Bandit / BEAM) ─
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
     restart: unless-stopped
     ports:
-      - "3001:3001"
+      - "8420:8420"
     environment:
-      NODE_ENV: production
-      PORT: 3001
-      DB_HOST: db
-      DB_USER: root
-      DB_PASS: ${DB_PASS:-twisted_dev_pass}
-      DB_NAME: ${DB_NAME:-twisted_rpg}
-      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production-64chars-minimum-please-do-it-now-ok}
-      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:3000}
-      REDIS_URL: redis://redis:6379
+      MIX_ENV: production
+      PORT: 8420
+      PHX_SERVER: "true"
+      PHX_HOST: ${PHX_HOST:-localhost}
+      DATABASE_URL: ecto://${TE_DB_USER:-postgres}:${TE_DB_PASSWORD:-postgres}@db:5432/${TE_DB_DATABASE:-twisted_rpg}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:-B0tV0l8hFz8G6g+7aD8hFz8G6g+7aD8hFz8G6g+7aD8hFz8G6g+7aD8hFz8G6g+7}
+      POOL_SIZE: 15
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
 
-  # ── UI (Next.js) ───────────────────────────
-  ui:
+  # ── Player Client (SvelteKit + PixiJS) ───────
+  player:
     build:
       context: .
       dockerfile: Dockerfile.ui
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
+      HOST: 0.0.0.0
+      ORIGIN: ${ORIGIN:-http://localhost:3000}
+      PUBLIC_PHOENIX_URL: ${PUBLIC_PHOENIX_URL:-http://localhost:8420}
     depends_on:
       - backend
 
 volumes:
-  db_data:
+  postgres_data:
   redis_data:

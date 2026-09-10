@@ -39,18 +39,19 @@ defmodule TePhoenix.Battle.Combat do
   def execute(state, actor_id, target_id, opts \\ %{}) do
     actor = Map.get(state.combatants, actor_id)
     target = if target_id, do: Map.get(state.combatants, target_id)
-    result = %{actor: actor.name, actions: [], log: []}
 
     cond do
-      actor == nil ->
-        {state, %{result | log: ["Actor not found"]}}
+      is_nil(actor) ->
+        {state, %{actor: nil, actions: [], log: ["Actor not found"]}}
 
       # Unconscious: death save instead of acting (tabletop mode)
       actor.unconscious ->
+        result = %{actor: actor.name, actions: [], log: []}
         resolve_death_save(state, actor, result)
 
       # Check status effects that prevent action
       true ->
+        result = %{actor: actor.name, actions: [], log: []}
         case check_status_prevention(state, actor, result) do
           {:prevented, result} ->
             {state, result}

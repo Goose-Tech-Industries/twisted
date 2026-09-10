@@ -331,8 +331,6 @@ defmodule TePhoenixWeb.Components.AiAssist do
     end
   end
 
-  defp template_module(_), do: nil
-
   defp compose_full_prompt(user_prompt, %{prompt_template: mod_name}, context)
        when is_binary(mod_name) and mod_name != "" do
     case template_module(mod_name) do

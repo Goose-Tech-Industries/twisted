@@ -286,26 +286,102 @@ defmodule TePhoenix.AI.Gateway do
     end
   end
 
-  defp dispatch(:openai, model, prompt, _opts) do
-    Logger.info("[AI Gateway] openai call (stub): model=#{model}")
+  defp dispatch(:gemini, model, prompt, opts) do
+    Logger.debug("[AI Gateway] gemini call: model=#{model}, bytes=#{byte_size(prompt)}")
+    gemini_opts = Keyword.take(opts, [:max_tokens, :system, :temperature])
 
-    {:ok,
-     %{
-       text: "[AI stub — openai/#{model}]",
-       input_tokens: div(byte_size(prompt), 4),
-       output_tokens: 512,
-       cost_cents: 1,
-       provider: :openai,
-       model: model
-     }}
+    case TePhoenix.AI.Providers.Gemini.call(model, prompt, gemini_opts) do
+      {:ok, _result} = ok ->
+        ok
+
+      {:error, :no_api_key} ->
+        Logger.info("[AI Gateway] gemini no key — returning dev fallback response")
+        max = Keyword.get(opts, :max_tokens, 1024)
+
+        {:ok,
+         %{
+           text:
+             "[AI stub — no GEMINI_API_KEY configured] prompt was " <>
+               "#{byte_size(prompt)} bytes, model=#{model}",
+           input_tokens: div(byte_size(prompt), 4),
+           output_tokens: max,
+           cost_cents: 0,
+           provider: :gemini,
+           model: model
+         }}
+
+      {:error, reason} = err ->
+        Logger.warning("[AI Gateway] gemini error: #{inspect(reason)}")
+        err
+    end
+  end
+
+  defp dispatch(:openai, model, prompt, opts) do
+    Logger.debug("[AI Gateway] openai call: model=#{model}, bytes=#{byte_size(prompt)}")
+    openai_opts = Keyword.take(opts, [:max_tokens, :system, :temperature])
+
+    case TePhoenix.AI.Providers.OpenAI.call(model, prompt, openai_opts) do
+      {:ok, _result} = ok ->
+        ok
+
+      {:error, :no_api_key} ->
+        Logger.info("[AI Gateway] openai no key — returning dev fallback response")
+        max = Keyword.get(opts, :max_tokens, 1024)
+
+        {:ok,
+         %{
+           text:
+             "[AI stub — no OPENAI_API_KEY configured] prompt was " <>
+               "#{byte_size(prompt)} bytes, model=#{model}",
+           input_tokens: div(byte_size(prompt), 4),
+           output_tokens: max,
+           cost_cents: 0,
+           provider: :openai,
+           model: model
+         }}
+
+      {:error, reason} = err ->
+        Logger.warning("[AI Gateway] openai error: #{inspect(reason)}")
+        err
+    end
+  end
+
+  defp dispatch(:local_ollama, model, prompt, opts) do
+    Logger.debug("[AI Gateway] ollama local call: model=#{model}, bytes=#{byte_size(prompt)}")
+    ollama_opts = Keyword.take(opts, [:system, :temperature])
+
+    case TePhoenix.AI.Providers.Ollama.call(model, prompt, ollama_opts) do
+      {:ok, _result} = ok ->
+        ok
+
+      {:error, :ollama_unavailable} ->
+        Logger.info("[AI Gateway] ollama unavailable — returning local standby response")
+        max = Keyword.get(opts, :max_tokens, 512)
+
+        {:ok,
+         %{
+           text:
+             "[AI local standby — Ollama server offline on localhost:11434] prompt was " <>
+               "#{byte_size(prompt)} bytes, model=#{model}",
+           input_tokens: div(byte_size(prompt), 4),
+           output_tokens: max,
+           cost_cents: 0,
+           provider: :local_ollama,
+           model: model
+         }}
+
+      {:error, reason} = err ->
+        Logger.warning("[AI Gateway] ollama error: #{inspect(reason)}")
+        err
+    end
   end
 
   defp dispatch(provider, model, prompt, _opts) do
-    Logger.info("[AI Gateway] #{provider} call (stub): model=#{model}")
+    Logger.info("[AI Gateway] #{provider} call (generic standby): model=#{model}")
 
     {:ok,
      %{
-       text: "[AI stub — #{provider}/#{model}]",
+       text: "[AI standby — #{provider}/#{model}]",
        input_tokens: div(byte_size(prompt), 4),
        output_tokens: 512,
        cost_cents: 0,

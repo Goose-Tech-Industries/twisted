@@ -413,6 +413,6 @@ defmodule TePhoenix.World.BountyManager do
   end
 
   defp award_player_xp(char_id, amount) do
-    Repo.query("UPDATE characters SET xp = xp + ? WHERE id = ?", [amount, char_id])
+    Repo.query("UPDATE characters SET experience = experience + ? WHERE id = ?", [amount, char_id])
   end
 end

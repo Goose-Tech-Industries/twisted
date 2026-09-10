@@ -37,16 +37,11 @@ defmodule TePhoenixWeb.Game.EngineSystemsHandler do
   end
 
   def handle_in("toggle_feature_flag", %{"feature_key" => key, "is_enabled" => enabled}, socket) do
-    case EngineFeatureFlags.toggle_flag(key, enabled) do
-      {:ok, payload} ->
-        push(socket, "feature_flag_toggled", payload)
-        flags = EngineFeatureFlags.list_all_flags()
-        push(socket, "feature_flags_state", %{flags: flags})
-        {:reply, {:ok, payload}, socket}
-
-      error ->
-        {:reply, {:error, %{reason: inspect(error)}}, socket}
-    end
+    {:ok, payload} = EngineFeatureFlags.toggle_flag(key, enabled)
+    push(socket, "feature_flag_toggled", payload)
+    flags = EngineFeatureFlags.list_all_flags()
+    push(socket, "feature_flags_state", %{flags: flags})
+    {:reply, {:ok, payload}, socket}
   end
 
   def handle_in("set_all_feature_flags", %{"flags" => flags_map}, socket) do
@@ -188,9 +183,6 @@ defmodule TePhoenixWeb.Game.EngineSystemsHandler do
         push(socket, "catacomb_dungeon_state", dungeon)
         push(socket, "catacomb_action_result", res)
         {:reply, {:ok, Map.merge(res, %{dungeon: dungeon})}, socket}
-
-      {:error, reason} ->
-        {:reply, {:error, %{reason: reason}}, socket}
     end
   end
 
@@ -240,9 +232,6 @@ defmodule TePhoenixWeb.Game.EngineSystemsHandler do
         territories = FactionTerritory.list_territories()
         push(socket, "faction_territories_state", %{districts: territories})
         {:reply, {:ok, Map.merge(res, %{districts: territories})}, socket}
-
-      {:error, reason} ->
-        {:reply, {:error, %{reason: reason}}, socket}
     end
   end
 
@@ -318,9 +307,6 @@ defmodule TePhoenixWeb.Game.EngineSystemsHandler do
         push(socket, "forensic_case_details", details)
         push(socket, "forensic_verdict_result", res)
         {:reply, {:ok, Map.merge(res, %{case: details})}, socket}
-
-      {:error, reason} ->
-        {:reply, {:error, %{reason: reason}}, socket}
     end
   end
 

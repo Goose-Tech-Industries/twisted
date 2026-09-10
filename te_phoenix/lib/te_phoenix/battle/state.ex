@@ -844,7 +844,7 @@ defmodule TePhoenix.Battle.State do
   defp maybe_start_turn_timer(state) do
     cur = Map.get(state.combatants, state.turn_char_id)
 
-    if state.settings[:enable_turn_timeout] and cur and not cur.is_ai do
+    if state.settings[:enable_turn_timeout] and is_map(cur) and not Map.get(cur, :is_ai, false) do
       timeout_ms = (state.settings[:turn_timeout_seconds] || 120) * 1000
       ref = Process.send_after(self(), :turn_timeout, timeout_ms)
       %{state | turn_timer: ref}

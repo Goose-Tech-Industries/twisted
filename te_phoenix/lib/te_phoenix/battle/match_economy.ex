@@ -509,15 +509,12 @@ defmodule TePhoenix.Battle.MatchEconomy do
     }
   end
 
-  defp prerequisites_met?(_purchased, nil), do: true
-  defp prerequisites_met?(_purchased, []), do: true
+  defp prerequisites_met?(_purchased, prereqs) when is_nil(prereqs) or prereqs == [], do: true
 
   defp prerequisites_met?(purchased, prereqs) when is_list(prereqs) do
     owned_keys = MapSet.new(Enum.map(purchased, fn p -> p.key end))
     Enum.all?(prereqs, fn key -> MapSet.member?(owned_keys, key) end)
   end
-
-  defp prerequisites_met?(_, _), do: true
 
   defp deep_get(map, keys) when is_map(map) do
     Enum.reduce_while(keys, map, fn key, acc ->

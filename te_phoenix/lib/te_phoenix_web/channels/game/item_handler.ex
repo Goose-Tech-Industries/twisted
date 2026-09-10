@@ -327,7 +327,7 @@ defmodule TePhoenixWeb.Game.ItemHandler do
       "STRUCTURE" ->
         struct_x = p.x + (capsule["deploy_offset_x"] || 0)
         struct_y = p.y + (capsule["deploy_offset_y"] || 1)
-        base_struct_name = capsule["structure_name"] || "Structure"
+        base_struct_name = capsule["structure_name"]
         base_struct_icon = capsule["structure_icon"] || "🏠"
         base_interior_map = capsule["interior_map_id"]
 
@@ -335,12 +335,12 @@ defmodule TePhoenixWeb.Game.ItemHandler do
         {struct_name, struct_icon, interior_map} = if capsule["template_id"] do
           case Repo.query("SELECT name, icon, interior_map_id, default_data_json FROM game_structure_templates WHERE id=? AND is_active=1", [capsule["template_id"]]) do
             {:ok, %{rows: [[tname, ticon, tmap, _tdata]]}} ->
-              {base_struct_name || tname, capsule["structure_icon"] || ticon || "🏠", base_interior_map || tmap}
+              {base_struct_name || tname || "Structure", capsule["structure_icon"] || ticon || "🏠", base_interior_map || tmap}
             _ ->
-              {base_struct_name, base_struct_icon, base_interior_map}
+              {base_struct_name || "Structure", base_struct_icon, base_interior_map}
           end
         else
-          {base_struct_name, base_struct_icon, base_interior_map}
+          {base_struct_name || "Structure", base_struct_icon, base_interior_map}
         end
 
         {:ok, result} = Repo.query(

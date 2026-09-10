@@ -1,26 +1,53 @@
-###############################################
-# Twisted Engine — Backend (Express + Socket.IO)
-###############################################
-FROM node:20-alpine AS backend
+#################################################
+# Twisted Engine — Phoenix Backend (Elixir / BEAM)
+#################################################
+
+# ── Build stage ────────────────────────────────
+FROM hexpm/elixir:1.18.2-erlang-27.2.1-alpine-3.21.2 AS builder
+
+RUN apk add --no-cache build-base git nodejs npm
 
 WORKDIR /app
 
-# Install optional deps too (Redis support)
-COPY te/package.json te/package-lock.json* ./
-RUN npm install --include=optional 2>/dev/null || npm install
+ENV MIX_ENV=prod
 
-# Copy source
-COPY te/ ./
+# Install Hex and Rebar
+RUN mix local.hex --force && mix local.rebar --force
 
-# Create logs directory
-RUN mkdir -p logs
+# Install dependencies
+COPY te_phoenix/mix.exs te_phoenix/mix.lock ./
+RUN mix deps.get --only prod
+RUN mix deps.compile
 
-EXPOSE 3001
+# Copy application files
+COPY te_phoenix/config config
+COPY te_phoenix/priv priv
+COPY te_phoenix/lib lib
+COPY te_phoenix/assets assets
 
-ENV NODE_ENV=production
-ENV PORT=3001
+# Compile and digest assets
+RUN mix assets.deploy || true
 
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+# Compile release
+RUN mix compile
+RUN mix release te_phoenix
 
-CMD ["node", "server.js"]
+# ── Production stage ───────────────────────────
+FROM alpine:3.21.2 AS runner
+
+RUN apk add --no-cache libstdc++ ncurses-libs openssl ca-certificates
+
+WORKDIR /app
+
+ENV MIX_ENV=prod
+ENV PORT=8420
+ENV PHX_SERVER=true
+
+COPY --from=builder /app/_build/prod/rel/te_phoenix ./
+
+EXPOSE 8420
+
+HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8420/kickstarter || exit 1
+
+CMD ["bin/te_phoenix", "start"]

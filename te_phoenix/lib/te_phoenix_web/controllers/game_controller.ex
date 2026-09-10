@@ -105,7 +105,12 @@ defmodule TePhoenixWeb.GameController do
   end
 
   def list_subclasses(conn, params) do
-    class_id = params["class_id"] || params["classId"]
+    class_id =
+      case params["class_id"] || params["classId"] do
+        nil -> nil
+        id when is_binary(id) -> String.to_integer(id)
+        id -> id
+      end
 
     query =
       if class_id do
@@ -140,8 +145,14 @@ defmodule TePhoenixWeb.GameController do
   end
 
   def specialize_subclass(conn, %{"id" => id} = params) do
+    id = if is_binary(id), do: String.to_integer(id), else: id
     user_id = conn.assigns[:user_id]
-    subclass_id = params["subclassId"] || params["subclass_id"]
+    subclass_id =
+      case params["subclassId"] || params["subclass_id"] do
+        nil -> nil
+        sid when is_binary(sid) -> String.to_integer(sid)
+        sid -> sid
+      end
 
     if is_nil(subclass_id) do
       json(conn, %{success: false, message: "subclass_id is required."})

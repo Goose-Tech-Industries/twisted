@@ -189,7 +189,7 @@ defmodule TePhoenix.AI.UileOperations do
     render_mode = attrs["render_mode"] || "2.5d"
 
     case UnifiedWorldBuilder.build(prompt, width: width, height: height, render_mode: render_mode) do
-      {:ok, %{map_id: map_id} = result} ->
+      {:ok, %{id: map_id} = result} ->
         if name != result.name do
           Repo.query("UPDATE game_maps SET name=? WHERE id=?", [name, map_id])
         end

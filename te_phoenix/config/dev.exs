@@ -2,10 +2,11 @@ import Config
 
 # Configure your database
 config :te_phoenix, TePhoenix.Repo,
-  username: System.get_env("TE_DB_USER") || "twisted",
-  password: System.get_env("TE_DB_PASSWORD") || "twisted",
+  username: System.get_env("TE_DB_USER") || "postgres",
+  password: System.get_env("TE_DB_PASSWORD") || "postgres",
   hostname: System.get_env("TE_DB_HOST") || "127.0.0.1",
-  database: "twisted_rpg",
+  port: String.to_integer(System.get_env("TE_DB_PORT") || "5432"),
+  database: "twisted_rpg_dev",
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10

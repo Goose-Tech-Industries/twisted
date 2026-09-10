@@ -24,9 +24,9 @@ defmodule TePhoenix.World.BountyAndScheduleTest do
     end
 
     Repo.query("""
-    INSERT INTO characters (id, name, level, current_hp, max_hp, current_mp, max_mp, gold, xp, map_id, x, y)
+    INSERT INTO characters (id, name, level, current_hp, max_hp, current_mp, max_mp, gold, experience, map_id, x, y)
     VALUES (1, 'TestHero', 1, 100, 100, 50, 50, 500, 0, 1, 6, 12)
-    ON DUPLICATE KEY UPDATE gold = 500, current_hp = 100, map_id = 1, xp = 0
+    ON DUPLICATE KEY UPDATE gold = 500, current_hp = 100, map_id = 1, experience = 0
     """)
 
     BountyManager.seed_default_bounties!()

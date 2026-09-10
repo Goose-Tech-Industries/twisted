@@ -189,7 +189,7 @@ defmodule TePhoenix.Objectives do
     inst = Registry.get_instance(instance_id)
 
     if inst && inst.status in ["active", "in_progress"] do
-      interacting = (inst.interacting || []) |> Enum.uniq()
+      interacting = inst.interacting |> Enum.uniq()
 
       unless char_id in interacting do
         updated = interacting ++ [char_id]
@@ -212,7 +212,7 @@ defmodule TePhoenix.Objectives do
     inst = Registry.get_instance(instance_id)
 
     if inst do
-      updated = (inst.interacting || []) |> List.delete(char_id)
+      updated = List.delete(inst.interacting, char_id)
 
       Registry.update_instance_state(instance_id, [
         {:interacting_json, Jason.encode!(updated)}
@@ -229,7 +229,7 @@ defmodule TePhoenix.Objectives do
   def interacting_with(instance_id) do
     case Registry.get_instance(instance_id) do
       nil -> []
-      inst -> inst.interacting || []
+      inst -> inst.interacting
     end
   end
 

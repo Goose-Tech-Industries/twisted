@@ -35,7 +35,7 @@ defmodule TePhoenix.AI.CompanionVoiceMind do
       action = synthesize_tactical_action(comp, speech_text, speaker_name, is_thought)
 
       # 1. Update companion tactical stance in DB if changed
-      if action.new_tactic && action.new_tactic != comp.tactic do
+      if action.new_tactic != comp.tactic do
         try do
           Repo.query("UPDATE character_companions SET tactics = ?, updated_at = NOW() WHERE id = ?", [
             action.new_tactic,
@@ -60,13 +60,12 @@ defmodule TePhoenix.AI.CompanionVoiceMind do
       end
 
       # 3. Synthesize voice audio
-      {emotional, somatic} = tactic_to_emotional_state(action.new_tactic || comp.tactic)
+      {emotional, somatic} = tactic_to_emotional_state(action.new_tactic)
 
       audio_result =
         try do
           case SomaticVoice.speak(reaction, emotional: emotional, somatic: somatic, speaker: comp.name) do
             {:ok, res} -> res[:audio_url]
-            _ -> nil
           end
         rescue
           _ -> nil
@@ -78,7 +77,7 @@ defmodule TePhoenix.AI.CompanionVoiceMind do
         icon: comp.icon || "🐺",
         text: reaction,
         audio_url: audio_result,
-        tactic: action.new_tactic || comp.tactic,
+        tactic: action.new_tactic,
         speaker_type: :companion,
         is_thought: is_thought,
         timestamp: System.system_time(:second)
@@ -143,7 +142,6 @@ defmodule TePhoenix.AI.CompanionVoiceMind do
         try do
           case SomaticVoice.speak(reaction, emotional: %{"anger" => 80, "fear" => 50}, somatic: %{"pain" => 10}, speaker: comp.name) do
             {:ok, res} -> res[:audio_url]
-            _ -> nil
           end
         rescue
           _ -> nil

@@ -147,10 +147,6 @@ defmodule Mix.Tasks.Twisted.MigrateMaps do
           events: acc.events + length(events),
           objects: acc.objects + length(objects_list)
       }
-    else
-      err ->
-        Mix.shell().error("  ERR   ##{id}  #{name}  #{inspect(err)}")
-        %{acc | error: acc.error + 1}
     end
   end
 

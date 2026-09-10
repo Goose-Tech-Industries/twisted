@@ -335,22 +335,22 @@ defmodule TePhoenixWeb.Battle.CombatOptionsHandler do
       success ->
         "*#{npc_name} lowers their weapon reluctantly* \"...Fine. I'll fight with you, #{actor_name}. But don't think this makes us friends.\""
 
-      not success and is_proud ->
+      is_proud ->
         "*#{npc_name} stands tall despite their injuries* \"I would sooner die than betray my allies. Do your worst, #{actor_name}!\""
 
-      not success and is_cowardly and hp_pct > 50 ->
+      is_cowardly and hp_pct > 50 ->
         "*#{npc_name} hides behind their shield* \"N-no! My master would punish me far worse than you ever could!\""
 
-      not success and is_feral ->
+      is_feral ->
         "*#{npc_name} bares their teeth and snarls* The creature shows no understanding of #{actor_name}'s words — only aggression."
 
-      not success and is_cunning ->
+      is_cunning ->
         "*#{npc_name} laughs* \"Nice try, #{actor_name}. You'll have to do better than words to defeat me.\""
 
-      not success and willingness < 15 ->
+      willingness < 15 ->
         "*#{npc_name} spits at #{actor_name}'s feet* \"Pathetic. You think a few scratches will make me turn? I'd rather die fighting!\""
 
-      not success ->
+      true ->
         "*#{npc_name} snarls defiantly* \"You think I'd betray my own? Never! Come, #{actor_name} — finish what you started!\""
     end
   end

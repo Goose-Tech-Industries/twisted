@@ -353,8 +353,6 @@ defmodule TePhoenixWeb.Battle.InitiationHandler do
               # CHOICE was reached — send responses so far, store pending for resume
               Enum.each(responses, fn resp -> push(socket, "event_action", resp) end)
               _socket = assign(socket, :pending_event_choice, %{pending: pending, char_state: char_state})
-
-            _ -> nil
           end
         end
     end
@@ -382,8 +380,6 @@ defmodule TePhoenixWeb.Battle.InitiationHandler do
             Enum.each(responses, fn resp -> push(socket, "event_action", resp) end)
             socket = assign(socket, :pending_event_choice, %{pending: new_pending, char_state: char_state})
             {:noreply, socket}
-
-          _ -> nil
         end
 
         socket = assign(socket, :pending_event_choice, nil)

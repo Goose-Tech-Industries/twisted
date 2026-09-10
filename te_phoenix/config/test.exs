@@ -6,10 +6,11 @@ import Config
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :te_phoenix, TePhoenix.Repo,
-  username: System.get_env("TE_DB_USER") || "twisted",
-  password: System.get_env("TE_DB_PASSWORD") || "twisted",
+  username: System.get_env("TE_DB_USER") || "postgres",
+  password: System.get_env("TE_DB_PASSWORD") || "postgres",
   hostname: System.get_env("TE_DB_HOST") || "127.0.0.1",
-  database: "twisted_rpg",
+  port: String.to_integer(System.get_env("TE_DB_PORT") || "5432"),
+  database: "twisted_rpg_test",
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: 10
 

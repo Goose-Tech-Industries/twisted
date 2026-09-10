@@ -10,7 +10,7 @@ defmodule TePhoenixWeb.Game.AshveilColossusHandler do
 
   def handle("colossus_get_state", payload, socket) do
     player = get_player(socket)
-    map_id = payload["map_id"] || (player && player.map_id) || 1
+    map_id = payload["map_id"] || player.map_id || 1
     state = AshveilColossus.get_or_spawn_raid(map_id)
     push(socket, "colossus_state", state)
     {:noreply, socket}
@@ -34,7 +34,6 @@ defmodule TePhoenixWeb.Game.AshveilColossusHandler do
     case AshveilColossus.trigger_telegraph(raid_id, atk_type) do
       {:ok, telegraph} ->
         push(socket, "colossus_telegraph", telegraph)
-      _ -> :ok
     end
     {:noreply, socket}
   end
@@ -48,7 +47,6 @@ defmodule TePhoenixWeb.Game.AshveilColossusHandler do
     case AshveilColossus.react_active_defense(player, raid_id, defense_type, timing_ms) do
       {:ok, result} ->
         push(socket, "colossus_defense_result", result)
-      _ -> :ok
     end
     {:noreply, socket}
   end

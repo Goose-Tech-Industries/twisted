@@ -76,10 +76,8 @@ defmodule TePhoenix.World.NpcAcousticReactor do
 
         audio_result =
           try do
-            case SomaticVoice.speak(reply_text, emotional: action[:emotional] || %{}, somatic: action[:somatic] || %{}, speaker: npc.name) do
-              {:ok, res} -> res[:audio_url]
-              _ -> nil
-            end
+            {:ok, res} = SomaticVoice.speak(reply_text, emotional: action[:emotional] || %{}, somatic: action[:somatic] || %{}, speaker: npc.name)
+            res[:audio_url]
           rescue
             _ -> nil
           end

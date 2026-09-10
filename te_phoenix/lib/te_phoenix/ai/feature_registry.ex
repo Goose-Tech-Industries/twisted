@@ -63,15 +63,35 @@ defmodule TePhoenix.AI.FeatureRegistry do
   end
 
   defp do_ensure_columns do
-    # MariaDB 10.0.2+ supports `IF NOT EXISTS` in ALTER TABLE.
+    create_table = """
+    CREATE TABLE IF NOT EXISTS #{@table} (
+      id SERIAL PRIMARY KEY,
+      feature_key VARCHAR(100) NOT NULL UNIQUE,
+      label VARCHAR(255) NOT NULL DEFAULT '',
+      description TEXT,
+      category VARCHAR(50) NOT NULL DEFAULT 'general',
+      default_enabled SMALLINT NOT NULL DEFAULT 1,
+      min_role_weight INT NOT NULL DEFAULT 60,
+      daily_token_cap INT NOT NULL DEFAULT 10000,
+      weekly_token_cap INT NOT NULL DEFAULT 50000,
+      prompt_template VARCHAR(255) DEFAULT NULL,
+      schema_module VARCHAR(255) DEFAULT NULL,
+      genres TEXT DEFAULT NULL,
+      estimated_tokens INT NOT NULL DEFAULT 1000,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    )
+    """
+
     statements = [
+      create_table,
       "ALTER TABLE #{@table} ADD COLUMN IF NOT EXISTS min_role_weight INT NOT NULL DEFAULT 60",
       "ALTER TABLE #{@table} ADD COLUMN IF NOT EXISTS daily_token_cap INT NOT NULL DEFAULT 10000",
       "ALTER TABLE #{@table} ADD COLUMN IF NOT EXISTS weekly_token_cap INT NOT NULL DEFAULT 50000",
       "ALTER TABLE #{@table} ADD COLUMN IF NOT EXISTS prompt_template VARCHAR(255) DEFAULT NULL",
       "ALTER TABLE #{@table} ADD COLUMN IF NOT EXISTS schema_module VARCHAR(255) DEFAULT NULL",
       "ALTER TABLE #{@table} ADD COLUMN IF NOT EXISTS genres TEXT DEFAULT NULL",
-      "ALTER TABLE #{@table} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+      "ALTER TABLE #{@table} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"
     ]
 
     for sql <- statements do
@@ -427,7 +447,10 @@ defmodule TePhoenix.AI.FeatureRegistry do
         "TePhoenix.AI.Templates.BrandPalette"),
       f("onboarding_seed", "Onboarding Seed", "design",
         "Generate starter content (maps, NPCs, items, quests) for a chosen genre",
-        "TePhoenix.AI.Templates.OnboardingSeed")
+        "TePhoenix.AI.Templates.OnboardingSeed"),
+      f("npc_dialogue", "NPC Dialogue", "narrative",
+        "Generate dynamic NPC dialogue grounded in personality, trauma, and memory",
+        "TePhoenix.AI.Templates.NpcDialogue")
     ]
   end
 

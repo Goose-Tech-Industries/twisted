@@ -509,10 +509,7 @@ defmodule TePhoenix.Game.ScriptEffects do
     payload = prop(props, "payload", %{})
 
     Enum.each(1..max(count, 1), fn _ ->
-      case TePhoenix.Game.Achievements.fire_event(char, event_key, payload) do
-        {:ok, _} -> :ok
-        _ -> :ok
-      end
+      TePhoenix.Game.Achievements.fire_event(char, event_key, payload)
     end)
 
     push_ui(ctx, :achievement_trigger, %{event_key: event_key, count: count})

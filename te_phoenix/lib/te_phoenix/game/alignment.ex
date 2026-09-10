@@ -217,7 +217,7 @@ defmodule TePhoenix.Game.Alignment do
                 alignment <= -15 -> "evil"
                 true -> "neutral"
               end
-              to_float(prices[faction]) || 1.0
+              to_float(Map.get(prices, faction, 1.0))
 
             # Simple discount fields
             alignment <= -15 and evil_disc && to_float(evil_disc) > 0 ->

@@ -67,7 +67,7 @@ defmodule TePhoenixWeb.Game.BountyAndSyndicateHandler do
 
   def handle("schedules_get_active", payload, socket) do
     player = get_player(socket)
-    map_id = payload["map_id"] || (player && player.map_id) || 1
+    map_id = payload["map_id"] || player.map_id || 1
     schedules = NpcSchedules.list_active_schedules(map_id)
     push(socket, "npc_schedules_list", %{schedules: schedules, map_id: map_id})
     {:noreply, socket}
@@ -75,17 +75,12 @@ defmodule TePhoenixWeb.Game.BountyAndSyndicateHandler do
 
   def handle("schedules_force_phase", payload, socket) do
     player = get_player(socket)
-    map_id = payload["map_id"] || (player && player.map_id) || 1
+    map_id = payload["map_id"] || player.map_id || 1
     phase = payload["phase"] || "night"
 
-    case NpcSchedules.apply_schedules_for_phase(map_id, phase) do
-      {:ok, updates} ->
-        push(socket, "npc_schedules_update", %{map_id: map_id, phase: phase, schedules: updates})
-        {:noreply, socket}
-
-      _ ->
-        {:noreply, socket}
-    end
+    {:ok, updates} = NpcSchedules.apply_schedules_for_phase(map_id, phase)
+    push(socket, "npc_schedules_update", %{map_id: map_id, phase: phase, schedules: updates})
+    {:noreply, socket}
   end
 
   # ── Safehouse Stash & Trophies ──────────────────────────────────────

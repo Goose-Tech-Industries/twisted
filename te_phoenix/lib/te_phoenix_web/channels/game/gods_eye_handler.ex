@@ -31,15 +31,9 @@ defmodule TePhoenixWeb.Game.GodsEyeHandler do
     y = (p && p.y) || payload["y"] || 10
     radius = payload["radius"] || 15
 
-    case GodsEye.sonar_ping_map(map_id, x, y, radius) do
-      {:ok, ping_data} ->
-        push(socket, "gods_eye_sonar_result", ping_data)
-        {:noreply, socket}
-
-      {:error, reason} ->
-        push(socket, "gods_eye_sonar_result", %{error: to_string(reason)})
-        {:noreply, socket}
-    end
+    {:ok, ping_data} = GodsEye.sonar_ping_map(map_id, x, y, radius)
+    push(socket, "gods_eye_sonar_result", ping_data)
+    {:noreply, socket}
   end
 
   @doc "Wiretaps an entity's conscious thoughts and biometric telemetry."

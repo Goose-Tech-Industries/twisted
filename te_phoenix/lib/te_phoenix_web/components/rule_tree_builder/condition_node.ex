@@ -62,7 +62,7 @@ defmodule TePhoenixWeb.Components.RuleTreeBuilder.ConditionNode do
         name={"#{@id}[#{@index}][value]"}
         value={@leaf.value}
         type={@field_type}
-        options={Map.get(@field_def || %{}, :options)} />
+        options={Map.get(@field_def, :options)} />
 
       <span :if={@desc} class="text-xs text-zinc-500 italic ml-1">— {@desc}</span>
 

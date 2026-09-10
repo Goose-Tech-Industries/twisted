@@ -1,20 +1,22 @@
-###############################################
-# Twisted Engine — Dev Mode (hot reload)
+#################################################
+# Twisted Engine — Dev Mode (SOTA Architecture)
 # Usage: docker compose -f docker-compose.dev.yml up
-###############################################
+#################################################
 
 services:
   db:
-    image: mariadb:11
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: dev_pass
-      MARIADB_DATABASE: twisted_rpg
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dev_pass
+      POSTGRES_DB: twisted_rpg
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - dev_db_data:/var/lib/mysql
-      - ./te/schema_FULL.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - dev_postgres_data:/var/lib/postgresql/data
+      - ./twisted_rpg_postgres.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./sequences.sql:/docker-entrypoint-initdb.d/02-sequences.sql:ro
 
   redis:
     image: redis:7-alpine
@@ -22,42 +24,38 @@ services:
       - "6379:6379"
 
   backend:
-    image: node:20-alpine
+    image: hexpm/elixir:1.18.2-erlang-27.2.1-alpine-3.21.2
     working_dir: /app
-    command: sh -c "npm install --include=optional 2>/dev/null; npm run dev"
+    command: sh -c "mix local.hex --force && mix local.rebar --force && mix deps.get && mix phx.server"
     ports:
-      - "3001:3001"
+      - "8420:8420"
     volumes:
-      - ./te:/app
-      - backend_modules:/app/node_modules
+      - ./te_phoenix:/app
     environment:
-      NODE_ENV: development
-      PORT: 3001
-      DB_HOST: db
-      DB_USER: root
-      DB_PASS: dev_pass
-      DB_NAME: twisted_rpg
-      REDIS_URL: redis://redis:6379
+      MIX_ENV: dev
+      PORT: 8420
+      TE_DB_HOST: db
+      TE_DB_USER: postgres
+      TE_DB_PASSWORD: dev_pass
+      TE_DB_DATABASE: twisted_rpg
+      TE_DB_PORT: 5432
     depends_on:
       - db
       - redis
 
-  ui:
-    image: node:20-alpine
-    working_dir: /app
-    command: sh -c "npm install && npm run dev"
+  player:
+    image: node:22-alpine
+    working_dir: /app/player
+    command: sh -c "corepack enable && pnpm install && pnpm run dev"
     ports:
       - "3000:3000"
     volumes:
-      - ./ui:/app
-      - ui_modules:/app/node_modules
+      - .:/app
     environment:
       NODE_ENV: development
-      NEXT_PUBLIC_API_URL: http://localhost:3001
+      PUBLIC_PHOENIX_URL: http://localhost:8420
     depends_on:
       - backend
 
 volumes:
-  dev_db_data:
-  backend_modules:
-  ui_modules:
+  dev_postgres_data:

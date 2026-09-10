@@ -714,9 +714,8 @@ defmodule TePhoenix.Game.Magic do
     Enum.all?(pattern, &MapSet.member?(unlocked_set, &1))
   end
 
-  defp char_anam_ok?(nil, _), do: false
   defp char_anam_ok?(%{anam_current: cur}, cost), do: (cur || 0) >= cost
-  defp char_anam_ok?(_, _), do: false
+  defp char_anam_ok?(_other, _cost), do: false
 
   defp cooldown_ok?(cooldowns, key, now), do: Map.get(cooldowns, key, 0) <= now
 

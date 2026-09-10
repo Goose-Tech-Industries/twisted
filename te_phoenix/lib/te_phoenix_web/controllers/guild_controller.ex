@@ -63,11 +63,14 @@ defmodule TePhoenixWeb.GuildController do
               json(conn, %{success: true, guildId: guild_id, tag: tag, message: "Guild created!"})
             rescue
               e ->
-                msg = case e do
-                  %{mysql: %{code: 1062}} -> "Guild name or tag already taken."
-                  %{message: m} -> "Create failed: #{m}"
-                  _ -> "Create failed."
-                end
+                msg =
+                  if String.contains?(Exception.message(e), "duplicate key") or
+                     String.contains?(Exception.message(e), "unique constraint") do
+                    "Guild name or tag already taken."
+                  else
+                    "Create failed: #{Exception.message(e)}"
+                  end
+
                 json(conn, %{success: false, message: msg})
             end
         end

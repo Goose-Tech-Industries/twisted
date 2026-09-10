@@ -558,12 +558,10 @@ defmodule TePhoenixWeb.BattleChannel do
     end)
   end
 
-  defp parse_int(val) when is_integer(val), do: val
   defp parse_int(val) when is_binary(val) do
     case Integer.parse(val) do
       {n, _} -> n
       :error -> 0
     end
   end
-  defp parse_int(_), do: 0
 end

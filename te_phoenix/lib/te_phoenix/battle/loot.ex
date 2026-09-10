@@ -33,7 +33,7 @@ defmodule TePhoenix.Battle.Loot do
       true ->
         steal_table = load_steal_table(target.char_id)
 
-        if steal_table == nil or steal_table == [] do
+        if steal_table == [] do
           {state, %{result | log: ["#{target.name} has nothing to steal." | result.log]}}
         else
           base_chance = settings[:steal_base_chance] || 50
@@ -264,8 +264,7 @@ defmodule TePhoenix.Battle.Loot do
             {state, %{result | log: ["Character level too low for this limit!" | result.log]}}
 
           true ->
-            # Consume limit bar
-            actor = Map.put(actor, :limitbreak, 0)
+            actor = %{actor | limitbreak: 0}
 
             effects = parse_json(limit[:effects])
             vars = TePhoenix.Battle.Combatant.formula_vars(actor, target || actor)
