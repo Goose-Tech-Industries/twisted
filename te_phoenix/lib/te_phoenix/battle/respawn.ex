@@ -265,7 +265,8 @@ defmodule TePhoenix.Battle.Respawn do
     {state, result}
   end
 
-  defp calculate_timed_delay(config, turn_number) do
+  @doc "Calculate delay in seconds for timed respawn based on turn number."
+  def calculate_timed_delay(config, turn_number) do
     base = config["base_seconds"] || 5
     scale = config["scale_per_turn"] || 0.5
     max_delay = config["max_seconds"] || 45
@@ -274,7 +275,8 @@ defmodule TePhoenix.Battle.Respawn do
     min(max_delay, delay)
   end
 
-  defp reset_position(combatant, config, state) do
+  @doc "Reset combatant position based on respawn_at configuration."
+  def reset_position(combatant, config, state) do
     case config["respawn_at"] do
       "last_position" ->
         combatant
@@ -291,7 +293,8 @@ defmodule TePhoenix.Battle.Respawn do
     end
   end
 
-  defp get_config(state) do
+  @doc "Retrieve the effective respawn configuration for a battle state."
+  def get_config(state) do
     settings = state.settings || %{}
 
     case settings[:respawn] do

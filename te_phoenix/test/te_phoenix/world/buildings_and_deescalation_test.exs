@@ -6,7 +6,6 @@ defmodule TePhoenix.World.BuildingsAndDeescalationTest do
     BuildingManager,
     AcousticPhysics,
     NpcAcousticReactor,
-    CircadianClock,
     SovereignRumors,
     UnderworldNpcs,
     Defenestration,
@@ -116,7 +115,7 @@ defmodule TePhoenix.World.BuildingsAndDeescalationTest do
 
   describe "Belligerent Drunk & Window Reactivity" do
     test "footstep near Olaf the Drunk triggers argument and altercation dialogue" do
-      olaf = %{
+      _olaf = %{
         id: 109,
         name: "Olaf the Stumbling Drunkard",
         role: "drunk",

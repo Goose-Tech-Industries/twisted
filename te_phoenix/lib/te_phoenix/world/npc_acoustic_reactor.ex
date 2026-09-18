@@ -25,7 +25,7 @@ defmodule TePhoenix.World.NpcAcousticReactor do
 
   alias TePhoenix.Repo
   alias TePhoenix.World.{AcousticPhysics, CircadianClock}
-  alias TePhoenix.AI.{DreamCycle, SovereignBridge}
+  alias TePhoenix.AI.SovereignBridge
   alias TePhoenix.AI.Providers.SomaticVoice
   require Logger
 

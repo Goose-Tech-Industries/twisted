@@ -321,9 +321,9 @@ defmodule TePhoenix.Battle.Deckbuilder do
   # ── Cost payment ───────────────────────────────────────────────
 
   defp pay_cost(combatant, cost) when is_map(cost) do
-    mp_cost = Map.get(cost, "mp", 0) || Map.get(cost, :mp, 0)
-    energy_cost = Map.get(cost, "energy", 0) || Map.get(cost, :energy, 0)
-    hp_cost = Map.get(cost, "hp", 0) || Map.get(cost, :hp, 0)
+    mp_cost = Map.get(cost, "mp") || Map.get(cost, :mp) || 0
+    energy_cost = Map.get(cost, "energy") || Map.get(cost, :energy) || 0
+    hp_cost = Map.get(cost, "hp") || Map.get(cost, :hp) || 0
 
     cond do
       mp_cost > 0 and (combatant.current_mp || 0) < mp_cost ->

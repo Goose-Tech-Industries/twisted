@@ -26,7 +26,7 @@ defmodule TePhoenix.AI.ProvidersTest do
     end
 
     test "Gateway dispatches to Ollama with graceful offline standby" do
-      {:ok, res} = Gateway.call(:npc_dialogue, "Greetings.", provider_override: :local_ollama)
+      {:ok, res} = Gateway.call(:npc_dialogue, "Greetings.", provider_override: :local_ollama, timeout_ms: 1_000)
       assert res.provider == :local_ollama
       assert is_binary(res.text)
       assert res.cost_cents == 0

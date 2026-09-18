@@ -33,6 +33,8 @@ defmodule TePhoenix.Battle.Formations do
   """
   @spec assign_formation([integer()], atom(), number(), number(), number()) ::
           {:ok, [assignment()]} | {:error, atom()}
+  def assign_formation([], _type, _cx, _cy, _facing), do: {:ok, []}
+
   def assign_formation(units, type, center_x, center_y, facing \\ 0.0) do
     with :ok <- check_enabled() do
       type = if type in @formation_types, do: type, else: :line

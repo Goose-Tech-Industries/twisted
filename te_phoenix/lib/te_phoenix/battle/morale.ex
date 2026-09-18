@@ -14,15 +14,17 @@ defmodule TePhoenix.Battle.Morale do
   @doc "Initialize morale for all combatants in a battle"
   def init_morale(state) do
     settings = state.settings
-    if not settings[:enable_morale], do: state
 
-    starting = settings[:starting_morale] || 100
-    max_morale = settings[:max_morale] || 100
-    brave_bonus = settings[:personality_brave_bonus] || 20
-    coward_penalty = settings[:personality_coward_penalty] || -20
+    if not settings[:enable_morale] do
+      state
+    else
+      starting = settings[:starting_morale] || 100
+      max_morale = settings[:max_morale] || 100
+      brave_bonus = settings[:personality_brave_bonus] || 20
+      coward_penalty = settings[:personality_coward_penalty] || -20
 
-    combatants =
-      Enum.reduce(state.combatants, state.combatants, fn {id, c}, combs ->
+      combatants =
+        Enum.reduce(state.combatants, state.combatants, fn {id, c}, combs ->
         personality = Map.get(c, :personality, "") |> to_string() |> String.downcase()
 
         bonus = case personality do
@@ -43,7 +45,8 @@ defmodule TePhoenix.Battle.Morale do
         Map.put(combs, id, c)
       end)
 
-    %{state | combatants: combatants}
+      %{state | combatants: combatants}
+    end
   end
 
   @doc "Adjust morale for a combatant (AI only, fanatics immune)"
@@ -68,72 +71,89 @@ defmodule TePhoenix.Battle.Morale do
   @doc "Handle morale changes when a combatant dies. Returns {state, flee_events}"
   def on_combatant_death(state, dead_id) do
     settings = state.settings
-    if not settings[:enable_morale], do: {state, []}
 
-    dead = Map.get(state.combatants, dead_id)
-    if dead == nil, do: {state, []}
+    if not settings[:enable_morale] do
+      {state, []}
+    else
+      case Map.get(state.combatants, dead_id) do
+        nil ->
+          {state, []}
 
-    dead_team = dead.team_id
+        dead ->
+          dead_team = dead.team_id
 
-    # Morale boost for enemies
-    enemy_gain = settings[:enemy_kill_gain] || 10
-    state =
-      state.teams
-      |> Enum.reject(fn {tid, _} -> tid == dead_team end)
-      |> Enum.reduce(state, fn {_tid, members}, s ->
-        Enum.reduce(members, s, fn id, s2 -> adjust_morale(s2, id, enemy_gain) end)
-      end)
+          # Morale boost for enemies
+          enemy_gain = settings[:enemy_kill_gain] || 10
 
-    # Morale loss for allies
-    is_leader = Map.get(dead, :morale_is_leader, false)
-    loss = if is_leader, do: settings[:leader_death_loss] || 30, else: settings[:ally_death_loss] || 20
+          state =
+            state.teams
+            |> Enum.reject(fn {tid, _} -> tid == dead_team end)
+            |> Enum.reduce(state, fn {_tid, members}, s ->
+              Enum.reduce(members, s, fn id, s2 -> adjust_morale(s2, id, enemy_gain) end)
+            end)
 
-    {state, flee_events} =
-      (Map.get(state.teams, dead_team, []) -- [dead_id])
-      |> Enum.reduce({state, []}, fn id, {s, events} ->
-        s = adjust_morale(s, id, -loss)
-        c = Map.get(s.combatants, id)
+          # Morale loss for allies
+          is_leader = Map.get(dead, :morale_is_leader, false)
+          loss = if is_leader, do: settings[:leader_death_loss] || 30, else: settings[:ally_death_loss] || 20
 
-        if c && should_flee?(s, id) do
-          reason = if is_leader, do: :leader_fell, else: :morale_broken
-          {s, [%{type: :morale_flee, combatant_id: id, name: c.name, reason: reason} | events]}
-        else
-          {s, events}
-        end
-      end)
+          {state, flee_events} =
+            (Map.get(state.teams, dead_team, []) -- [dead_id])
+            |> Enum.reduce({state, []}, fn id, {s, events} ->
+              s = adjust_morale(s, id, -loss)
+              c = Map.get(s.combatants, id)
 
-    {state, Enum.reverse(flee_events)}
+              if c && should_flee?(s, id) do
+                reason = if is_leader, do: :leader_fell, else: :morale_broken
+                {s, [%{type: :morale_flee, combatant_id: id, name: c.name, reason: reason} | events]}
+              else
+                {s, events}
+              end
+            end)
+
+          {state, Enum.reverse(flee_events)}
+      end
+    end
   end
 
   @doc "Handle morale changes when a combatant takes damage"
   def on_damage_taken(state, target_id, damage, is_crit) do
     settings = state.settings
-    if not settings[:enable_morale], do: state
 
-    state = if is_crit do
-      adjust_morale(state, target_id, -(settings[:critical_hit_loss] || 10))
-    else
+    if not settings[:enable_morale] do
       state
-    end
-
-    target = Map.get(state.combatants, target_id)
-    if target == nil, do: state
-
-    dmg_pct = damage / max(1, target.max_hp)
-    state = if dmg_pct >= (settings[:heavy_damage_pct] || 0.30) do
-      adjust_morale(state, target_id, -(settings[:heavy_damage_loss] || 10))
     else
-      state
-    end
+      state =
+        if is_crit do
+          adjust_morale(state, target_id, -(settings[:critical_hit_loss] || 10))
+        else
+          state
+        end
 
-    # Low HP penalty (once per combatant)
-    hp_pct = target.current_hp / max(1, target.max_hp)
-    if hp_pct < (settings[:low_hp_threshold] || 0.25) and not Map.get(target, :low_hp_morale_applied, false) do
-      target = Map.put(target, :low_hp_morale_applied, true)
-      state = %{state | combatants: Map.put(state.combatants, target_id, target)}
-      adjust_morale(state, target_id, -(settings[:low_hp_loss] || 15))
-    else
-      state
+      case Map.get(state.combatants, target_id) do
+        nil ->
+          state
+
+        target ->
+          dmg_pct = damage / max(1, target.max_hp)
+
+          state =
+            if dmg_pct >= (settings[:heavy_damage_pct] || 0.30) do
+              adjust_morale(state, target_id, -(settings[:heavy_damage_loss] || 10))
+            else
+              state
+            end
+
+          # Low HP penalty (once per combatant)
+          hp_pct = target.current_hp / max(1, target.max_hp)
+
+          if hp_pct < (settings[:low_hp_threshold] || 0.25) and not Map.get(target, :low_hp_morale_applied, false) do
+            target = Map.put(target, :low_hp_morale_applied, true)
+            state = %{state | combatants: Map.put(state.combatants, target_id, target)}
+            adjust_morale(state, target_id, -(settings[:low_hp_loss] || 15))
+          else
+            state
+          end
+      end
     end
   end
 

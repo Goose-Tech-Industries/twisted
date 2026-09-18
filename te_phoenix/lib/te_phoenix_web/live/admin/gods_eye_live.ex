@@ -2,8 +2,7 @@ defmodule TePhoenixWeb.Admin.GodsEyeLive do
   use TePhoenixWeb, :live_view
 
   alias TePhoenix.World.{GodsEye, AutonomousSociety}
-  alias TePhoenix.AI.{DreamCycle, Providers.SomaticVoice}
-  require Logger
+  alias TePhoenix.AI.DreamCycle
 
   @impl true
   def mount(_params, _session, socket) do

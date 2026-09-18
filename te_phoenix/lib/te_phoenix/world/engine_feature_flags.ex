@@ -22,7 +22,6 @@ defmodule TePhoenix.World.EngineFeatureFlags do
   alias TePhoenix.Repo
 
   @table "game_engine_feature_flags"
-  @cache_table :engine_feature_flags_cache
 
   @default_flags [
     %{

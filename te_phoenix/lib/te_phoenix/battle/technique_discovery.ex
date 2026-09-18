@@ -57,6 +57,98 @@ defmodule TePhoenix.Battle.TechniqueDiscovery do
   # CHECK ACTION — called on every DM session player action
   # ═════════════════════════════════════════════════════════════
 
+  @doc "Extract normalized word set from action text."
+  def extract_words(text) do
+    text
+    |> to_string()
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9\s]/, "")
+    |> String.split()
+    |> MapSet.new()
+  end
+
+  @doc "Count keyword matches in words set."
+  def count_keyword_matches(words, keywords) do
+    Enum.count(keywords, fn kw -> MapSet.member?(words, String.downcase(to_string(kw))) end)
+  end
+
+  @doc "Check if a word set matches a theme's keywords."
+  def theme_matches?(words, theme) do
+    keywords = case theme["keywords_json"] || theme[:keywords_json] do
+      k when is_binary(k) -> (try do Jason.decode!(k) rescue _ -> [] end)
+      k when is_list(k) -> k
+      _ -> []
+    end
+    min_matches = theme["min_keyword_matches"] || theme[:min_keyword_matches] || 2
+    count_keyword_matches(words, keywords) >= min_matches
+  end
+
+  @doc "Find all matching themes for a text input."
+  def match_themes(text, themes) do
+    words = extract_words(text)
+    Enum.filter(themes, &theme_matches?(words, &1))
+  end
+
+  @doc "Evaluate milestone events based on times used and current status."
+  def evaluate_milestones(times, hint_at, shape_at, ready_at, hint_given, shape_given, status) do
+    events = []
+
+    events =
+      if times >= ready_at and status != "ready" do
+        events ++ [{:discovery_ready, "**Your technique is ready!** The power you've been building has reached its peak. You can feel it — a unique ability, fully formed and waiting to be unleashed. Give it a name to make it yours."}]
+      else
+        events
+      end
+
+    events =
+      if times >= shape_at and shape_given == 0 and status != "ready" do
+        events ++ [{:discovery_shape, "**A technique is taking shape!** Each time you repeat this action, you feel the power growing more defined. #{max(0, ready_at - times)} more uses until it fully forms."}]
+      else
+        events
+      end
+
+    events =
+      if times >= hint_at and hint_given == 0 and status == "forming" do
+        events ++ [{:discovery_hint, "You feel something stirring within you... a new power, faint but growing. Keep honing this action and it may become something more."}]
+      else
+        events
+      end
+
+    events
+  end
+
+  @doc "Compute technique parameters merging discovery defaults and DM overrides."
+  def compute_technique_params(discovery, dm_overrides, chosen_name, chosen_icon) do
+    overrides = dm_overrides || %{}
+    disc = discovery || %{}
+
+    category = overrides["category"] || overrides[:category] || disc["suggested_category"] || disc[:suggested_category] || "ki"
+    damage = overrides["damage_pct"] || overrides[:damage_pct] || disc["suggested_damage_pct"] || disc[:suggested_damage_pct] || 8
+    cost = overrides["cost_pct"] || overrides[:cost_pct] || disc["suggested_cost_pct"] || disc[:suggested_cost_pct] || 5
+
+    raw_effects = case disc["suggested_effects_json"] || disc[:suggested_effects_json] do
+      e when is_binary(e) -> (try do Jason.decode!(e) rescue _ -> %{} end)
+      e when is_map(e) -> e
+      _ -> %{}
+    end
+    override_effects = overrides["effects"] || overrides[:effects] || %{}
+    effects = Map.merge(raw_effects, override_effects)
+
+    %{
+      name: chosen_name,
+      icon: chosen_icon || "⚡",
+      category: category,
+      attack_type: if(category == "physical", do: "melee", else: "ranged"),
+      range_type: if(category == "physical", do: "short", else: "medium"),
+      damage_pct: damage,
+      cost_pct: cost,
+      stun_chance: effects["stun_chance"] || effects[:stun_chance] || 0,
+      stun_duration: effects["stun_duration"] || effects[:stun_duration] || 0,
+      bleed_chance: effects["bleed_chance"] || effects[:bleed_chance] || 0,
+      bleed_severity: effects["bleed_severity"] || effects[:bleed_severity] || "none"
+    }
+  end
+
   @doc """
   Scan a player's RP text for discovery theme matches.
   Returns a list of events: [{:discovery_hint, msg}, {:discovery_shape, msg}, {:discovery_ready, msg}] or []
@@ -66,11 +158,7 @@ defmodule TePhoenix.Battle.TechniqueDiscovery do
     ruleset_id = Keyword.get(opts, :ruleset_id)
     explicit_tag = Keyword.get(opts, :theme_tag)  # DM can force a tag
 
-    words = action_text
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9\s]/, "")
-      |> String.split()
-      |> MapSet.new()
+    words = extract_words(action_text)
 
     # Find matching themes
     themes = if ruleset_id, do: get_themes(ruleset_id), else: []
@@ -81,16 +169,7 @@ defmodule TePhoenix.Battle.TechniqueDiscovery do
          "hint_at" => 3, "shape_at" => 6, "ready_at" => 10,
          "suggested_category" => "ki", "base_damage_pct" => 8, "base_cost_pct" => 5}]
     else
-      Enum.filter(themes, fn theme ->
-        keywords = case theme["keywords_json"] do
-          k when is_binary(k) -> (try do Jason.decode!(k) rescue _ -> [] end)
-          k when is_list(k) -> k
-          _ -> []
-        end
-        min_matches = theme["min_keyword_matches"] || 2
-        match_count = Enum.count(keywords, fn kw -> MapSet.member?(words, String.downcase(kw)) end)
-        match_count >= min_matches
-      end)
+      Enum.filter(themes, &theme_matches?(words, &1))
     end
 
     # Process each matched theme

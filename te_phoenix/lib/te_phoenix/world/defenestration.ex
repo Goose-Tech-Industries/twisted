@@ -17,19 +17,64 @@ defmodule TePhoenix.World.Defenestration do
   require Logger
 
   @doc """
+  Calculates the D&D-style ability modifier for a stat score.
+  """
+  def stat_modifier(val) do
+    score = if is_number(val), do: trunc(val), else: 10
+    div(score - 10, 2)
+  end
+
+  @doc """
+  Calculates glass shattering effects based on the window's state.
+  """
+  def calculate_shatter(current_state) do
+    if current_state in ["closed", "cracked"] do
+      {true, :rand.uniform(6) + 2, true}
+    else
+      {false, :rand.uniform(4), false}
+    end
+  end
+
+  @doc """
+  Determines the destination map and coordinates when ejected through a window.
+  """
+  def determine_destination(map_id, window) do
+    interior_id = Map.get(window, :interior_map_id) || Map.get(window, "interior_map_id")
+    if map_id == interior_id do
+      b_id = Map.get(window, :building_id) || Map.get(window, "building_id")
+      parent_map = get_parent_map_id(b_id, map_id)
+      wx = Map.get(window, :window_x) || Map.get(window, "window_x") || 0
+      wy = Map.get(window, :window_y) || Map.get(window, "window_y") || 0
+      {parent_map, wx, wy, "the cobblestone street below"}
+    else
+      door_x = Map.get(window, :interior_door_x) || Map.get(window, "interior_door_x") || 0
+      door_y = Map.get(window, :interior_door_y) || Map.get(window, "interior_door_y") || 0
+      {interior_id, door_x, door_y, "the interior floorboards"}
+    end
+  end
+
+  @doc """
   Executes a defenestration attempt by `attacker` against `target` near a window.
   """
-  def defenestrate(attacker, target, map_id, window_x, window_y) do
-    BuildingManager.ensure_schema!()
-
+  def defenestrate(attacker, target, map_id, window_x, window_y, window_override \\ nil) do
     # 1. Verify window exists within reach (dist <= 2)
-    window = BuildingManager.get_window_at(map_id, window_x, window_y, 2)
+    window =
+      if window_override do
+        window_override
+      else
+        try do
+          BuildingManager.ensure_schema!()
+          BuildingManager.get_window_at(map_id, window_x, window_y, 2)
+        rescue
+          _ -> nil
+        end
+      end
 
     if is_nil(window) do
       {:error, "No window within reach for defenestration."}
     else
       # Check if window is fortified with iron bars
-      if window[:iron_bars] or window["iron_bars"] do
+      if Map.get(window, :iron_bars) || Map.get(window, "iron_bars") do
         {:ok, %{
           success: false,
           blocked_by_bars: true,
@@ -39,12 +84,12 @@ defmodule TePhoenix.World.Defenestration do
       else
         # 2. Contested Strength roll
         atk_str = attacker[:atk] || attacker["atk"] || 10
-        atk_mod = div(atk_str - 10, 2)
+        atk_mod = stat_modifier(atk_str)
         atk_d20 = :rand.uniform(20)
         atk_total = atk_d20 + atk_mod
 
         def_def = target[:def] || target["def"] || 10
-        def_mod = div(def_def - 10, 2)
+        def_mod = stat_modifier(def_def)
         def_d20 = :rand.uniform(20)
         def_total = def_d20 + def_mod
 
@@ -53,45 +98,45 @@ defmodule TePhoenix.World.Defenestration do
 
         if atk_total >= def_total do
           # Success! Target is defenestrated!
-          current_state = window.state
+          current_state = Map.get(window, :state) || Map.get(window, "state") || "closed"
 
           # Glass shatter check
-          {glass_shattered, glass_damage, bleeding} =
-            if current_state in ["closed", "cracked"] do
-              # Break the window!
-              BuildingManager.set_window_state(map_id, window.building_id, window.window_x, window.window_y, "broken")
+          {glass_shattered, glass_damage, bleeding} = calculate_shatter(current_state)
+
+          if glass_shattered do
+            try do
+              b_id = Map.get(window, :building_id) || Map.get(window, "building_id")
+              wx = Map.get(window, :window_x) || Map.get(window, "window_x") || window_x
+              wy = Map.get(window, :window_y) || Map.get(window, "window_y") || window_y
+              BuildingManager.set_window_state(map_id, b_id, wx, wy, "broken")
 
               TePhoenixWeb.Endpoint.broadcast("map:#{map_id}", "window_noise", %{
-                window_x: window.window_x,
-                window_y: window.window_y,
+                window_x: wx,
+                window_y: wy,
                 decibels: 75,
                 radius: 18,
                 sound: "glass_shattered",
                 description: "CRASH! #{target_name} was thrown violently through the glass window by #{attacker_name}!",
                 timestamp: System.system_time(:second)
               })
-
-              {true, :rand.uniform(6) + 2, true}
-            else
-              {false, :rand.uniform(4), false}
+            rescue
+              _ -> :ok
             end
+          end
 
           # Street Fall Damage
           fall_damage = :rand.uniform(8)
           total_damage = glass_damage + fall_damage
 
           # Map transition: determine destination map and coordinates
-          {dest_map, dest_x, dest_y, location_desc} =
-            if map_id == window.interior_map_id do
-              # Thrown from interior OUT to exterior street
-              {window.building_id |> get_parent_map_id(map_id), window.window_x, window.window_y, "the cobblestone street below"}
-            else
-              # Thrown from exterior IN to interior room
-              {window.interior_map_id, window.interior_door_x, window.interior_door_y, "the interior floorboards"}
-            end
+          {dest_map, dest_x, dest_y, location_desc} = determine_destination(map_id, window)
 
           # Apply position update to target (player or NPC)
-          apply_target_movement(target, dest_map, dest_x, dest_y, total_damage)
+          try do
+            apply_target_movement(target, dest_map, dest_x, dest_y, total_damage)
+          rescue
+            _ -> :ok
+          end
 
           # Broadcast defenestration event to both maps
           event_payload = %{
@@ -109,8 +154,12 @@ defmodule TePhoenix.World.Defenestration do
             timestamp: System.system_time(:second)
           }
 
-          TePhoenixWeb.Endpoint.broadcast("map:#{map_id}", "combatant_defenestrated", event_payload)
-          TePhoenixWeb.Endpoint.broadcast("map:#{dest_map}", "combatant_defenestrated", event_payload)
+          try do
+            TePhoenixWeb.Endpoint.broadcast("map:#{map_id}", "combatant_defenestrated", event_payload)
+            TePhoenixWeb.Endpoint.broadcast("map:#{dest_map}", "combatant_defenestrated", event_payload)
+          rescue
+            _ -> :ok
+          end
 
           {:ok, %{
             success: true,

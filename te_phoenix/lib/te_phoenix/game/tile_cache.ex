@@ -33,6 +33,5 @@ defmodule TePhoenix.Game.TileCache do
     end
   end
 
-  @doc "Check if a tile ID is passable (nil-safe)."
   def passable?(nil), do: false
 end

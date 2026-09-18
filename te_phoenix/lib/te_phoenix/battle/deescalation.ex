@@ -41,8 +41,8 @@ defmodule TePhoenix.Battle.Deescalation do
     target_level = target[:level] || target["level"] || 1
 
     # Fetch player background and stats
-    bg_tag = get_background_tag(actor_char_id)
-    gold = get_character_gold(actor_char_id)
+    bg_tag = Map.get(opts, :bg_tag, get_background_tag(actor_char_id))
+    gold = Map.get(opts, :gold, get_character_gold(actor_char_id))
 
     # Calculate modifiers and DC
     {stat_mod, bg_bonus, dc} =
@@ -136,7 +136,8 @@ defmodule TePhoenix.Battle.Deescalation do
 
   # ── Modifiers & Difficulty Calculations ───────────────────────────
 
-  defp calculate_modifiers(approach, _char_id, actor_level, target_level, target_role, bg_tag) do
+  @doc "Calculate stat modifier, background bonus, and target DC."
+  def calculate_modifiers(approach, _char_id, actor_level, target_level, target_role, bg_tag) do
     # 1. Base DC based on target role
     base_dc =
       case target_role do
@@ -198,7 +199,8 @@ defmodule TePhoenix.Battle.Deescalation do
 
   # ── Dialogue Generation ───────────────────────────────────────────
 
-  defp generate_dialogue(name, _role, _persona, player_name, approach, success, is_crit, is_crit_fail, reason) do
+  @doc "Generate reactive de-escalation dialogue."
+  def generate_dialogue(name, _role, _persona, player_name, approach, success, is_crit, is_crit_fail, reason) do
     cond do
       success and reason == :bought_drink ->
         "#{name} wipes froth from their beard and beams: 'Hic! Well strike me down, #{player_name}! A companion who buys ale is a brother for life! Skål!'"
@@ -211,9 +213,6 @@ defmodule TePhoenix.Battle.Deescalation do
 
       is_crit and approach == :intimidation ->
         "#{name} trembles violently, backing into the shadows. 'P-please, have mercy! I want no quarrel with a legend like you!'"
-
-      success and reason == :bought_drink ->
-        "#{name} wipes froth from their beard and beams: 'Hic! Well strike me down, #{player_name}! A companion who buys ale is a brother for life! Skål!'"
 
       success and approach == :bribe ->
         "#{name} swiftly pockets the coin with a conspiratorial grin. 'A pleasure doing business with a person of discretion. Move along, friend.'"
@@ -243,8 +242,10 @@ defmodule TePhoenix.Battle.Deescalation do
 
   # ── Helpers & State Persistence ───────────────────────────────────
 
-  defp normalize_approach(approach) when is_atom(approach), do: approach
-  defp normalize_approach(approach) when is_binary(approach) do
+  @doc "Normalize approach keyword to standard atom."
+  def normalize_approach(nil), do: :persuasion
+  def normalize_approach(approach) when is_atom(approach), do: approach
+  def normalize_approach(approach) when is_binary(approach) do
     case String.downcase(approach) do
       "persuasion" -> :persuasion
       "persuade" -> :persuasion
@@ -262,7 +263,7 @@ defmodule TePhoenix.Battle.Deescalation do
       _ -> :persuasion
     end
   end
-  defp normalize_approach(_), do: :persuasion
+  def normalize_approach(_), do: :persuasion
 
   defp get_background_tag(char_id) do
     case Repo.query("SELECT bg.tag FROM characters c JOIN game_backgrounds bg ON c.background_id = bg.id WHERE c.id = ?", [char_id]) do

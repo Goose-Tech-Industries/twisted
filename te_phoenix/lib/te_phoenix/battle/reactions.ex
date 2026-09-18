@@ -102,7 +102,12 @@ defmodule TePhoenix.Battle.Reactions do
         {state, result}
       else
         equipped = Map.get(combatant, :equipped_reactions, [])
-        all_reactions = list_defs()
+        all_reactions =
+          cond do
+            is_list(ctx) -> Keyword.get(ctx, :definitions) || list_defs()
+            is_map(ctx) -> Map.get(ctx, :definitions) || list_defs()
+            true -> list_defs()
+          end
 
         matching =
           all_reactions
@@ -330,10 +335,11 @@ defmodule TePhoenix.Battle.Reactions do
 
   # ── Condition matching ──────────────────────────────────────────
 
-  defp condition_match?(nil, _ctx, _c), do: true
-  defp condition_match?(cond, _ctx, _c) when cond == %{}, do: true
+  @doc "Check whether a reaction condition map matches the context and combatant state."
+  def condition_match?(nil, _ctx, _c), do: true
+  def condition_match?(cond, _ctx, _c) when cond == %{}, do: true
 
-  defp condition_match?(cond, ctx, combatant) do
+  def condition_match?(cond, ctx, combatant) do
     Enum.all?(cond, fn {k, v} ->
       case k do
         "damage_type" -> to_string(ctx[:damage_type]) == to_string(v)

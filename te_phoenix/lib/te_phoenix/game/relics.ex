@@ -99,7 +99,13 @@ defmodule TePhoenix.Game.Relics do
     end)
   end
 
-  defp direction_hint(px, py, rx, ry) do
+  @doc "Calculate Manhattan distance between two grid coordinates."
+  def manhattan_distance(x1, y1, x2, y2) do
+    abs(x1 - x2) + abs(y1 - y2)
+  end
+
+  @doc "Calculate cardinal / ordinal direction hint from player to relic."
+  def direction_hint(px, py, rx, ry) do
     dx = rx - px; dy = ry - py
     h = cond do
       dx > 2 -> "east"; dx < -2 -> "west"; true -> nil
@@ -112,6 +118,107 @@ defmodule TePhoenix.Game.Relics do
       {nil, h} -> h
       {v, nil} -> v
       {v, h} -> "#{v}#{h}"
+    end
+  end
+
+  @doc "Filter and calculate display data for visible relics given radars and player location."
+  def filter_visible_relics(relics, radars, player_x, player_y) do
+    relics
+    |> Enum.filter(fn relic ->
+      rx = relic["x"] || relic[:x] || 0
+      ry = relic["y"] || relic[:y] || 0
+      distance = manhattan_distance(player_x, player_y, rx, ry)
+      set_id = relic["relic_set_id"] || relic[:relic_set_id]
+
+      on_tile = distance == 0
+
+      matching_radars = Enum.filter(radars, fn r ->
+        r_set_id = r["relic_set_id"] || r[:relic_set_id]
+        r_range = r["range_tiles"] || r[:range_tiles] || 0
+        (is_nil(r_set_id) || r_set_id == set_id) && distance <= r_range
+      end)
+
+      on_tile || length(matching_radars) > 0
+    end)
+    |> Enum.map(fn relic ->
+      rx = relic["x"] || relic[:x] || 0
+      ry = relic["y"] || relic[:y] || 0
+      distance = manhattan_distance(player_x, player_y, rx, ry)
+      on_tile = distance == 0
+      set_id = relic["relic_set_id"] || relic[:relic_set_id]
+
+      matching_radars = Enum.filter(radars, fn r ->
+        r_set_id = r["relic_set_id"] || r[:relic_set_id]
+        r_range = r["range_tiles"] || r[:range_tiles] || 0
+        (is_nil(r_set_id) || r_set_id == set_id) && distance <= r_range
+      end)
+      best_radar = Enum.max_by(matching_radars, fn r -> r["range_tiles"] || r[:range_tiles] || 0 end, fn -> nil end)
+      shows_exact = best_radar && (best_radar["shows_exact_tile"] == 1 || best_radar[:shows_exact_tile] == true)
+
+      %{
+        id: relic["id"] || relic[:id],
+        relic_set_id: set_id,
+        set_name: relic["set_name"] || relic[:set_name],
+        ordinal: relic["ordinal"] || relic[:ordinal],
+        name: relic["name"] || relic[:name],
+        icon: relic["icon"] || relic[:icon] || relic["set_icon"] || relic[:set_icon] || "🟡",
+        x: if(on_tile || shows_exact, do: rx),
+        y: if(on_tile || shows_exact, do: ry),
+        direction: if(!on_tile && !shows_exact, do: direction_hint(player_x, player_y, rx, ry)),
+        distance: distance,
+        can_collect: on_tile,
+        hide_description: if(on_tile, do: relic["hide_description"] || relic[:hide_description]),
+        detected_by: if(on_tile, do: "found", else: "radar")
+      }
+    end)
+  end
+
+  @doc "Pure validation and evaluation of a relic collection attempt."
+  def evaluate_collection(relic, player_x, player_y, player_map_id, collected_count, needed_count) do
+    rx = relic["x"] || relic[:x]
+    ry = relic["y"] || relic[:y]
+    rmap = relic["map_id"] || relic[:map_id]
+
+    if player_x == rx and player_y == ry and player_map_id == rmap do
+      new_collected = collected_count + 1
+      needed = needed_count || relic["collect_count"] || relic[:collect_count] || 7
+      {:ok, %{
+        relic_name: relic["name"] || relic[:name] || "Relic",
+        set_name: relic["set_name"] || relic[:set_name],
+        collected: new_collected,
+        needed: needed,
+        set_complete: new_collected >= needed
+      }}
+    else
+      {:error, "You must be standing on the relic's tile to collect it."}
+    end
+  end
+
+  @doc "Calculate wish channeling progress."
+  def calculate_channel_progress(turns_channeled, turns_needed) do
+    new_turns = turns_channeled + 1
+    if new_turns >= turns_needed do
+      %{complete: true, turns_channeled: new_turns, turns_needed: turns_needed, turns_left: 0}
+    else
+      %{complete: false, turns_channeled: new_turns, turns_needed: turns_needed, turns_left: turns_needed - new_turns}
+    end
+  end
+
+  @doc "Parse available wishes from JSON or list."
+  def parse_wishes(wishes_json) do
+    case wishes_json do
+      j when is_binary(j) -> (try do Jason.decode!(j) rescue _ -> [] end)
+      j when is_list(j) -> j
+      _ -> []
+    end
+  end
+
+  @doc "Validate wish selection against available wishes list."
+  def validate_wish_selection(available_wishes, wish_id) do
+    wishes = parse_wishes(available_wishes)
+    case Enum.find(wishes, fn w -> w["id"] == wish_id or w[:id] == wish_id end) do
+      nil -> {:error, "Invalid wish."}
+      wish -> {:ok, wish}
     end
   end
 

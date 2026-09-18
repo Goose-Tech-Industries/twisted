@@ -348,7 +348,7 @@ defmodule TePhoenix.AI.Gateway do
 
   defp dispatch(:local_ollama, model, prompt, opts) do
     Logger.debug("[AI Gateway] ollama local call: model=#{model}, bytes=#{byte_size(prompt)}")
-    ollama_opts = Keyword.take(opts, [:system, :temperature])
+    ollama_opts = Keyword.take(opts, [:system, :temperature, :timeout_ms])
 
     case TePhoenix.AI.Providers.Ollama.call(model, prompt, ollama_opts) do
       {:ok, _result} = ok ->

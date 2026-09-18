@@ -271,16 +271,6 @@ defmodule TePhoenixWeb.Admin.CombatRulesLive do
 
   def handle_event("ai:apply_rule_suggestion", _, socket), do: {:noreply, socket}
 
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, _key, ""), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  defp encode_field(nil), do: nil
-  defp encode_field(s) when is_binary(s), do: s
-  defp encode_field(other), do: Jason.encode!(other)
-
-  # ─────────────────────────────────────────────────────────────────
-
   def handle_event("save", params, socket) do
     rule = form_to_rule(params)
     StatusRegistry.upsert_rule(rule)
@@ -291,6 +281,14 @@ defmodule TePhoenixWeb.Admin.CombatRulesLive do
      |> assign(:rules, StatusRegistry.list_rules() |> Enum.sort_by(&{&1.trigger, &1.key}))
      |> assign(:flash_msg, "Saved #{rule.key}")}
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp encode_field(nil), do: nil
+  defp encode_field(s) when is_binary(s), do: s
+  defp encode_field(other), do: Jason.encode!(other)
 
   # ── helpers ──
 

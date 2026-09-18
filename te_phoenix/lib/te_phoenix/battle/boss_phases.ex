@@ -119,7 +119,7 @@ defmodule TePhoenix.Battle.BossPhases do
   Returns `{state, combatant, result}` — may have mutated all three
   if a phase transition occurred.
   """
-  def check_phase_transition(state, combatant, result) do
+  def check_phase_transition(state, combatant, result, phases_override \\ nil) do
     # Only check bosses (combatants with boss_npc_id set)
     boss_npc_id = Map.get(combatant, :boss_npc_id)
 
@@ -129,7 +129,7 @@ defmodule TePhoenix.Battle.BossPhases do
       current_phase = Map.get(combatant, :boss_current_phase, 0)
       hp_pct = if combatant.max_hp > 0, do: combatant.current_hp / combatant.max_hp, else: 0.0
 
-      phases = get_phases(boss_npc_id)
+      phases = phases_override || get_phases(boss_npc_id)
 
       # Find the highest-numbered phase whose threshold we've crossed
       # that we haven't entered yet (phases are one-way)
@@ -149,7 +149,8 @@ defmodule TePhoenix.Battle.BossPhases do
 
   # ── Phase entry ─────────────────────────────────────────────────
 
-  defp enter_phase(state, combatant, phase_def, result) do
+  @doc "Transition a boss combatant into a new phase."
+  def enter_phase(state, combatant, phase_def, result) do
     old_name = combatant.name
     Logger.info("Boss #{old_name} enters #{phase_def.name} (phase #{phase_def.phase})")
 
@@ -247,8 +248,9 @@ defmodule TePhoenix.Battle.BossPhases do
 
   # ── Full form transformation ──────────────────────────────────────
 
-  defp apply_transformation(combatant, %{"transform" => nil}), do: combatant
-  defp apply_transformation(combatant, %{"transform" => t}) when is_map(t) do
+  @doc "Apply form transformation definition to a combatant struct."
+  def apply_transformation(combatant, %{"transform" => nil}), do: combatant
+  def apply_transformation(combatant, %{"transform" => t}) when is_map(t) do
     combatant
     |> maybe_set(:name, t["name"])
     |> maybe_set(:icon, t["icon"])
@@ -263,7 +265,7 @@ defmodule TePhoenix.Battle.BossPhases do
     |> maybe_clear_statuses(t)
     |> maybe_clear_cooldowns(t)
   end
-  defp apply_transformation(combatant, _), do: combatant
+  def apply_transformation(combatant, _), do: combatant
 
   defp maybe_set(c, _key, nil), do: c
   defp maybe_set(c, key, val), do: Map.put(c, key, val)
@@ -346,7 +348,8 @@ defmodule TePhoenix.Battle.BossPhases do
     end)
   end
 
-  defp apply_phase_stat_mults(combatant, on_enter) do
+  @doc "Apply phase stat multipliers as a synthetic status."
+  def apply_phase_stat_mults(combatant, on_enter) do
     case on_enter["stat_mults"] do
       nil -> combatant
       %{} = mults when map_size(mults) == 0 -> combatant
@@ -394,7 +397,8 @@ defmodule TePhoenix.Battle.BossPhases do
     end)
   end
 
-  defp apply_terrain_changes(state, on_enter) do
+  @doc "Apply terrain changes from phase transition."
+  def apply_terrain_changes(state, on_enter) do
     case on_enter["terrain_change"] do
       nil -> state
       %{} = changes ->
@@ -402,10 +406,14 @@ defmodule TePhoenix.Battle.BossPhases do
 
         terrain =
           Enum.reduce(changes, terrain, fn {terrain_type, coords}, acc ->
-            Enum.reduce(coords, acc, fn
-              [x, y], a -> Map.put(a, "#{x},#{y}", terrain_type)
-              _, a -> a
-            end)
+            if is_list(coords) do
+              Enum.reduce(coords, acc, fn
+                [x, y], a -> Map.put(a, "#{x},#{y}", terrain_type)
+                _, a -> a
+              end)
+            else
+              acc
+            end
           end)
 
         %{state | terrain_map: terrain}

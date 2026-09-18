@@ -314,14 +314,126 @@ defmodule TePhoenix.Game.Transformations do
 
   def clear_cache, do: :ets.delete_all_objects(cache())
 
-  defp to_float(nil), do: 0.0
-  defp to_float(v) when is_float(v), do: v
-  defp to_float(v) when is_integer(v), do: v / 1.0
-  defp to_float(%Decimal{} = v), do: Decimal.to_float(v)
-  defp to_float(v) when is_binary(v) do
+  # ── Pure Calculation Helpers ─────────────────────────────────────
+
+  @doc "Converts various number representations to float."
+  def to_float(nil), do: 0.0
+  def to_float(v) when is_float(v), do: v
+  def to_float(v) when is_integer(v), do: v / 1.0
+  def to_float(%Decimal{} = v), do: Decimal.to_float(v)
+  def to_float(v) when is_binary(v) do
     case Float.parse(v) do
-      {f, _} -> f; :error -> 0.0
+      {f, _} -> f
+      :error -> 0.0
     end
   end
-  defp to_float(_), do: 0.0
+  def to_float(_), do: 0.0
+
+  @doc "Calculate energy drain per turn based on current attack power and drain percentage."
+  def calculate_drain(atk, drain_pct) do
+    pct = to_float(drain_pct)
+    if pct > 0 do
+      drain = round(atk * pct / 100)
+      new_atk = max(1, atk - drain)
+      %{drain: drain, new_atk: new_atk, reverted: new_atk <= 1}
+    else
+      %{drain: 0, new_atk: atk, reverted: false}
+    end
+  end
+
+  @doc "Calculate activation cost based on base attack power and cost percentage."
+  def calculate_activation_cost(atk, cost_pct) do
+    pct = to_float(cost_pct)
+    if pct > 0 do
+      cost = round(atk * pct / 100)
+      remaining = max(1, atk - cost)
+      %{cost: cost, remaining_atk: remaining}
+    else
+      %{cost: 0, remaining_atk: atk}
+    end
+  end
+
+  @doc "Resolve multiplier, tier name, and drain for a form given a stack tier."
+  def resolve_form_tier(form, stack_tier \\ 0) do
+    if form["is_stackable"] == 1 and stack_tier > 0 do
+      tiers = case form["stack_tiers_json"] do
+        j when is_binary(j) -> (try do Jason.decode!(j) rescue _ -> [] end)
+        j when is_list(j) -> j
+        _ -> []
+      end
+      tier = Enum.find(tiers, fn t -> t["tier"] == stack_tier end)
+      if tier do
+        {to_float(tier["multiplier"]), tier["name"] || form["name"], to_float(tier["drain"])}
+      else
+        {to_float(form["power_multiplier"]), form["name"], to_float(form["drain_per_turn_pct"])}
+      end
+    else
+      {to_float(form["power_multiplier"]), form["name"], to_float(form["drain_per_turn_pct"])}
+    end
+  end
+
+  @doc "Build the transformation payload and visual bundle."
+  def build_transformation_payload(form, opts \\ []) do
+    stack_tier = Keyword.get(opts, :stack_tier, 0)
+    is_controlled = Keyword.get(opts, :is_controlled, false)
+    controllable = form["controllable"] == 1 or is_controlled == true
+
+    {multiplier, tier_name, drain} = resolve_form_tier(form, stack_tier)
+
+    turns = case form["duration_type"] do
+      "timed" -> form["duration_turns"]
+      _ -> nil
+    end
+
+    %{
+      name: tier_name,
+      multiplier: multiplier,
+      controllable: controllable,
+      drain_per_turn: drain,
+      duration_type: form["duration_type"],
+      turns_remaining: turns,
+      visuals: %{
+        aura_color: form["aura_color"],
+        aura_effect: form["aura_effect"],
+        hair_color: form["hair_color"],
+        eye_color: form["eye_color"],
+        skin_color: form["skin_color"],
+        sprite_override: form["sprite_override"],
+        particle_effect: form["particle_effect"],
+        screen_shake: form["screen_shake"] == 1
+      },
+      transform_dialogue: form["transform_dialogue"],
+      uncontrolled_behavior: if(!controllable, do: form["uncontrolled_behavior"]),
+      memory_loss: form["memory_loss"] == 1 and !controllable
+    }
+  end
+
+  @doc "Check whether loss conditions match a given event."
+  def check_loss_match(conditions_json, event) do
+    conditions = case conditions_json do
+      j when is_binary(j) -> (try do Jason.decode!(j) rescue _ -> [] end)
+      j when is_list(j) -> j
+      _ -> []
+    end
+
+    case Enum.find(conditions, fn c -> c["type"] == event end) do
+      nil -> :ok
+      lost -> {:lost, lost["message"] || "#{lost["type"]} triggered form loss."}
+    end
+  end
+
+  @doc "Filter forms eligible for near-death unlock."
+  def check_near_death_eligible(forms, current_hp_pct) do
+    Enum.filter(forms, fn f ->
+      f["near_death_unlock"] == 1 and
+        current_hp_pct <= to_float(f["near_death_hp_pct"])
+    end)
+  end
+
+  @doc "Filter forms eligible for event triggers."
+  def check_event_eligible(forms, event_name) do
+    Enum.filter(forms, fn f ->
+      f["duration_type"] == "event" and f["event_trigger"] == event_name
+    end)
+  end
 end

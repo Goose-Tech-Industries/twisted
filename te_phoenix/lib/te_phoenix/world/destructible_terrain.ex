@@ -208,7 +208,10 @@ defmodule TePhoenix.World.DestructibleTerrain do
 
   # ── Tile Transformation Rules ──────────────────────────────────
 
-  defp transform_tile(original, damage_type) do
+  @doc """
+  Pure calculation of resulting tile ID and surface from original tile and damage type.
+  """
+  def transform_tile(original, damage_type) do
     case {original, damage_type} do
       # Fire effects
       {@tree, :fire} -> {@ash, "fire"}
